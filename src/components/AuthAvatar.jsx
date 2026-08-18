@@ -8,6 +8,10 @@ import { useAuthUser } from '../utils/adminAuth'
  * Avatar de la cabecera que hace de botón de sesión: sin sesión entra con Google,
  * con sesión abre un menú con la cuenta y la salida. El anillo cambia de color
  * para que se vea de un vistazo si la cuenta abierta es la del dueño del sitio.
+ *
+ * La sesión anónima que abren /quizzes, /join y /ptb no cuenta como sesión aquí
+ * (useAuthUser la da como null): el avatar sigue diciendo «Entrar con Google» en
+ * vez de ofrecer salir de una cuenta que el usuario nunca abrió.
  */
 function AuthAvatar({ className = 's-avatar' }) {
   const { user, isAdmin } = useAuthUser()
@@ -44,7 +48,7 @@ function AuthAvatar({ className = 's-avatar' }) {
     ? 'Entrar con Google'
     : isAdmin
       ? `Sesión de ${user.displayName || user.email}`
-      : `${user.email || 'Cuenta anónima'} · sin permisos de administración`
+      : `${user.email} · sin permisos de administración`
 
   return (
     <span className="auth-avatar-box" ref={cajaRef}>
@@ -62,7 +66,7 @@ function AuthAvatar({ className = 's-avatar' }) {
 
       {abierto && user && (
         <div className="auth-menu">
-          <span className="auth-menu-name">{user.displayName || user.email || 'Cuenta anónima'}</span>
+          <span className="auth-menu-name">{user.displayName || user.email}</span>
           <span className="auth-menu-role">
             {isAdmin ? 'Administración' : 'Sin permisos de administración'}
           </span>
