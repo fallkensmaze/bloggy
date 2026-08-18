@@ -60,9 +60,7 @@ function AuthAvatar({ className = 's-avatar' }) {
         disabled={entrando}
         title={titulo}
         aria-label={titulo}
-      >
-        {!user && <i className="bi bi-box-arrow-in-right auth-avatar-icon" />}
-      </button>
+      />
 
       {abierto && user && (
         <div className="auth-menu">

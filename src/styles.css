@@ -572,17 +572,6 @@ a:hover { text-decoration: underline; }
 .auth-avatar--fuera { border-color: var(--border); }
 .auth-avatar--admin { border-color: var(--accent-green); }
 .auth-avatar--ajeno { border-color: var(--accent-orange); }
-.auth-avatar-icon {
-    font-size: 13px;
-    color: var(--text-primary);
-    background: rgba(0, 0, 0, 0.55);
-    border-radius: 50%;
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
 .auth-menu {
     position: absolute;
     top: calc(100% + 8px);
