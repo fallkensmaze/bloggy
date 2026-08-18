@@ -1,0 +1,66 @@
+# Dependencies
+node_modules/
+yarn.lock
+pnpm-lock.yaml
+
+# Build output
+dist/
+build/
+.vite/
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.development
+
+# Local security configuration
+.claude/
+.firebase/
+firestore.rules
+firebase-debug.log*
+*-debug.log
+firebase-adminsdk*.json
+*service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Editor directories
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage/
+.nyc_output/
+
+# Temporary files
+*.tmp
+.cache/
+borrar/
+NEMA/
+
+# Local clinical and source workbooks
+*.dcm
+*.dicom
+*.ima
+*.xlsx
+*.xls
+*.rules
+*.md
+!SECURITY.md

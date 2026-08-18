@@ -1,0 +1,13 @@
+# Normalize text files to LF to avoid noisy CRLF/LF diffs.
+* text=auto eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.dcm binary
+*.ima binary

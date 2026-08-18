@@ -1,0 +1,139 @@
+# AGENTS.md
+
+This file provides guidance to coding agents working in this repository.
+
+## Commands
+
+```bash
+npm run dev       # Start Vite at http://localhost:5173
+npm run build     # Build to dist/ and audit public artifacts
+npm run preview   # Preview production build locally
+npm run audit:public    # Reject sensitive tracked files or public artifacts
+npm run test:anon      # DICOM anonymizer regression suite (PHI, conformance, RT references)
+npm run test:morse     # Morse trainer assertions (CW timing, Koch decks, quiz invariants)
+npm run check:security # Anonymizer tests, then build and audit the GitHub Pages artifact
+npm run deploy         # Build, audit and deploy dist/ to GitHub Pages
+```
+
+No test framework is configured. Use `npm run build` as the minimum integration check. For calculation modules, add or run focused Node assertions against the pure utility functions.
+
+Two modules do have real suites. The Morse trainer has `scripts/test-morse.mjs`
+(`npm run test:morse`); run it after touching `src/utils/morse.js` or
+`src/utils/morseTrainer.js`. It pins the CW timing numerically, because a
+trainer that sends at the wrong speed fails silently: nothing throws, the tone
+still sounds, and the student calibrates their ear against a lie. PARIS plus its
+trailing word space must take exactly `60 / wpm` seconds, and under Farnsworth
+exactly `60 / effWpm`. It also asserts that no question ever offers a character
+outside the active deck, so a Koch lesson cannot leak a character the student
+has not met yet.
+
+The other is the DICOM anonymizer, which has a regression suite in
+`scripts/test-dicom-anonymizer.mjs` (`npm run test:anon`, wired into
+`check:security`). Run it after touching `src/utils/dicomAnonymizer.js`. It
+builds synthetic DICOM in memory and asserts on the output bytes, and it
+enforces the PS3.15 profile **by tag number on purpose**: the anonymizer used to
+derive its PHI list from dcmjs keywords and 103 of 221 silently stopped
+resolving, so half the profile went unapplied while the tool still reported "no
+issues". Keyword-based rules can regress without any visible error, so new PHI
+rules belong in the tag-number sets.
+
+## Architecture
+
+**Falken's Maze** is a React 18 + Vite 8 SPA for Medical Physics and Nuclear Medicine. The GitHub Pages workflow publishes only `dist/`. `vercel.json` remains available for Vercel deployments and rewrites all paths to `index.html` for client-side routing.
+
+### Routing (`src/App.jsx`)
+
+Routes inside `<Layout />` use the shared sidebar and mobile topbar:
+
+- `/` - blog
+- `/convert-units` - activity unit conversion
+- `/decay-calculator` - radioactive decay
+- `/restricciones-lu177` - Lu-177 restrictions
+- `/uniformidad-gamma` - intrinsic gamma-camera uniformity
+- `/pet-nema-fraccionamiento` - PET NEMA image-quality phantom fill planning and timers
+- `/pet-nema-analisis` - PET NEMA NU 2-2018 image-quality analysis of the acquired series
+- `/rtplan-compare` - DICOM RT Plan comparison
+- `/tg43-calculator` - brachytherapy TG-43 calculator
+- `/acr-qc` - ACR MRI quality control
+- `/lector` - RSVP speed reader
+- `/informe-tanques` - Lu-177 liquid-waste tank report
+- `/rt-anonymizer` - in-browser anonymizer for complete radiotherapy DICOM studies
+- `/q-codes` - amateur radio Q-code study quiz
+- `/morse` - Morse code (CW) trainer
+
+Standalone routes:
+
+- `/quiz-creator` - quiz editor
+- `/quizzes` - public quiz list
+- `/quiz/:quizId` - single-player quiz
+- `/host/:quizId` and `/join` - real-time multiplayer quiz flow
+- `/ptb` and `/ptb/:pasteId` - encrypted Secure Paste flow
+
+### Firebase (`src/firebase.js`)
+
+Firebase config is base64-encoded and split across an array, but this is only
+cosmetic because browser Firebase config is public by design. The module exports
+`db` (Firestore) and `auth` (Firebase Auth). Do not treat Base64 encoding as a
+security boundary. Keep production `firestore.rules` local and ignored, deploy
+them from a private environment, and run `npm run check:security` before
+publishing. See `SECURITY.md`.
+
+Firestore collections:
+
+- `BLOG` - blog posts, keyed by slug.
+- `QUIZZES` - quiz definitions, keyed by slug.
+- `QUIZ_SESSIONS` - real-time multiplayer quiz sessions.
+- `PASTES` - browser-encrypted Secure Paste payloads.
+- `USER_LIMITS` - Secure Paste frequency limiting.
+
+### Main modules
+
+- `src/pages/Blog.jsx` - paginated Firestore feed. Renders Markdown, code highlighting and math.
+- `src/pages/UniformidadGamma.jsx` - DICOM flood upload, NEMA / Pylinac-IAEA calculation and canvas rendering.
+- `src/pages/PetNemaFractionation.jsx` - PET image-quality phantom fill planner, live countdowns and per-sample initial/residual syringe measurement workflow.
+- `src/utils/petNemaFractionation.js` - pure PET NEMA geometry, F-18 decay, theoretical ratios, per-sample recommendations and net activity-at-image projections.
+- `src/pages/PetNemaAnalysis.jsx` and `src/utils/petNemaAnalysis.js` - NEMA NU 2-2018 §7.4 image-quality analysis of the acquired series: contrast recovery, background variability and lung residual error. It takes the **measured** `a_H` and `a_B` concentrations and derives the real activity ratio; only their quotient enters the contrast normalisation, so the unit cancels as long as both are expressed alike and referred to the same instant. All six spheres are treated as hot, so it does not implement the NU 2-2007/2012 cold-sphere contrast used by tools such as jQC-PET.
+- `src/pages/RTPlanCompare.jsx` and `src/utils/rtPlanParser.js` - DICOM RT Plan comparison.
+- `src/pages/Tg43Calculator.jsx` and `src/lib/brachy/` - HDR Ir-192 TG-43 calculations.
+- `src/pages/AcrQcPage.jsx` and `src/lib/acr-qc.js` - ACR Medium Phantom DICOM analysis.
+- `src/pages/LectorRapido.jsx` and `src/utils/rsvp.js` - RSVP reader with localStorage persistence.
+- `src/pages/InformeTanques.jsx` - iframe wrapper for the interactive Lu-177 tank report. The required static report is `public/Informe-Tanques-Terminal.html`; keep it tracked because the page loads it at runtime through `import.meta.env.BASE_URL`.
+- `src/pages/QCodes.jsx` and `src/utils/qcodes.js` - Q-code study quiz. Three 4-option question modes (code to meaning, meaning to code, and a cloze over the usage example), a three-step hint ladder (theme, 50/50, mnemonic), Leitner-box spaced repetition that resurfaces weak codes, per-code mastery, theme/deck filters and CW playback through the Web Audio API. Every entry's `example` **must contain its own code**: the cloze mode blanks it out to build the question.
+- `src/pages/MorseTrainer.jsx`, `src/components/morse/`, `src/utils/morse.js` and `src/utils/morseTrainer.js` - Morse trainer. Four panels: copying by ear (Koch progression, Farnsworth timing), a straight key with sidetone that decodes what you send, a multiple-choice quiz over the table, and the full reference plus a two-way translator. `morse.js` owns the table, encoding, timing and Web Audio, and is shared with `/q-codes`; `morseTrainer.js` owns the Koch order, decks, drill generation and quiz building. Keep the timing in `morse.js` and the pedagogy in `morseTrainer.js`.
+- `src/utils/leitner.js` - Leitner spaced repetition shared by both trainers. `progress` is `{ [key]: { box, correct, wrong, seen } }`, keyed by Q-code in `/q-codes` and by character in `/morse`; `qcodes.js` re-exports it so the page API did not change.
+- `src/utils/localSettings.js` - tolerant localStorage reads for page preferences.
+- `src/pages/RtAnonymizer.jsx`, `src/utils/dicomAnonymizer.js`, `src/utils/zipDownload.js` - client-side DICOM RT study anonymizer. It remaps all non-standard UIDs consistently across CT/RTSTRUCT/RTPLAN/RTDOSE, preserves RT references and PixelData, writes de-identification markers, and downloads a STORE-only ZIP.
+- `src/pages/QuizHost.jsx`, `QuizJoin.jsx`, `QuizPlay.jsx`, `QuizList.jsx`, `QuizCreator.jsx` - quiz system.
+- `src/pages/PasteCreate.jsx` and `PasteView.jsx` - AES-GCM Secure Paste with the decryption key stored only in the URL fragment.
+
+### PET NEMA fractionation
+
+The PET NEMA implementation is documented in `PET_NEMA_FRACTIONATION.md`. It was migrated from the historical workbook `PET.Prueba de calidad de imagen.Fraccionamiento.xlsx`, which is no longer tracked in the repository.
+
+Keep domain calculations in `src/utils/petNemaFractionation.js` and UI concerns in `src/pages/PetNemaFractionation.jsx`. Preserve the operational assumptions unless the protocol is intentionally revised:
+
+- F-18 half-life and acquisition interval: 110 minutes.
+- Background concentration at both acquisitions: 5.3 kBq/ml.
+- Sphere-to-background ratios: 8:1 for the first acquisition and 4:1 for the second.
+- Prepare two background fractions and add the second after the first acquisition. Their required activity is identical only when both are prepared at the same time.
+
+### Key dependencies
+
+- `dicom-parser` and `dcmjs` - DICOM parsing.
+- `marked`, `highlight.js`, `dompurify`, `katex`, `marked-katex-extension` - technical content rendering.
+- `chart.js` and `react-chartjs-2` - charts.
+- `firebase` - Firestore and Auth.
+
+### Styles
+
+Global styles live in `src/styles.css`. Feature-specific stylesheets live in `src/styles/`:
+
+- `acr-qc.css`
+- `lector.css`
+- `morse.css`
+- `pet-nema.css`
+- `quiz.css`
+- `rtplan.css`
+- `tg43.css`
+
+The UI uses CSS custom properties from `src/styles.css`, such as `--bg-secondary`, `--text-muted`, `--accent-blue` and `--border`.

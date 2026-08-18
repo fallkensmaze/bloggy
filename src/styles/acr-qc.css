@@ -1,0 +1,280 @@
+.acr-qc-page {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 24px 28px;
+  color: var(--text-primary);
+}
+
+.acr-qc-page h1 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.acr-qc-page h2 {
+  color: var(--accent-blue);
+  font-size: 1rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+  margin-top: 32px;
+  margin-bottom: 12px;
+}
+
+.acr-qc-page .subtitle {
+  color: var(--text-muted);
+  margin-top: 0;
+  margin-bottom: 20px;
+  font-size: 0.9rem;
+}
+
+/* ── Controls bar ── */
+.acr-qc-page .controls {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  padding: 14px 18px;
+  border-radius: 8px;
+  margin: 0 0 18px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.acr-qc-page .controls label {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.acr-qc-page select {
+  padding: 5px 10px;
+  font-size: 0.88rem;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+/* Series pickers: the option labels carry TR/TE, matrix and the ACR
+   conformance verdict, so they need room and a monospace column. */
+.acr-qc-page #series-controls select {
+  max-width: 620px;
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.acr-qc-page button {
+  padding: 6px 14px;
+  font-size: 0.88rem;
+  border-radius: 5px;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  transition: opacity 0.15s, background 0.15s;
+  background: var(--accent-blue);
+  color: var(--bg-primary);
+}
+
+.acr-qc-page button:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.acr-qc-page button:disabled {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+/* ── Drop zone ── */
+.acr-qc-page #drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  padding: 48px 24px;
+  text-align: center;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.acr-qc-page #drop-zone.dragover {
+  background: var(--bg-tertiary);
+  border-color: var(--accent-blue);
+}
+
+.acr-qc-page #drop-zone p {
+  margin: 5px 0;
+  color: var(--text-secondary);
+}
+
+.acr-qc-page #drop-zone p strong {
+  color: var(--accent-blue);
+}
+
+.acr-qc-page #drop-zone p:last-of-type {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+/* ── Log console ── */
+.acr-qc-page #log {
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 11px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 12px 14px;
+  border-radius: 6px;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  margin-top: 14px;
+}
+
+/* ── Test result cards ── */
+.acr-qc-page .test-result {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 18px;
+  margin: 10px 0;
+  background: var(--bg-secondary);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 14px;
+  align-items: start;
+}
+
+.acr-qc-page .test-result.pass  { border-left: 5px solid var(--accent-green); }
+.acr-qc-page .test-result.fail  { border-left: 5px solid var(--accent-red); }
+.acr-qc-page .test-result.warn  { border-left: 5px solid var(--accent-yellow); }
+.acr-qc-page .test-result.error { border-left: 5px solid var(--text-muted); background: var(--bg-primary); }
+
+.acr-qc-page .test-result h3 {
+  margin: 0 0 8px 0;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.acr-qc-page .test-result .badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--bg-primary);
+  margin-left: 8px;
+  letter-spacing: 0.4px;
+}
+
+.acr-qc-page .test-result.pass  .badge { background: var(--accent-green); }
+.acr-qc-page .test-result.fail  .badge { background: var(--accent-red); }
+.acr-qc-page .test-result.warn  .badge { background: var(--accent-yellow); }
+.acr-qc-page .test-result.error .badge { background: var(--text-muted); }
+
+.acr-qc-page .test-result table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+  margin-top: 6px;
+  width: 100%;
+}
+
+.acr-qc-page .test-result td,
+.acr-qc-page .test-result th {
+  border: 1px solid var(--border-sub);
+  padding: 5px 10px;
+}
+
+.acr-qc-page .test-result th {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.acr-qc-page .test-result td {
+  color: var(--text-secondary);
+}
+
+.acr-qc-page .test-result td.num {
+  text-align: right;
+  font-family: "SF Mono", Consolas, monospace;
+  color: var(--text-primary);
+}
+
+/* ── Canvas ── */
+.acr-qc-page .canvas-wrap {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.acr-qc-page canvas {
+  display: block;
+  border: 1px solid var(--border);
+  background: black;
+  image-rendering: pixelated;
+}
+
+/* ── Slice overview ── */
+.acr-qc-page #slice-overview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.acr-qc-page #slice-overview .mini {
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.acr-qc-page #slice-overview canvas {
+  width: 80px;
+  height: 80px;
+}
+
+/* ── Print meta ── */
+#print-meta {
+  display: none;
+}
+
+@media print {
+  @page { size: auto; margin: 12mm; }
+
+  .acr-qc-page .controls,
+  .acr-qc-page #drop-zone,
+  .acr-qc-page #log { display: none !important; }
+
+  #print-meta {
+    display: block;
+    margin: 8px 0 18px;
+    padding: 10px 12px;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+
+  .acr-qc-page .test-result {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin: 10px 0;
+  }
+
+  .acr-qc-page .test-result .badge {
+    color: white !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .acr-qc-page canvas {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

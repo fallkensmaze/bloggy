@@ -1,0 +1,211 @@
+/* ===== EXAM QR — Estilos base del módulo Examen por QR ===== */
+/* Reutiliza las variables CSS Nord definidas en src/styles.css  */
+
+/* ── Contenedor principal ────────────────────────────────────── */
+.exam-container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+/* ── Topbar ──────────────────────────────────────────────────── */
+.exam-topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 24px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.exam-topbar h1 {
+  font-size: 1rem;
+  font-weight: 600;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Tarjeta genérica ────────────────────────────────────────── */
+.exam-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin-bottom: 16px;
+}
+
+.exam-card h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+}
+
+/* ── Grid de tickets QR ──────────────────────────────────────── */
+.exam-ticket-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+  padding: 8px 0;
+}
+
+/* Tarjeta individual de ticket */
+.exam-ticket {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 10px 10px;
+}
+
+.exam-ticket canvas,
+.exam-ticket img {
+  display: block;
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+.exam-ticket-code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-primary);
+}
+
+.exam-ticket-name {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+  word-break: break-word;
+}
+
+/* ── Grid de asistencia ──────────────────────────────────────── */
+.exam-attendance-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.exam-attendance-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 20px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  transition: background 0.15s;
+}
+
+/* Presente: verde */
+.exam-attendance-item.present {
+  background: color-mix(in srgb, var(--accent-green) 18%, var(--bg-secondary));
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+
+/* Conflicto (reingreso sospechoso): ámbar */
+.exam-attendance-item.conflict {
+  background: color-mix(in srgb, var(--accent-orange) 18%, var(--bg-secondary));
+  border-color: var(--accent-orange);
+  color: var(--accent-orange);
+}
+
+/* ── Botones ─────────────────────────────────────────────────── */
+.exam-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent-blue);
+  color: var(--bg-primary);
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.exam-btn:hover { opacity: 0.88; }
+.exam-btn:active { transform: scale(0.97); }
+.exam-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.exam-btn-secondary {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+}
+
+.exam-btn-danger {
+  background: var(--accent-red);
+  color: #fff;
+}
+
+/* ── Utilidades ──────────────────────────────────────────────── */
+.exam-section-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.exam-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 40px 0;
+  font-size: 0.9rem;
+}
+
+/* ── Impresión: mostrar solo los QR ─────────────────────────── */
+/* React monta todo bajo #root, así que NO se puede ocultar `body > *`
+   (escondería la página entera). En su lugar ocultamos los controles y
+   forzamos fondo claro para que los QR salgan limpios. */
+@media print {
+  .exam-print-controls,
+  .exam-topbar,
+  .exam-btn,
+  .exam-btn-secondary {
+    display: none !important;
+  }
+
+  body {
+    background: #fff !important;
+  }
+
+  .exam-container {
+    max-width: 100%;
+    padding: 0;
+  }
+
+  .exam-ticket-grid {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+  }
+
+  .exam-ticket {
+    background: #fff !important;
+    border: 1px solid #999;
+    border-radius: 6px;
+    break-inside: avoid;
+  }
+
+  .exam-ticket-code {
+    color: #000 !important;
+  }
+}

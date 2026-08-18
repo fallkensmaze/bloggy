@@ -1,0 +1,607 @@
+.pet-analysis-page {
+  max-width: 1280px;
+}
+
+.pet-analysis-privacy {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-bottom: 20px;
+  padding: 13px 16px;
+  border: 1px solid rgba(163, 190, 140, 0.25);
+  border-left: 3px solid var(--accent-green);
+  border-radius: 9px;
+  background: rgba(163, 190, 140, 0.06);
+}
+
+.pet-analysis-privacy > i {
+  color: var(--accent-green);
+  font-size: 20px;
+}
+
+.pet-analysis-privacy strong,
+.pet-analysis-privacy span {
+  display: block;
+}
+
+.pet-analysis-privacy strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.pet-analysis-privacy span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.pet-analysis-section {
+  margin-bottom: 20px;
+}
+
+.pet-analysis-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.pet-analysis-section-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(136, 192, 208, 0.1);
+  color: var(--accent-blue);
+}
+
+.pet-analysis-section-heading h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+.pet-analysis-section-heading p {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.pet-analysis-hidden-input {
+  display: none;
+}
+
+.pet-analysis-dropzone {
+  display: flex;
+  min-height: 255px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 34px;
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  background: rgba(46, 52, 64, 0.32);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.pet-analysis-dropzone:hover,
+.pet-analysis-dropzone-active {
+  border-color: var(--accent-blue);
+  background: rgba(136, 192, 208, 0.06);
+}
+
+.pet-analysis-dropzone-active {
+  transform: scale(1.005);
+}
+
+.pet-analysis-dropzone-loaded {
+  min-height: 220px;
+  border-color: rgba(163, 190, 140, 0.55);
+  background: rgba(163, 190, 140, 0.045);
+}
+
+.pet-analysis-dropzone > i {
+  margin-bottom: 12px;
+  color: var(--accent-blue);
+  font-size: 42px;
+  line-height: 1;
+}
+
+.pet-analysis-dropzone-loaded > i {
+  color: var(--accent-green);
+}
+
+.pet-analysis-dropzone > strong {
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.pet-analysis-dropzone > span {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.pet-analysis-drop-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 19px;
+}
+
+.pet-analysis-drop-actions button,
+.pet-analysis-export button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 13px;
+  border: 1px solid rgba(136, 192, 208, 0.4);
+  border-radius: 8px;
+  background: rgba(136, 192, 208, 0.08);
+  color: var(--accent-blue);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pet-analysis-drop-actions button:hover:not(:disabled),
+.pet-analysis-export button:hover {
+  background: rgba(136, 192, 208, 0.15);
+}
+
+.pet-analysis-drop-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.pet-analysis-progress {
+  margin-top: 14px;
+}
+
+.pet-analysis-progress > div {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+}
+
+.pet-analysis-progress > div span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-blue);
+  transition: width 100ms linear;
+}
+
+.pet-analysis-progress small {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.pet-analysis-status,
+.pet-analysis-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.pet-analysis-status {
+  margin-top: 14px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.pet-analysis-status i {
+  color: var(--accent-blue);
+}
+
+.pet-analysis-status-error {
+  border-left: 3px solid var(--accent-red);
+  background: rgba(191, 97, 106, 0.08);
+  color: #e6b6bb;
+}
+
+.pet-analysis-status-error i {
+  color: var(--accent-red);
+}
+
+.pet-analysis-warning {
+  margin-bottom: 12px;
+  border-left: 3px solid var(--accent-orange);
+  background: rgba(235, 203, 139, 0.08);
+  color: var(--accent-orange);
+}
+
+.pet-analysis-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+  gap: 1px;
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--border);
+}
+
+.pet-analysis-info-grid > div {
+  min-width: 0;
+  padding: 11px 13px;
+  background: var(--bg-tertiary);
+}
+
+.pet-analysis-info-grid span,
+.pet-analysis-metric > span,
+.pet-analysis-ratio > span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.45px;
+  text-transform: uppercase;
+}
+
+.pet-analysis-info-grid strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pet-analysis-clear {
+  margin-top: 12px;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.pet-analysis-clear:hover {
+  color: var(--text-secondary);
+}
+
+.pet-analysis-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 15px;
+}
+
+.pet-analysis-form-grid label {
+  min-width: 0;
+}
+
+.pet-analysis-form-grid .dark-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+.pet-analysis-ratio {
+  display: flex;
+  min-height: 68px;
+  flex-direction: column;
+  justify-content: center;
+  padding: 10px 14px;
+  border: 1px solid rgba(136, 192, 208, 0.24);
+  border-radius: 8px;
+  background: rgba(136, 192, 208, 0.06);
+}
+
+.pet-analysis-ratio strong {
+  margin-top: 1px;
+  color: var(--accent-blue);
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pet-analysis-advanced,
+.pet-analysis-details {
+  margin-top: 19px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.pet-analysis-advanced summary,
+.pet-analysis-details summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+.pet-analysis-advanced .pet-analysis-form-grid {
+  margin-top: 14px;
+}
+
+.pet-analysis-advanced > p {
+  margin-top: 9px;
+}
+
+.pet-analysis-calculate {
+  width: 100%;
+  margin-top: 22px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent-blue);
+  color: var(--bg-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.pet-analysis-calculate:hover:not(:disabled) {
+  filter: brightness(1.07);
+}
+
+.pet-analysis-calculate:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+.pet-analysis-metrics,
+.pet-analysis-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+  gap: 12px;
+}
+
+.pet-analysis-metric {
+  min-width: 0;
+  padding: 14px 15px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(67, 76, 94, 0.48);
+}
+
+.pet-analysis-metric strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+
+.pet-analysis-metric small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.pet-analysis-metric-blue {
+  border-color: rgba(136, 192, 208, 0.32);
+}
+
+.pet-analysis-metric-blue strong {
+  color: var(--accent-blue);
+}
+
+.pet-analysis-metric-green {
+  border-color: rgba(163, 190, 140, 0.35);
+}
+
+.pet-analysis-metric-green strong {
+  color: var(--accent-green);
+}
+
+.pet-analysis-metric-red {
+  border-color: rgba(191, 97, 106, 0.42);
+}
+
+.pet-analysis-metric-red strong {
+  color: var(--accent-red);
+}
+
+.pet-analysis-view-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+}
+
+.pet-analysis-view-grid figure {
+  min-width: 0;
+}
+
+.pet-analysis-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #020202;
+}
+
+.pet-analysis-coronal {
+  max-height: 520px;
+  object-fit: contain;
+}
+
+.pet-analysis-view-grid figcaption {
+  margin-top: 7px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.pet-analysis-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 7px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.pet-analysis-legend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pet-analysis-legend i {
+  display: block;
+  width: 16px;
+  height: 2px;
+}
+
+.pet-analysis-legend i.red { background: var(--accent-red); }
+.pet-analysis-legend i.blue { background: var(--accent-blue); }
+.pet-analysis-legend i.green { background: var(--accent-green); }
+
+.pet-analysis-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.pet-analysis-chart-grid > div {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(46, 52, 64, 0.25);
+}
+
+.pet-analysis-chart-grid h3 {
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.pet-analysis-chart {
+  height: 275px;
+}
+
+.pet-analysis-table-wrap {
+  margin-top: 20px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.pet-analysis-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.pet-analysis-table th,
+.pet-analysis-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-sub);
+  text-align: left;
+}
+
+.pet-analysis-table th {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.pet-analysis-table td {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.pet-analysis-table td strong {
+  color: var(--text-primary);
+}
+
+.pet-analysis-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.pet-analysis-lung-metrics {
+  margin-bottom: 18px;
+}
+
+.pet-analysis-lung-chart {
+  height: 320px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(46, 52, 64, 0.25);
+}
+
+.pet-analysis-details .pet-analysis-table-wrap {
+  margin-top: 10px;
+}
+
+.pet-analysis-slices {
+  margin-top: 14px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.pet-analysis-export > div:last-of-type {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pet-analysis-export > p {
+  margin-top: 14px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+@media (max-width: 900px) {
+  .pet-analysis-view-grid,
+  .pet-analysis-chart-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pet-analysis-coronal {
+    max-height: none;
+  }
+}
+
+@media (max-width: 576px) {
+  .pet-analysis-section {
+    padding: 20px;
+  }
+
+  .pet-analysis-dropzone {
+    min-height: 230px;
+    padding: 25px 16px;
+  }
+
+  .pet-analysis-drop-actions {
+    flex-direction: column;
+  }
+
+  .pet-analysis-form-grid,
+  .pet-analysis-metrics,
+  .pet-analysis-diagnostics {
+    grid-template-columns: 1fr;
+  }
+
+  .pet-analysis-chart,
+  .pet-analysis-lung-chart {
+    height: 255px;
+  }
+}

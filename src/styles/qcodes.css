@@ -1,0 +1,377 @@
+/* ===== Códigos Q (quiz de radioaficionado) ===== */
+
+/* ── Botones ── */
+.qc-btn {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    border-radius: 8px;
+    padding: 9px 16px;
+    font-size: 13.5px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+.qc-btn:hover { border-color: var(--accent-blue); }
+.qc-btn--primary {
+    background: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: var(--bg-primary);
+    font-weight: 600;
+}
+.qc-btn--primary:hover { filter: brightness(1.1); }
+.qc-btn--active {
+    border-color: var(--accent-blue);
+    background: rgba(136, 192, 208, 0.12);
+    color: var(--accent-blue);
+    font-weight: 600;
+}
+.qc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.qc-btn--sm { padding: 6px 12px; font-size: 12.5px; }
+.qc-btn--hint {
+    border-color: var(--accent-orange);
+    color: var(--accent-orange);
+}
+.qc-btn--hint:hover:not(:disabled) { background: rgba(235, 203, 139, 0.1); border-color: var(--accent-orange); }
+
+.qc-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ── Estadísticas ── */
+.qc-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+}
+.qc-stat {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-sub);
+    border-radius: 10px;
+    padding: 12px 14px;
+    text-align: center;
+}
+.qc-stat-value {
+    display: block;
+    font-size: 1.4rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+}
+.qc-stat-value--green  { color: var(--accent-green); }
+.qc-stat-value--red    { color: var(--accent-red); }
+.qc-stat-value--blue   { color: var(--accent-blue); }
+.qc-stat-value--orange { color: var(--accent-orange); }
+.qc-stat-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-muted);
+}
+
+/* ── Barra de dominio del mazo ── */
+.qc-mastery { margin-top: 14px; }
+.qc-mastery-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 7px;
+}
+.qc-mastery-legend { display: flex; gap: 12px; flex-wrap: wrap; }
+.qc-mastery-legend > span { display: inline-flex; align-items: center; gap: 5px; }
+.qc-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.qc-bar {
+    display: flex;
+    height: 7px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--bg-tertiary);
+}
+.qc-bar-seg { transition: width 0.3s; }
+
+/* ── Pregunta ── */
+.qc-question-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+.qc-mastery-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.qc-sentence {
+    background: var(--bg-tertiary);
+    border-left: 3px solid var(--accent-blue);
+    border-radius: 0 8px 8px 0;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+}
+.qc-prompt {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 20px;
+}
+.qc-prompt .qc-code-chip { font-size: 1.2rem; }
+
+.qc-options {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+}
+.qc-option {
+    background: var(--bg-tertiary);
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+    font-family: inherit;
+    font-size: 14px;
+    color: var(--text-primary);
+    transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+.qc-option:hover:not(:disabled) {
+    border-color: var(--accent-blue);
+    transform: translateY(-1px);
+}
+.qc-option:disabled { cursor: default; }
+.qc-option-letter {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--border);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+.qc-option-text { flex: 1; line-height: 1.4; }
+.qc-option-icon { font-size: 18px; margin-left: auto; }
+
+.qc-option--correct {
+    border-color: var(--accent-green);
+    background: rgba(163, 190, 140, 0.1);
+}
+.qc-option--correct .qc-option-letter { background: var(--accent-green); color: var(--bg-primary); }
+.qc-option--correct .qc-option-icon { color: var(--accent-green); }
+
+.qc-option--wrong {
+    border-color: var(--accent-red);
+    background: rgba(191, 97, 106, 0.1);
+}
+.qc-option--wrong .qc-option-letter { background: var(--accent-red); color: var(--bg-primary); }
+.qc-option--wrong .qc-option-icon { color: var(--accent-red); }
+
+.qc-option--dim { opacity: 0.45; }
+
+/* Descartada por la pista 50/50 */
+.qc-option--out {
+    opacity: 0.3;
+    text-decoration: line-through;
+    border-style: dashed;
+}
+
+/* ── Pistas ── */
+.qc-hints {
+    margin-top: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: flex-start;
+}
+.qc-hints-note { font-size: 12px; color: var(--text-muted); }
+.qc-hint {
+    display: flex;
+    gap: 12px;
+    width: 100%;
+    background: rgba(235, 203, 139, 0.08);
+    border: 1px solid rgba(235, 203, 139, 0.35);
+    border-radius: 10px;
+    padding: 11px 14px;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+}
+.qc-hint-icon {
+    color: var(--accent-orange);
+    font-size: 14px;
+    width: 18px;
+    text-align: center;
+    flex-shrink: 0;
+    margin-top: 3px;
+}
+
+/* ── Feedback ── */
+.qc-feedback {
+    margin-top: 18px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 14.5px;
+}
+.qc-feedback--correct {
+    background: rgba(163, 190, 140, 0.12);
+    border: 1px solid var(--accent-green);
+    color: var(--accent-green);
+}
+.qc-feedback--wrong {
+    background: rgba(191, 97, 106, 0.12);
+    border: 1px solid var(--accent-red);
+    color: var(--accent-red);
+}
+
+/* ── Panel de explicación (ejemplo + mnemotecnia) ── */
+.qc-info {
+    margin-top: 14px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-sub);
+    border-radius: 10px;
+    padding: 18px 20px;
+}
+.qc-info-row {
+    display: flex;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-sub);
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+}
+.qc-info-row:last-child { border-bottom: none; }
+.qc-info-icon {
+    color: var(--accent-blue);
+    font-size: 14px;
+    width: 18px;
+    text-align: center;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+.qc-info-label {
+    display: block;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+}
+
+.qc-code-chip {
+    display: inline-block;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-weight: 700;
+    background: rgba(136, 192, 208, 0.12);
+    border: 1px solid rgba(136, 192, 208, 0.4);
+    color: var(--accent-blue);
+    border-radius: 6px;
+    padding: 1px 8px;
+    letter-spacing: 0.5px;
+}
+
+/* ── Audio en CW ── */
+.qc-morse-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 6px;
+    padding: 1px 7px;
+    font-size: 12px;
+    line-height: 1.5;
+    cursor: pointer;
+    vertical-align: middle;
+    transition: color 0.15s, border-color 0.15s;
+}
+.qc-morse-btn:hover { color: var(--accent-blue); border-color: var(--accent-blue); }
+.qc-morse-btn--on { color: var(--accent-green); border-color: var(--accent-green); }
+.qc-morse-dots {
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+    letter-spacing: 1px;
+}
+
+/* ── Lista de referencia ── */
+.qc-search {
+    width: 100%;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 13.5px;
+    padding: 9px 13px;
+    margin-bottom: 18px;
+}
+.qc-search:focus { outline: none; border-color: var(--accent-blue); }
+.qc-ref-level {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 6px;
+}
+.qc-ref-group { margin-bottom: 22px; }
+.qc-ref-group-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--accent-blue);
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+}
+.qc-ref-entry {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border-sub);
+}
+.qc-ref-entry:last-child { border-bottom: none; }
+.qc-ref-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+}
+.qc-ref-meaning { font-weight: 600; color: var(--text-primary); font-size: 14px; }
+.qc-ref-question { color: var(--text-muted); font-size: 12.5px; font-style: italic; }
+.qc-ref-detail { font-size: 13px; color: var(--text-secondary); line-height: 1.55; margin-top: 3px; }
+.qc-ref-detail i { color: var(--accent-orange); margin-right: 6px; }
+.qc-ref-mnemonic { font-size: 13px; color: var(--text-secondary); line-height: 1.55; margin-top: 3px; }
+.qc-ref-mnemonic i { color: var(--accent-green); margin-right: 6px; }
+
+/* ── Responsive ── */
+@media (max-width: 640px) {
+    .qc-options { grid-template-columns: 1fr; }
+    .qc-stats-grid { grid-template-columns: repeat(2, 1fr); }
+}

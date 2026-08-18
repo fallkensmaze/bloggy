@@ -1,0 +1,40 @@
+{
+  "name": "falkens-maze",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && npm run audit:public",
+    "preview": "vite preview",
+    "audit:public": "node scripts/audit-public-build.mjs",
+    "test:anon": "node scripts/test-dicom-anonymizer.mjs",
+    "test:morse": "node scripts/test-morse.mjs",
+    "test:radio": "node scripts/test-radio.mjs",
+    "check:security": "npm run test:anon && npm run build",
+    "deploy": "npm run check:security && gh-pages -d dist"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "dcmjs": "^0.50.1",
+    "dicom-parser": "^1.8.21",
+    "dompurify": "^3.4.5",
+    "firebase": "^12.13.0",
+    "highlight.js": "^11.9.0",
+    "katex": "^0.16.45",
+    "marked": "^12.0.0",
+    "marked-katex-extension": "^5.1.8",
+    "qrcode": "^1.5.4",
+    "react": "^18.3.1",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.22.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.2",
+    "gh-pages": "^6.1.1",
+    "vite": "^8.0.14"
+  },
+  "overrides": {
+    "picomatch": "^2.3.2"
+  }
+}

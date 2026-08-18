@@ -1,0 +1,337 @@
+/* ===== RSVP — Lector Rápido ===================================================
+   All colors use CSS variables from styles.css (Nord theme).
+   No hardcoded hex values that aren't already in the design system.
+   ========================================================================== */
+
+/* ── Drop zone ────────────────────────────────────────────────────────────── */
+.rsvp-dropzone {
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 48px 32px;
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.rsvp-dropzone--active {
+  border-color: var(--accent-blue);
+  background: rgba(136, 192, 208, 0.05);
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.rsvp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+  line-height: 1;
+}
+.rsvp-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.rsvp-btn--primary {
+  background: var(--accent-blue);
+  color: var(--bg-primary);
+  font-weight: 600;
+}
+.rsvp-btn--primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.rsvp-btn--ghost {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+.rsvp-btn--ghost:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.rsvp-btn--icon {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  font-size: 15px;
+}
+.rsvp-btn--icon:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.rsvp-btn--play {
+  background: var(--accent-blue);
+  color: var(--bg-primary);
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  font-size: 20px;
+  border-radius: 50%;
+  border: none;
+}
+.rsvp-btn--play:hover {
+  filter: brightness(1.1);
+}
+
+/* ── Focal display area ───────────────────────────────────────────────────── */
+/*
+ * Fixed height prevents layout shift when words of different lengths appear.
+ * The ORP letter is always rendered at x = 50% of this container.
+ */
+.rsvp-focal-area {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  padding: 20px 0;
+  overflow: hidden;
+}
+
+/* Subtle vertical tick marks above/below the focal column */
+.rsvp-guide {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.rsvp-guide--top    { top: 6px; }
+.rsvp-guide--bottom { bottom: 6px; }
+
+/* ── Word display ─────────────────────────────────────────────────────────── */
+/*
+ * Fixed height + overflow:hidden ensures zero layout shift between words.
+ */
+.rsvp-word-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 60px;
+  overflow: hidden;
+}
+
+/*
+ * ORP alignment using CSS custom properties + monospace `ch` units.
+ *
+ * In any monospace font, every glyph has exactly the same advance width,
+ * which equals 1ch (the advance width of the "0" character).
+ *
+ * To center the ORP letter (at index N) on the vertical focal line:
+ *   • The word must be shifted left by (N + 0.5) × 1ch
+ *   • N × 1ch accounts for the N characters before the ORP letter
+ *   • 0.5ch centers the ORP letter itself (not just its left edge)
+ *
+ * --orp-idx is set via inline style from the React component.
+ * No CSS transition — transitions would make the ORP letter "swim".
+ */
+.rsvp-word-inner {
+  display: inline-block;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 2.25rem;
+  font-weight: 500;
+  line-height: 1;
+  transform: translateX(calc(var(--orp-idx, 0) * -1ch - 0.5ch));
+  transition: none !important; /* prevent letter drift between words */
+}
+
+.rsvp-pre  { color: var(--text-primary); }
+.rsvp-orp  { color: var(--accent-red); font-weight: 700; }
+.rsvp-post { color: var(--text-primary); }
+
+/* ── Stats row ────────────────────────────────────────────────────────────── */
+.rsvp-stats {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Range sliders ────────────────────────────────────────────────────────── */
+.rsvp-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  accent-color: var(--accent-blue);
+}
+.rsvp-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  border: none;
+  cursor: pointer;
+}
+.rsvp-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  border: none;
+  cursor: pointer;
+}
+.rsvp-slider:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(136, 192, 208, 0.25);
+}
+
+/* ── Playback controls row ────────────────────────────────────────────────── */
+.rsvp-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── Context window ───────────────────────────────────────────────────────── */
+.rsvp-context-text {
+  font-size: 14px;
+  line-height: 2;
+  color: var(--text-muted);
+}
+.rsvp-context-word {
+  color: var(--text-muted);
+}
+.rsvp-context-current {
+  color: var(--text-primary);
+  font-weight: 600;
+  background: rgba(136, 192, 208, 0.12);
+  border-radius: 3px;
+  padding: 1px 3px;
+}
+
+/* ── Keyboard help panel ──────────────────────────────────────────────────── */
+.rsvp-help-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 8px;
+}
+.rsvp-help-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.rsvp-kbd {
+  display: inline-block;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-secondary);
+  min-width: 96px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* ── Saved-texts list ─────────────────────────────────────────────────────── */
+.rsvp-saved-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  flex-wrap: wrap;
+}
+
+.rsvp-saved-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.rsvp-saved-name {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rsvp-saved-meta {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.rsvp-saved-bar-wrap {
+  height: 3px;
+  background: var(--bg-secondary);
+  border-radius: 2px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+
+.rsvp-saved-bar {
+  height: 100%;
+  background: var(--accent-blue);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+  min-width: 2px;
+}
+
+.rsvp-saved-pct {
+  font-size: 11px;
+  color: var(--accent-blue);
+  font-variant-numeric: tabular-nums;
+}
+
+.rsvp-saved-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+@media (max-width: 576px) {
+  .rsvp-word-inner   { font-size: 1.75rem; }
+  .rsvp-word-area    { height: 50px; }
+  .rsvp-focal-area   { min-height: 100px; }
+  .rsvp-dropzone     { padding: 32px 16px; }
+  .rsvp-help-grid    { grid-template-columns: 1fr; }
+}
+
+/* ── Respect reduced-motion preference ───────────────────────────────────── */
+/*
+ * The word display never uses CSS transitions (by design above), so there's
+ * nothing to disable here. Any future animations should be guarded here.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .rsvp-btn { transition: none; }
+}

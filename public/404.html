@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Redirecting...</title>
+    <script>
+      // Redirect to HTTPS version preserving the path
+      if (location.protocol !== 'https:') {
+        location.replace('https://' + location.host + location.pathname + location.search + location.hash);
+      } else {
+        // If already HTTPS, preserve the path for React Router
+        sessionStorage.setItem('redirectPath', location.pathname + location.search + location.hash);
+        location.replace('/');
+      }
+    </script>
+</head>
+<body>
+    <p>Redirecting...</p>
+</body>
+</html>
