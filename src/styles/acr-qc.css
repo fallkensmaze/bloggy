@@ -67,7 +67,7 @@
    conformance verdict, so they need room and a monospace column. */
 .acr-qc-page #series-controls select {
   max-width: 620px;
-  font-family: "SF Mono", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.78rem;
 }
 
@@ -125,7 +125,7 @@
 
 /* ── Log console ── */
 .acr-qc-page #log {
-  font-family: "SF Mono", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   background: var(--bg-primary);
   border: 1px solid var(--border);
@@ -203,7 +203,7 @@
 
 .acr-qc-page .test-result td.num {
   text-align: right;
-  font-family: "SF Mono", Consolas, monospace;
+  font-family: var(--font-mono);
   color: var(--text-primary);
 }
 

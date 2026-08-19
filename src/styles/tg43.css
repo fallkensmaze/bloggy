@@ -254,7 +254,7 @@
 }
 
 .tg43-result-coords {
-  font-family: 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-secondary);
 }

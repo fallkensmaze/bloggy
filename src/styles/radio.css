@@ -66,7 +66,7 @@
     margin: 0 auto 16px;
 }
 .ra-gate-text code, .ra-gate-title code {
-    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-family: var(--font-mono);
     background: rgba(136, 192, 208, 0.12);
     border-radius: 5px;
     padding: 1px 6px;
@@ -77,7 +77,7 @@
     border: 1px solid var(--border-sub);
     border-radius: 10px;
     padding: 14px 16px;
-    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.6;
     color: var(--text-secondary);

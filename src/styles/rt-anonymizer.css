@@ -108,7 +108,7 @@
 .rta-summary-grid > div { display: flex; flex-direction: column; gap: 2px; }
 .rta-summary-grid .lbl { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
 .rta-summary-grid .val { font-size: 15px; font-weight: 600; }
-.rta-summary-grid .val.mono, .w-file { font-family: 'SFMono-Regular', ui-monospace, monospace; font-size: 13px; }
+.rta-summary-grid .val.mono, .w-file { font-family: var(--font-mono); font-size: 13px; }
 
 .rta-kinds { display: flex; flex-wrap: wrap; gap: 8px; }
 .rta-badge {
@@ -167,16 +167,16 @@
   border: 1px solid var(--border);
 }
 .rta-progress .fill { height: 100%; background: var(--accent-blue); transition: width .15s; }
-.rta-progress span { font-size: 12px; color: var(--text-muted); display: block; margin-top: 5px; font-family: monospace; }
+.rta-progress span { font-size: 12px; color: var(--text-muted); display: block; margin-top: 5px; font-family: var(--font-mono); }
 
 .rta-result-line { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; }
-.rta-result-line code { font-family: monospace; background: var(--bg-primary); padding: 1px 5px; border-radius: 4px; }
+.rta-result-line code { font-family: var(--font-mono); background: var(--bg-primary); padding: 1px 5px; border-radius: 4px; }
 .rta-uid-examples {
   display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
   margin: 8px 0 12px; font-size: 12px; color: var(--text-muted);
 }
 .rta-uid-examples code {
-  font-family: monospace; background: var(--bg-primary); color: var(--text-secondary);
+  font-family: var(--font-mono); background: var(--bg-primary); color: var(--text-secondary);
   padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);
 }
 

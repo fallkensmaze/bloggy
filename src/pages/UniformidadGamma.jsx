@@ -218,7 +218,7 @@ function UniformidadGamma() {
             borderRadius: '8px',
             fontSize: '15px',
             fontWeight: 600,
-            fontFamily: 'Inter, sans-serif',
+            fontFamily: 'var(--font-sans)',
             cursor: parsedDICOM && !loading ? 'pointer' : 'not-allowed',
             opacity: parsedDICOM && !loading ? 1 : 0.35,
             transition: 'opacity 0.15s'
