@@ -130,6 +130,12 @@ function QuizJoin() {
       // host (las reglas impiden que el jugador toque `puntos`). Si el doc ya existe
       // (recarga de la misma pestaña = mismo playerId) se conserva tal cual: no se
       // reescribe, para no pisar los puntos ya calculados por el host.
+      //
+      // `owner` es el uid anónimo: es lo que ata el documento a quien lo creó. Sin él la
+      // regla de actualización no puede distinguir al dueño de cualquier otro jugador, y
+      // los participantes son de lectura pública, así que sus ids están a la vista.
+      // Ojo: el uid anónimo es por navegador, no por pestaña, así que dos jugadores en el
+      // mismo equipo comparten `owner`; separarlos sigue siendo cosa de `playerId`.
       const participantRef = doc(db, 'QUIZ_SESSIONS', trimmedCode, 'PARTICIPANTES', pid)
       const existing = await getDoc(participantRef)
       if (!existing.exists()) {
@@ -137,6 +143,7 @@ function QuizJoin() {
           nombre: playerName.trim().slice(0, 40),
           puntos: 0,
           respuestas: [],
+          owner: auth.currentUser.uid,
           fechaUnion: serverTimestamp()
         })
       }

@@ -28,7 +28,10 @@ function QuizCreator() {
   const [slug, setSlug] = useState('')
   const [descripcion, setDescripcion] = useState('')
   const [topic, setTopic] = useState('')
-  const [publico, setPublico] = useState(true)
+  // Privado por defecto: un quiz público es de lectura abierta para todo el mundo,
+  // documento entero y con el flag `correcta` de cada opción. Publicarlo tiene que ser
+  // una decisión explícita, no lo que pasa si no tocas el desplegable.
+  const [publico, setPublico] = useState(false)
   const [preguntas, setPreguntas] = useState([])
   const [slugEdited, setSlugEdited] = useState(false)
   
@@ -203,7 +206,7 @@ function QuizCreator() {
     setSlug('')
     setDescripcion('')
     setTopic('')
-    setPublico(true)
+    setPublico(false)
     setPreguntas([])
     setSlugEdited(false)
   }

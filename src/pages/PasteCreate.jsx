@@ -6,10 +6,10 @@ import { signInAnonymously } from 'firebase/auth'
 import {
   encryptPasteContent,
   generatePasteCode,
+  generatePasteKey,
   MAX_CIPHERTEXT_CHARS,
   MAX_PASTE_CHARS,
   normalizePasteCode,
-  PASTE_CODE_LENGTH,
   supportsPasteCrypto
 } from '../utils/pasteCrypto'
 
@@ -26,6 +26,25 @@ async function getAnonymousUser() {
 
   const credential = await signInAnonymously(auth)
   return credential.user
+}
+
+/**
+ * Destino al que llevar al usuario desde la caja de "abrir". Acepta el enlace completo
+ * —que es lo habitual ahora, porque la clave viaja en el fragmento— o solo el código,
+ * que sigue sirviendo para los pastes del esquema antiguo.
+ */
+function parseDestinoPaste(entrada) {
+  const texto = (entrada || '').trim()
+  if (!texto) return ''
+
+  const enlace = texto.match(/\/ptb\/([^/?#\s]+)(#\S*)?/)
+  if (enlace) {
+    const code = normalizePasteCode(enlace[1])
+    return code.length >= 5 ? `/ptb/${code}${enlace[2] || ''}` : ''
+  }
+
+  const code = normalizePasteCode(texto)
+  return code.length >= 5 ? `/ptb/${code}` : ''
 }
 
 function getExpirationDate(expiration) {
@@ -48,9 +67,9 @@ function PasteCreate() {
   const handleOpenCode = (event) => {
     event.preventDefault()
 
-    const code = normalizePasteCode(codigoAbrir)
-    if (code.length >= 5) {
-      navigate(`/ptb/${code}`)
+    const destino = parseDestinoPaste(codigoAbrir)
+    if (destino) {
+      navigate(destino)
     }
   }
 
@@ -74,11 +93,15 @@ function PasteCreate() {
     setError('')
 
     const pasteId = generatePasteCode()
+    // La clave es independiente del id del documento y solo viaja en el fragmento de la
+    // URL, que el navegador nunca envía al servidor. Si se derivase del id, quien lee la
+    // base de datos tendría el sobre y la llave a la vez.
+    const pasteKey = generatePasteKey()
     const expireDate = getExpirationDate(expiracion)
 
     try {
       const user = await getAnonymousUser()
-      const encrypted = await encryptPasteContent(contenido, pasteId)
+      const encrypted = await encryptPasteContent(contenido, pasteKey)
 
       if (encrypted.ciphertext.length >= MAX_CIPHERTEXT_CHARS) {
         setError('El texto ocupa demasiado al cifrarlo. Prueba con un fragmento más corto.')
@@ -103,7 +126,7 @@ function PasteCreate() {
 
       batch.set(limitRef, { lastPaste: serverTimestamp() }, { merge: true })
       await batch.commit()
-      navigate(`/ptb/${pasteId}`)
+      navigate(`/ptb/${pasteId}#k=${pasteKey}`)
     } catch (err) {
       console.error('Error saving paste:', err)
       if (err.code === 'permission-denied' || err.message.includes('Missing or insufficient permissions')) {
@@ -117,7 +140,7 @@ function PasteCreate() {
     }
   }
 
-  const codigoNormalizado = normalizePasteCode(codigoAbrir)
+  const destinoAbrir = parseDestinoPaste(codigoAbrir)
 
   return (
     <div className="page-body" style={{ maxWidth: '900px', margin: '0 auto' }}>
@@ -126,7 +149,8 @@ function PasteCreate() {
           <i className="bi bi-file-earmark-lock"></i> Pastebin corto
         </h1>
         <p style={{ color: 'var(--text-muted)' }}>
-          Crea fragmentos temporales con un código de {PASTE_CODE_LENGTH} caracteres.
+          Se cifra en tu navegador y la clave viaja en el enlace, nunca en el servidor:
+          comparte el enlace entero o nadie podrá descifrarlo.
         </p>
       </div>
 
@@ -142,22 +166,24 @@ function PasteCreate() {
       >
         <div style={{ flex: '1 1 220px' }}>
           <label style={{ display: 'block', marginBottom: '8px', color: 'var(--text-muted)', fontSize: '13px' }}>
-            Abrir por código
+            Abrir un paste
           </label>
+          {/* Se pega el enlace entero, no solo el código: la clave viaja en el fragmento
+              (#k=…) y sin ella no hay nada que descifrar. El campo no normaliza ni pasa a
+              mayúsculas porque la clave distingue mayúsculas de minúsculas. */}
           <input
             type="text"
             className="dark-input"
-            placeholder="Ej. A7KD3Q9M"
+            placeholder="Pega aquí el enlace completo"
             value={codigoAbrir}
-            onChange={(e) => setCodigoAbrir(normalizePasteCode(e.target.value))}
-            maxLength={PASTE_CODE_LENGTH}
-            style={{ width: '100%', textTransform: 'uppercase', letterSpacing: '0.08em' }}
+            onChange={(e) => setCodigoAbrir(e.target.value)}
+            style={{ width: '100%' }}
           />
         </div>
         <button
           type="submit"
           className="btn-back"
-          disabled={codigoNormalizado.length < 5}
+          disabled={!destinoAbrir}
           style={{ margin: 0 }}
         >
           <i className="bi bi-box-arrow-in-right"></i> Abrir

@@ -5,11 +5,12 @@ import {
   signOut, onAuthStateChanged
 } from 'firebase/auth'
 import {
-  collection, doc, setDoc, getDoc, getDocs, deleteDoc,
+  collection, doc, setDoc, getDoc, getDocs, deleteDoc, updateDoc,
   query, where, serverTimestamp, writeBatch
 } from 'firebase/firestore'
 import { generateTicketSecret, buildDisplayCode } from '../utils/exam'
 import { loginWithGoogle, consumeGoogleRedirect } from '../utils/authGoogle'
+import { esAdmin } from '../utils/adminAuth'
 import '../styles/quiz.css'
 import '../styles/exam.css'
 
@@ -135,7 +136,8 @@ function ExamAdminList() {
     setCreando(true)
     try {
       // Leer el quiz para obtener el nº de preguntas
-      const quizSnap = await getDoc(doc(db, 'QUIZZES', quizId))
+      const quizRef = doc(db, 'QUIZZES', quizId)
+      const quizSnap = await getDoc(quizRef)
       if (!quizSnap.exists()) {
         setError('El quiz seleccionado no existe.')
         setCreando(false)
@@ -144,13 +146,23 @@ function ExamAdminList() {
       const quizData = quizSnap.data()
       const totalPreguntas = quizData.preguntas?.length ?? 0
 
+      // Un quiz público es de lectura abierta: se lista en /quizzes y su documento
+      // completo, con el flag `correcta` de cada opción, lo puede leer cualquiera sin
+      // sesión. Como examen eso es el enunciado y el solucionario publicados. Al
+      // asociarlo a una sesión se pasa a privado, y se avisa de que ha dejado la lista.
+      if (quizData.publico === true) {
+        await updateDoc(quizRef, { publico: false })
+      }
+
       // Generar sessionId
       const sessionId = generateTicketSecret().slice(0, 12)
 
-      // Crear doc de sesión
+      // Crear doc de sesión. NO lleva `quizId`: este documento lo lee cualquier alumno
+      // (las reglas solo exigen sesión, y la sesión anónima la abre cualquiera), así que
+      // el id del quiz iría de la mano con las respuestas correctas. Vive aparte, en
+      // CONFIG/quiz, que solo lee el examinador.
       await setDoc(doc(db, 'EXAM_SESSIONS', sessionId), {
         titulo:                    titulo.trim(),
-        quizId,
         host:                      user.uid,
         estado:                    'lobby',
         preguntaActual:            0,
@@ -163,6 +175,8 @@ function ExamAdminList() {
         cerradaEn:                 null,
         fechaCreacion:             serverTimestamp(),
       })
+
+      await setDoc(doc(db, 'EXAM_SESSIONS', sessionId, 'CONFIG', 'quiz'), { quizId })
 
       // Crear tickets en un solo batch (N ≤ 500)
       const batch = writeBatch(db)
@@ -203,6 +217,10 @@ function ExamAdminList() {
     setError('')
   }
 
+  // El quiz elegido se pasará a privado al crear la sesión, así que conviene decirlo
+  // en el formulario: después de crear se navega directo a los QR y ya no hay dónde leerlo.
+  const quizSeleccionado = quizzes.find(q => q.id === quizId)
+
   const irACrear = () => {
     resetForm()
     setView('create')
@@ -214,7 +232,7 @@ function ExamAdminList() {
   }
 
   // ── Pantalla de login ─────────────────────────────────────────────────────
-  if (!user || user.isAnonymous) {
+  if (!esAdmin(user)) {
     return (
       <>
         <ExamTopbar user={null} />
@@ -223,6 +241,11 @@ function ExamAdminList() {
             <div className="auth-card-icon">📋</div>
             <h1>Examen por QR</h1>
             <p>Inicia sesión con tu cuenta de Google para administrar sesiones de examen.</p>
+            {user && !user.isAnonymous && (
+              <p style={{ color: 'var(--accent-red)', fontSize: '0.85rem' }}>
+                {user.email} no es la cuenta de administración del sitio.
+              </p>
+            )}
             <button onClick={handleLogin} className="btn-google">
               <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
                 <path fill="#4285F4" d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z"/>
@@ -347,6 +370,12 @@ function ExamAdminList() {
                 {quizzes.length === 0 && (
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
                     No tienes quizzes. Crea uno primero en <a href="/quiz-creator">/quiz-creator</a>.
+                  </p>
+                )}
+                {quizSeleccionado?.publico === true && (
+                  <p style={{ fontSize: '0.8rem', color: 'var(--accent-orange)', marginTop: '4px' }}>
+                    Este quiz es público: cualquiera puede leerlo entero, con las respuestas
+                    correctas, desde /quizzes. Al crear la sesión se pasará a privado.
                   </p>
                 )}
               </div>

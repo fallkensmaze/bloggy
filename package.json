@@ -10,7 +10,8 @@
     "test:anon": "node scripts/test-dicom-anonymizer.mjs",
     "test:morse": "node scripts/test-morse.mjs",
     "test:radio": "node scripts/test-radio.mjs",
-    "check:security": "npm run test:anon && npm run build",
+    "test:paste": "node scripts/test-paste.mjs",
+    "check:security": "npm run test:anon && npm run test:paste && npm run build",
     "deploy": "npm run check:security && gh-pages -d dist"
   },
   "dependencies": {

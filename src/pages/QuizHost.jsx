@@ -7,14 +7,15 @@ import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Toolti
 import { Bar } from 'react-chartjs-2'
 import { totalPoints, countCorrect } from '../utils/quizScoring'
 import { loginWithGoogle, consumeGoogleRedirect } from '../utils/authGoogle'
+import { esAdmin } from '../utils/adminAuth'
 import '../styles/quiz.css'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
-// Solo esta cuenta (admin) puede HOSPEDAR una sesión en vivo. Los jugadores siguen
-// entrando de forma anónima por /join. Las reglas Firestore replican esta restricción
-// (create/update/delete de QUIZ_SESSIONS exige soyAdmin()); esto es solo la puerta de UI.
-const ADMIN_UID = '9njWk2YH3pMR2Aiih5obAWpHOb42'
+// Solo la cuenta del dueño (ver adminAuth.js) puede HOSPEDAR una sesión en vivo. Los
+// jugadores siguen entrando de forma anónima por /join. Las reglas Firestore replican esta
+// restricción (create/update/delete de QUIZ_SESSIONS exige soyAdmin()); esto es solo la
+// puerta de UI.
 
 function generateCode() {
   const values = new Uint32Array(1)
@@ -173,9 +174,9 @@ function QuizHost() {
   }
 
   // Solo el anfitrión autorizado (cuenta admin con Google) puede hospedar.
-  const esAdmin = user && !user.isAnonymous && user.uid === ADMIN_UID
-  if (!esAdmin) {
-    const cuentaNoAutorizada = user && !user.isAnonymous && user.uid !== ADMIN_UID
+  const puedeHospedar = esAdmin(user)
+  if (!puedeHospedar) {
+    const cuentaNoAutorizada = user && !user.isAnonymous
     return (
       <div className="quiz-play-container">
         <div className="quiz-start-screen">

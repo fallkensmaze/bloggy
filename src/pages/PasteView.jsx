@@ -1,15 +1,22 @@
 import { useState, useEffect, useRef } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, useLocation, Link } from 'react-router-dom'
 import { db } from '../firebase'
 import { doc, getDoc } from 'firebase/firestore'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/atom-one-dark.css'
 import {
+  decryptLegacyPasteContent,
   decryptPasteContent,
   normalizePasteCode,
   PASTE_CODE_LENGTH,
   supportsPasteCrypto
 } from '../utils/pasteCrypto'
+
+/** La clave vive en el fragmento (`#k=…`), que el navegador no envía al servidor. */
+function leeClaveDelFragmento(hash) {
+  if (!hash) return ''
+  return new URLSearchParams(hash.replace(/^#/, '')).get('k') || ''
+}
 
 function resolvePasteId(rawId) {
   if (!rawId) {
@@ -21,6 +28,7 @@ function resolvePasteId(rawId) {
 
 function PasteView() {
   const { pasteId } = useParams()
+  const { hash } = useLocation()
   const [paste, setPaste] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -29,7 +37,7 @@ function PasteView() {
 
   useEffect(() => {
     loadPaste()
-  }, [pasteId])
+  }, [pasteId, hash])
 
   useEffect(() => {
     if (paste && codeRef.current) {
@@ -77,7 +85,12 @@ function PasteView() {
         if (!supportsPasteCrypto()) {
           throw new Error('crypto-unavailable')
         }
-        contenido = await decryptPasteContent(data.ciphertext, data.iv, docSnap.id)
+        const clave = leeClaveDelFragmento(hash)
+        contenido = clave
+          ? await decryptPasteContent(data.ciphertext, data.iv, clave)
+          // Sin clave en el enlace solo puede ser un paste del esquema antiguo, donde se
+          // derivaba del id. Si tampoco lo es, el enlace llegó incompleto.
+          : await decryptLegacyPasteContent(data.ciphertext, data.iv, docSnap.id)
       } else if (typeof data.contenido === 'string') {
         contenido = data.contenido
       } else {
@@ -92,8 +105,10 @@ function PasteView() {
         setError('El documento no existe, ha caducado o el código no tiene acceso.')
       } else if (err.message === 'crypto-unavailable') {
         setError('Tu navegador no permite descifrar este documento.')
+      } else if (!leeClaveDelFragmento(hash)) {
+        setError('Este enlace está incompleto: le falta la clave (la parte que va después de #). Pide el enlace entero, porque sin ella el contenido no se puede descifrar.')
       } else {
-        setError('No se pudo cargar o descifrar el documento.')
+        setError('No se pudo descifrar el documento: la clave del enlace no corresponde a este paste.')
       }
     } finally {
       setLoading(false)
@@ -132,7 +147,8 @@ function PasteView() {
 
   const fecha = paste.fechaCreacion?.toDate?.() || new Date()
   const expira = paste.fechaExpiracion?.toDate?.()
-  const pasteUrl = `${window.location.origin}/ptb/${paste.id}`
+  // El enlace tiene que llevar el fragmento: es la única copia de la clave.
+  const pasteUrl = `${window.location.origin}/ptb/${paste.id}${hash}`
 
   return (
     <div className="page-body" style={{ maxWidth: '1000px', margin: '0 auto' }}>
@@ -155,9 +171,6 @@ function PasteView() {
         </div>
 
         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-          <button onClick={() => copyToClipboard(paste.id, 'code')} className="btn-back" style={{ margin: 0 }}>
-            <i className={`bi ${copied === 'code' ? 'bi-check2' : 'bi-key'}`}></i> {copied === 'code' ? 'Código copiado' : 'Copiar código'}
-          </button>
           <button onClick={() => copyToClipboard(pasteUrl, 'link')} className="btn-back" style={{ margin: 0 }}>
             <i className={`bi ${copied === 'link' ? 'bi-check2' : 'bi-link-45deg'}`}></i> {copied === 'link' ? 'Enlace copiado' : 'Copiar enlace'}
           </button>

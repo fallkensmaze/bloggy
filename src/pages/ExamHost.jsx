@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { auth, db } from '../firebase'
 import { signOut, onAuthStateChanged } from 'firebase/auth'
@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore'
 import { sanitizeQuestion, gradeAnswer, correctOptionId, buildResultsCsv, downloadCsv } from '../utils/exam'
 import { loginWithGoogle, consumeGoogleRedirect } from '../utils/authGoogle'
+import { esAdmin } from '../utils/adminAuth'
 import '../styles/quiz.css'
 import '../styles/exam.css'
 
@@ -61,16 +62,33 @@ function ExamHost() {
     return unsub
   }, [sessionId, user])
 
-  // ── Carga quiz completo (una sola vez cuando tengamos session.quizId) ────────
+  // ── Carga quiz completo (una sola vez, en cuanto hay sesión) ────────────────
+  // El id del quiz ya no viaja dentro del documento de sesión, porque ese documento lo
+  // lee cualquier alumno y con el id se llega al quiz entero, respuestas correctas
+  // incluidas. Vive en CONFIG/quiz, que solo lee el examinador. Las sesiones creadas
+  // antes del cambio todavía lo llevan dentro, así que se acepta como respaldo.
+  const quizPedido = useRef(false)
   useEffect(() => {
-    if (!session?.quizId || quiz) return
-    getDoc(doc(db, 'QUIZZES', session.quizId))
-      .then(snap => {
+    if (!session || quizPedido.current) return
+    quizPedido.current = true
+
+    const cargarQuiz = async () => {
+      try {
+        const config = await getDoc(doc(db, 'EXAM_SESSIONS', sessionId, 'CONFIG', 'quiz'))
+        const quizId = config.exists() ? config.data().quizId : session.quizId
+        if (!quizId) {
+          setError('Esta sesión no tiene ningún quiz asociado.')
+          return
+        }
+        const snap = await getDoc(doc(db, 'QUIZZES', quizId))
         if (snap.exists()) setQuiz({ id: snap.id, ...snap.data() })
         else setError('Quiz no encontrado.')
-      })
-      .catch(e => setError('Error cargando quiz: ' + e.message))
-  }, [session?.quizId, quiz])
+      } catch (e) {
+        setError('Error cargando quiz: ' + e.message)
+      }
+    }
+    cargarQuiz()
+  }, [session, sessionId])
 
   // ── Suscripción TICKETS ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -128,10 +146,13 @@ function ExamHost() {
 
       const batch = writeBatch(db)
       for (const ans of pregAnswers) {
-        // Id del doc: `${ticketSecret}_${preguntaIndex}`
+        // Id del doc: `${ticketSecret}_${preguntaIndex}`. Se usa `set` con merge y no
+        // `update` a propósito: `update` sobre una ruta inexistente hace fallar el lote
+        // ENTERO, así que un único documento inesperado dejaría sin corregir a toda la
+        // clase. Las reglas ya atan el id al ticket y la pregunta; esto es el cinturón.
         const { correcta, puntos } = gradeAnswer(p, ans.respuesta)
         const ansRef = doc(db, 'EXAM_SESSIONS', sessionId, 'ANSWERS', `${ans.ticketSecret}_${i}`)
-        batch.update(ansRef, { correcta, puntos })
+        batch.set(ansRef, { correcta, puntos }, { merge: true })
       }
       await batch.commit()
 
@@ -246,7 +267,7 @@ function ExamHost() {
   }
 
   // Gate de autenticación Google
-  if (!user || user.isAnonymous) {
+  if (!esAdmin(user)) {
     return (
       <>
         <header className="exam-topbar">
@@ -259,6 +280,11 @@ function ExamHost() {
             <div className="auth-card-icon">📋</div>
             <h1>Panel del Examinador</h1>
             <p>Inicia sesión con Google para acceder al panel de examen.</p>
+            {user && !user.isAnonymous && (
+              <p style={{ color: 'var(--accent-red)', fontSize: '0.85rem' }}>
+                {user.email} no es la cuenta de administración del sitio.
+              </p>
+            )}
             <button onClick={handleLogin} className="btn-google">
               <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
                 <path fill="#4285F4" d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z"/>

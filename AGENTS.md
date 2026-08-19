@@ -11,13 +11,15 @@ npm run preview   # Preview production build locally
 npm run audit:public    # Reject sensitive tracked files or public artifacts
 npm run test:anon      # DICOM anonymizer regression suite (PHI, conformance, RT references)
 npm run test:morse     # Morse trainer assertions (CW timing, Koch decks, quiz invariants)
-npm run check:security # Anonymizer tests, then build and audit the GitHub Pages artifact
+npm run test:radio     # Radio-exam XML parsing and quiz building
+npm run test:paste     # Secure Paste crypto (the document id must not decrypt anything)
+npm run check:security # Anonymizer and paste tests, then build and audit the GitHub Pages artifact
 npm run deploy         # Build, audit and deploy dist/ to GitHub Pages
 ```
 
 No test framework is configured. Use `npm run build` as the minimum integration check. For calculation modules, add or run focused Node assertions against the pure utility functions.
 
-Two modules do have real suites. The Morse trainer has `scripts/test-morse.mjs`
+Some modules do have real suites. The Morse trainer has `scripts/test-morse.mjs`
 (`npm run test:morse`); run it after touching `src/utils/morse.js` or
 `src/utils/morseTrainer.js`. It pins the CW timing numerically, because a
 trainer that sends at the wrong speed fails silently: nothing throws, the tone
@@ -27,7 +29,7 @@ exactly `60 / effWpm`. It also asserts that no question ever offers a character
 outside the active deck, so a Koch lesson cannot leak a character the student
 has not met yet.
 
-The other is the DICOM anonymizer, which has a regression suite in
+Another is the DICOM anonymizer, which has a regression suite in
 `scripts/test-dicom-anonymizer.mjs` (`npm run test:anon`, wired into
 `check:security`). Run it after touching `src/utils/dicomAnonymizer.js`. It
 builds synthetic DICOM in memory and asserts on the output bytes, and it
@@ -36,6 +38,14 @@ derive its PHI list from dcmjs keywords and 103 of 221 silently stopped
 resolving, so half the profile went unapplied while the tool still reported "no
 issues". Keyword-based rules can regress without any visible error, so new PHI
 rules belong in the tag-number sets.
+
+The Secure Paste has `scripts/test-paste.mjs` (`npm run test:paste`, also wired into
+`check:security`); run it after touching `src/utils/pasteCrypto.js`. Its point is one
+assertion that must never go green by accident: decrypting with a key derived from the
+**document id** has to fail. That is exactly what the module did for months, and nothing
+looked wrong — the page still said "Cifrado AES-GCM" and the text still appeared, because
+the browser held both halves. Only a test that decrypts with what the *server* knows, and
+demands an error, can tell real encryption from decoration.
 
 ## Architecture
 
@@ -85,6 +95,11 @@ Firestore collections:
 - `QUIZ_SESSIONS` - real-time multiplayer quiz sessions.
 - `PASTES` - browser-encrypted Secure Paste payloads.
 - `USER_LIMITS` - Secure Paste frequency limiting.
+- `EXAM_SESSIONS` - QR exam sessions, with `TICKETS`, `ANSWERS` and `CONFIG`
+  subcollections. The session document is readable by any signed-in client, and anonymous
+  sign-in is open to the world, so it must never carry `quizId`: with the id, a public
+  quiz hands out its own answer key. The id lives in `CONFIG/quiz`, admin-only.
+- `RADIO_TEMAS` - private radio-exam topics, admin-only in both directions.
 
 ### Main modules
 
@@ -104,7 +119,13 @@ Firestore collections:
 - `src/utils/localSettings.js` - tolerant localStorage reads for page preferences.
 - `src/pages/RtAnonymizer.jsx`, `src/utils/dicomAnonymizer.js`, `src/utils/zipDownload.js` - client-side DICOM RT study anonymizer. It remaps all non-standard UIDs consistently across CT/RTSTRUCT/RTPLAN/RTDOSE, preserves RT references and PixelData, writes de-identification markers, and downloads a STORE-only ZIP.
 - `src/pages/QuizHost.jsx`, `QuizJoin.jsx`, `QuizPlay.jsx`, `QuizList.jsx`, `QuizCreator.jsx` - quiz system.
-- `src/pages/PasteCreate.jsx` and `PasteView.jsx` - AES-GCM Secure Paste with the decryption key stored only in the URL fragment.
+- `src/pages/PasteCreate.jsx`, `PasteView.jsx` and `src/utils/pasteCrypto.js` - AES-GCM
+  Secure Paste. The 256-bit key is random, independent of the document id, and travels
+  only in the URL fragment (`/ptb/CODE#k=...`), which browsers never send to the server.
+  It used to be derived from the document id, so anyone who could read the document could
+  derive its key: the ciphertext was decorative. Never derive the key from anything that
+  reaches Firestore. `decryptLegacyPasteContent` exists only to keep already-shared links
+  working and can be deleted once every pre-change paste has expired (7 days maximum).
 
 ### PET NEMA fractionation
 
