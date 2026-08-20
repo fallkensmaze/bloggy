@@ -1,48 +1,23 @@
 import { useState, useEffect } from 'react'
-import { auth, db } from '../firebase'
+import { auth } from '../firebase'
 import { signOut, onAuthStateChanged } from 'firebase/auth'
 import { loginWithGoogle, consumeGoogleRedirect } from '../utils/authGoogle'
 import { esAdmin } from '../utils/adminAuth'
-import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore'
-import { marked } from 'marked'
-import markedKatex from 'marked-katex-extension'
-import DOMPurify from 'dompurify'
+import BlogEditor from '../components/admin/BlogEditor'
+import CptTest from '../components/admin/CptTest'
 import '../styles/admin.css'
 
-marked.use(markedKatex({ throwOnError: false }))
-
-function renderMarkdown(markdown) {
-  return DOMPurify.sanitize(marked.parse(markdown || ''), {
-    USE_PROFILES: { html: true },
-    ADD_ATTR: ['target', 'rel', 'referrerpolicy']
-  })
-}
-
-function slugify(str) {
-  return str
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase().trim()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .slice(0, 80)
-}
+// Cada pestaña es una herramienta privada del panel. La puerta de verdad la
+// guardan las reglas de Firestore; esto sólo decide qué se enseña.
+const PESTANAS = [
+  { id: 'blog',     etiqueta: 'Blog',     icono: 'bi-pencil-square' },
+  { id: 'atencion', etiqueta: 'Atención', icono: 'bi-activity' },
+]
 
 function Admin() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
-  
-  // Form fields
-  const [titulo, setTitulo] = useState('')
-  const [slug, setSlug] = useState('')
-  const [topic, setTopic] = useState('')
-  const [minutos, setMinutos] = useState(5)
-  const [contenido, setContenido] = useState('')
-  const [slugEdited, setSlugEdited] = useState(false)
-  
-  // Status
-  const [status, setStatus] = useState({ show: false, msg: '', type: 'info' })
-  const [publishing, setPublishing] = useState(false)
+  const [pestana, setPestana] = useState('blog')
 
   useEffect(() => {
     consumeGoogleRedirect()
@@ -52,13 +27,6 @@ function Admin() {
     })
     return unsubscribe
   }, [])
-
-  useEffect(() => {
-    if (!slugEdited) {
-      const s = slugify(titulo)
-      setSlug(s)
-    }
-  }, [titulo, slugEdited])
 
   const handleLogin = async () => {
     try {
@@ -70,78 +38,6 @@ function Admin() {
 
   const handleLogout = () => {
     signOut(auth)
-  }
-
-  const copyUID = () => {
-    navigator.clipboard.writeText(user.uid)
-    showStatus('UID copiado al portapapeles', 'ok')
-  }
-
-  const showStatus = (msg, type) => {
-    setStatus({ show: true, msg, type })
-    if (type === 'ok') {
-      setTimeout(() => setStatus({ show: false, msg: '', type: 'info' }), 5000)
-    }
-  }
-
-  const handlePublish = async () => {
-    if (!titulo.trim()) {
-      showStatus('El título es obligatorio.', 'err')
-      return
-    }
-    if (!slug.trim()) {
-      showStatus('El slug (ID del documento) es obligatorio.', 'err')
-      return
-    }
-    if (!contenido.trim()) {
-      showStatus('El contenido no puede estar vacío.', 'err')
-      return
-    }
-
-    setPublishing(true)
-    showStatus('Verificando…', 'info')
-
-    try {
-      const docRef = doc(db, 'BLOG', slug)
-      const existing = await getDoc(docRef)
-      
-      if (existing.exists()) {
-        showStatus(`Ya existe un post con el slug "${slug}". Elige otro ID.`, 'err')
-        setPublishing(false)
-        return
-      }
-
-      showStatus('Publicando…', 'info')
-      
-      await setDoc(docRef, {
-        titulo,
-        contenido,
-        topic: topic.trim() || 'GENERAL',
-        minutos: Math.max(1, parseInt(minutos) || 5),
-        fecha: serverTimestamp(),
-        fechaCreacion: serverTimestamp()
-      })
-
-      showStatus('✓ Post publicado correctamente.', 'ok')
-      
-      // Clear form
-      setTitulo('')
-      setSlug('')
-      setTopic('')
-      setMinutos(5)
-      setContenido('')
-      setSlugEdited(false)
-      
-    } catch (err) {
-      console.error('Publish error:', err)
-      if (err.code === 'permission-denied') {
-        showStatus('Permiso denegado. ¿Has puesto tu UID en las reglas de Firestore?', 'err')
-      } else {
-        showStatus('Error: ' + err.message, 'err')
-      }
-    } finally {
-      setPublishing(false)
-    }
   }
 
   if (loading) {
@@ -177,109 +73,42 @@ function Admin() {
     )
   }
 
-  const preview = contenido ? renderMarkdown(contenido) : '<p style="color:var(--text-muted);font-style:italic;font-size:14px;">La vista previa aparece aquí mientras escribes…</p>'
-
   return (
     <>
-      <AdminTopbar user={user} onLogout={handleLogout} onCopyUID={copyUID} />
+      <AdminTopbar user={user} onLogout={handleLogout} />
       <div className="admin-body">
-        <div style={{ marginBottom: '28px' }}>
-          <h1 style={{ fontSize: '1.35rem', fontWeight: 700, marginBottom: '4px' }}>Nueva entrada del blog</h1>
-          <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
-            Escribe en Markdown con vista previa en tiempo real.
-            Los cambios no se guardan hasta que pulses <strong style={{ color: 'var(--text-secondary)' }}>Publicar</strong>.
-          </p>
-        </div>
+        <nav className="admin-tabs" aria-label="Herramientas del panel">
+          {PESTANAS.map(item => (
+            <button
+              key={item.id}
+              type="button"
+              className={`admin-tab${pestana === item.id ? ' activa' : ''}`}
+              aria-current={pestana === item.id ? 'page' : undefined}
+              onClick={() => setPestana(item.id)}
+            >
+              <i className={`bi ${item.icono}`}></i> {item.etiqueta}
+            </button>
+          ))}
+        </nav>
 
-        <div className="meta-grid">
-          <div>
-            <label className="field-label">Título</label>
-            <input
-              type="text"
-              className="dark-input"
-              placeholder="El título del post…"
-              value={titulo}
-              onChange={(e) => setTitulo(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="field-label">Slug <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(ID en Firestore)</span></label>
-            <input
-              type="text"
-              className="dark-input"
-              placeholder="mi-primer-post"
-              value={slug}
-              onChange={(e) => {
-                setSlug(e.target.value)
-                setSlugEdited(!!e.target.value)
-              }}
-            />
-            <div className="slug-hint">{slug ? `doc ID: "${slug}"` : ''}</div>
-          </div>
-          <div>
-            <label className="field-label">Topic</label>
-            <input
-              type="text"
-              className="dark-input"
-              placeholder="ej. Lu-177"
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="field-label">Min. lectura</label>
-            <input
-              type="number"
-              className="dark-input"
-              value={minutos}
-              onChange={(e) => setMinutos(e.target.value)}
-              min="1"
-              max="120"
-            />
-          </div>
-        </div>
-
-        <div className="editor-split">
-          <div className="editor-pane">
-            <div className="editor-pane-header">
-              <i className="bi bi-code-slash"></i> Markdown
-            </div>
-            <textarea
-              className="editor-textarea"
-              placeholder="# Título&#10;&#10;Escribe aquí en **Markdown**…&#10;&#10;Soporta tablas, código, fórmulas LaTeX ($E=mc^2$), etc."
-              value={contenido}
-              onChange={(e) => setContenido(e.target.value)}
-            />
-          </div>
-          <div className="editor-pane">
-            <div className="editor-pane-header">
-              <i className="bi bi-eye"></i> Vista previa
-            </div>
-            <div className="preview-body" dangerouslySetInnerHTML={{ __html: preview }} />
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-          <button
-            onClick={handlePublish}
-            disabled={publishing}
-            className="btn-publish"
-          >
-            <i className="bi bi-send-fill"></i> Publicar
-          </button>
-          {status.show && (
-            <div className={`status-msg status-${status.type}`}>
-              {status.msg}
-            </div>
-          )}
-        </div>
+        {pestana === 'blog' ? <BlogEditor /> : <CptTest />}
       </div>
     </>
   )
 }
 
-function AdminTopbar({ user, onLogout, onCopyUID }) {
-  const uidShort = user ? user.uid.slice(0, 10) + '…' : ''
+function AdminTopbar({ user, onLogout }) {
+  const [copiado, setCopiado] = useState(false)
+
+  const copiarUid = async () => {
+    try {
+      await navigator.clipboard.writeText(user.uid)
+      setCopiado(true)
+      setTimeout(() => setCopiado(false), 2000)
+    } catch (err) {
+      console.error('Clipboard error:', err)
+    }
+  }
 
   return (
     <header className="admin-topbar">
@@ -294,8 +123,12 @@ function AdminTopbar({ user, onLogout, onCopyUID }) {
           <span style={{ maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {user.displayName || user.email}
           </span>
-          <button onClick={onCopyUID} className="btn-sm" title="Tu UID para las reglas de Firestore">
-            <i className="bi bi-key"></i> {uidShort}
+          <button
+            onClick={copiarUid}
+            className={`btn-sm${copiado ? ' copied' : ''}`}
+            title="Tu UID para las reglas de Firestore"
+          >
+            <i className="bi bi-key"></i> {copiado ? 'Copiado' : `${user.uid.slice(0, 10)}…`}
           </button>
           <button onClick={onLogout} className="btn-sm">Salir</button>
         </div>
