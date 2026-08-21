@@ -10,6 +10,13 @@ import {
 
 const LETRAS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 
+/** Clase de una opción en la revisión: correcta, marcada por error o descartada. */
+function claseRevision(pregunta, elegidas, idx) {
+  if (pregunta.correctas.includes(idx)) return 'ra-option ra-option--correct'
+  if (elegidas.includes(idx)) return 'ra-option ra-option--wrong'
+  return 'ra-option ra-option--dim'
+}
+
 /**
  * Simulacro: tanda de preguntas seguidas, sin corrección hasta el final, y luego
  * nota y revisión pregunta a pregunta. Los fallos alimentan el repaso adaptativo
@@ -221,7 +228,8 @@ function ExamPanel({ pool, tamano, onTamano, onFin }) {
       <div className="calc-card">
         <span className="field-label" style={{ display: 'block', marginBottom: '12px' }}>Revisión</span>
         {tanda.map((pregunta, i) => {
-          const r = corrige(pregunta, respuestas[i])
+          const elegidas = respuestas[i] || []
+          const r = corrige(pregunta, elegidas)
           return (
             <div key={pregunta.key + i} className={`ra-review${r.ok ? ' ra-review--ok' : ''}`}>
               <div className="ra-review-head">
@@ -230,25 +238,43 @@ function ExamPanel({ pool, tamano, onTamano, onFin }) {
                 </span>
                 <span className="ra-review-enunciado">{pregunta.enunciado}</span>
               </div>
-              <div className="ra-review-body">
-                <span className="ra-info-label">Tu respuesta</span>
-                <p className={r.ok ? 'ra-review-tuya ra-review-tuya--ok' : 'ra-review-tuya'}>
-                  {(respuestas[i] || []).length === 0
-                    ? 'Sin contestar'
-                    : respuestas[i].map(idx => pregunta.opciones[idx].texto).join(' · ')}
+
+              {/* El acierto se resume en una línea y el fallo abre las opciones con su
+                  marca, como en la práctica: leer «tu respuesta» y «la correcta» como
+                  dos textos sueltos obliga a reconstruir de memoria cuál se marcó. */}
+              {r.ok ? (
+                <p className="ra-review-resumen">
+                  Tu respuesta · {elegidas.map(idx => pregunta.opciones[idx].texto).join(' · ')}
                 </p>
-                {!r.ok && (
-                  <>
-                    <span className="ra-info-label">
-                      {pregunta.correctas.length > 1 ? 'Respuestas correctas' : 'Respuesta correcta'}
-                    </span>
-                    <p className="ra-review-buena">
-                      {pregunta.correctas.map(idx => pregunta.opciones[idx].texto).join(' · ')}
+              ) : (
+                <div className="ra-review-body">
+                  {elegidas.length === 0 && <p className="ra-review-blanco">Sin contestar</p>}
+                  <div className="ra-options">
+                    {pregunta.orden.map((idx, pos) => (
+                      <div key={idx} className={claseRevision(pregunta, elegidas, idx)}>
+                        <span className="ra-option-letter">{LETRAS[pos]}</span>
+                        <span className="ra-option-text">{pregunta.opciones[idx].texto}</span>
+                        {pregunta.correctas.includes(idx) && <i className="bi bi-check-lg ra-option-icon" />}
+                        {!pregunta.correctas.includes(idx) && elegidas.includes(idx) && (
+                          <i className="bi bi-x-lg ra-option-icon" />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {/* Las dos correctas salen en verde marques una o las dos, así que el
+                      recuento es lo único que distingue «acerté a medias» de «me dejé una». */}
+                  {r.contestada && r.faltan > 0 && r.sobran === 0 && (
+                    <p className="ra-review-falta">
+                      <i className="bi bi-check2-square" />
+                      Te faltaba{r.faltan === 1 ? '' : 'n'} {r.faltan} de {pregunta.correctas.length} respuestas
                     </p>
-                  </>
-                )}
-                {pregunta.nota && <p className="ra-info-nota"><i className="bi bi-lightbulb" /> {pregunta.nota}</p>}
-              </div>
+                  )}
+                </div>
+              )}
+
+              {pregunta.nota && (
+                <p className="ra-info-nota ra-review-nota"><i className="bi bi-lightbulb" /> {pregunta.nota}</p>
+              )}
             </div>
           )
         })}

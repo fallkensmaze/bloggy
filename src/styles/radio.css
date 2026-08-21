@@ -215,7 +215,6 @@
     border: 2px solid var(--border);
     border-radius: 10px;
     padding: 13px 16px;
-    cursor: pointer;
     display: flex;
     align-items: center;
     gap: 12px;
@@ -225,8 +224,11 @@
     color: var(--text-primary);
     transition: border-color 0.15s, background 0.15s, transform 0.15s;
 }
-.ra-option:hover:not(:disabled) { border-color: var(--accent-blue); transform: translateY(-1px); }
-.ra-option:disabled { cursor: default; }
+/* En la revision la misma opcion es un resumen, no un boton: el cursor y el
+   hover se quedan solo donde de verdad se puede pulsar. */
+button.ra-option { cursor: pointer; }
+button.ra-option:hover:not(:disabled) { border-color: var(--accent-blue); transform: translateY(-1px); }
+button.ra-option:disabled { cursor: default; }
 .ra-option-letter {
     width: 30px;
     height: 30px;
@@ -377,14 +379,27 @@
 }
 .ra-review-badge--ok { color: var(--accent-green); border-color: var(--accent-green); }
 .ra-review-enunciado { font-size: 14px; font-weight: 600; line-height: 1.45; }
+/* El acierto se apaga a proposito: en una tanda de veinte lo que hay que
+   encontrar de un vistazo son los fallos, y para eso tienen que ser los unicos
+   que pesan. */
+.ra-review--ok .ra-review-enunciado { color: var(--text-secondary); }
+.ra-review-resumen { margin: 7px 0 0 42px; font-size: 13px; color: var(--text-muted); line-height: 1.55; }
 .ra-review-body { margin: 10px 0 0 42px; }
-.ra-review-tuya { font-size: 13.5px; color: var(--accent-red); line-height: 1.55; margin-bottom: 10px; }
-.ra-review-tuya--ok { color: var(--accent-green); margin-bottom: 0; }
-.ra-review-buena { font-size: 13.5px; color: var(--accent-green); line-height: 1.55; }
+.ra-review-blanco { font-size: 13px; color: var(--accent-red); line-height: 1.55; margin-bottom: 10px; }
+.ra-review-falta {
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--accent-orange);
+    line-height: 1.55;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+.ra-review-nota { margin-left: 42px; }
 
 /* ── Responsive ── */
 @media (max-width: 640px) {
     .ra-stats-grid { grid-template-columns: repeat(2, 1fr); }
     .ra-nota { flex-direction: column; align-items: flex-start; gap: 10px; }
-    .ra-review-body { margin-left: 0; }
+    .ra-review-body, .ra-review-resumen, .ra-review-nota { margin-left: 0; }
 }
