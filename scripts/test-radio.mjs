@@ -25,10 +25,13 @@ import {
   claveDe,
   conOpcionesBarajadas,
   corrige,
+  CHAT_BASE,
   formatoReloj,
   notaSimulacro,
   OBJETIVO,
+  promptExplicacion,
   TODOS,
+  urlExplicacion,
 } from '../src/utils/radioExam.js'
 
 const failures = []
@@ -314,6 +317,68 @@ function testCorreccion() {
   check('una tanda vacía no divide por cero', notaSimulacro([], []).porcentaje === 0)
 }
 
+// The prompt that goes out to the chat is study material, not decoration: the
+// options are reshuffled on every run, so numbering them by their XML index
+// would describe a "B" that was never on the student's screen, and the answer
+// would come back explaining the wrong option with total confidence. Nothing
+// would throw. These checks pin the letters to `orden`.
+function testExplicacion() {
+  section('Explicación externa')
+
+  // En pantalla se pintó C, A, B: la del índice original 2 es la «A» del alumno.
+  const pregunta = {
+    enunciado: '¿Qué anchura ocupa una emisión A1A?',
+    opciones: [{ texto: 'Unos 500 Hz' }, { texto: 'Unos 6 kHz' }, { texto: 'Unos 100 Hz' }],
+    correctas: [2],
+    orden: [2, 0, 1],
+    temaTitulo: 'Técnica',
+  }
+
+  const fallo = promptExplicacion(pregunta, [0])
+  check('las letras siguen el orden barajado, no el del XML',
+    fallo.includes('A) Unos 100 Hz') && fallo.includes('B) Unos 500 Hz'))
+  check('la correcta se nombra con la letra que se vio',
+    fallo.includes('Respuesta correcta: A) Unos 100 Hz'))
+  check('lo marcado se nombra con la letra que se vio',
+    fallo.includes('Lo que marqué: B) Unos 500 Hz'))
+  check('el fallo pide en qué se equivocó', fallo.includes('Me equivoqué'))
+  check('el tema entra como contexto', fallo.includes('Tema: Técnica'))
+
+  const acierto = promptExplicacion(pregunta, [2])
+  check('el acierto pide descartar la eliminación', acierto.includes('por eliminación'))
+
+  const blanco = promptExplicacion(pregunta, [])
+  check('en blanco no inventa una opción marcada', blanco.includes('Lo que marqué: nada'))
+  check('en blanco pide el razonamiento', blanco.includes('La dejé en blanco'))
+
+  const multi = {
+    enunciado: '¿Cuáles son ciertas?',
+    opciones: [{ texto: 'Una' }, { texto: 'Otra' }, { texto: 'Tercera' }],
+    correctas: [2, 0],
+    orden: [1, 0, 2],
+  }
+  const varias = promptExplicacion(multi, [2, 1])
+  check('varias correctas se anuncian en plural', varias.includes('Respuestas correctas:'))
+  check('la petición también concuerda en plural', varias.includes('las correctas lo son'))
+  check('varias correctas salen en el orden de pantalla',
+    varias.includes('Respuestas correctas: B) Una | C) Tercera'))
+  check('lo marcado también sale en el orden de pantalla',
+    varias.includes('Lo que marqué: A) Otra | C) Tercera'))
+  check('sin tema no se cuela una línea vacía', !varias.includes('Tema:'))
+
+  // Sin `orden` (una pregunta que nunca pasó por el barajado) el prompt no
+  // puede quedarse sin letras: cae al orden del XML.
+  const sinOrden = promptExplicacion({ ...pregunta, orden: undefined }, [0])
+  check('sin orden barajado cae al del XML', sinOrden.includes('A) Unos 500 Hz'))
+
+  const url = urlExplicacion(pregunta, [0])
+  check('la url apunta al chat', url.startsWith(CHAT_BASE))
+  check('la url no lleva saltos de línea ni espacios crudos',
+    !/[\s]/.test(url.slice(CHAT_BASE.length)))
+  check('el prompt sobrevive al viaje de ida y vuelta',
+    decodeURIComponent(url.slice(CHAT_BASE.length)) === fallo)
+}
+
 function testReloj() {
   section('Reloj')
   check('cero', formatoReloj(0) === '00:00')
@@ -332,6 +397,7 @@ const suites = [
   testPractica,
   testSimulacro,
   testCorreccion,
+  testExplicacion,
   testReloj,
 ]
 

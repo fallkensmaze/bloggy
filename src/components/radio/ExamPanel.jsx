@@ -6,6 +6,7 @@ import {
   notaSimulacro,
   OBJETIVO,
   TAMANOS_SIMULACRO,
+  urlExplicacion,
 } from '../../utils/radioExam'
 
 const LETRAS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
@@ -275,6 +276,19 @@ function ExamPanel({ pool, tamano, onTamano, onFin }) {
               {pregunta.nota && (
                 <p className="ra-info-nota ra-review-nota"><i className="bi bi-lightbulb" /> {pregunta.nota}</p>
               )}
+
+              {/* Enlace y no botón: así el clic medio abre en pestaña sin que lo
+                  frene el bloqueo de ventanas emergentes. */}
+              <div className="ra-review-acciones">
+                <a
+                  className="ra-btn ra-btn--sm"
+                  href={urlExplicacion(pregunta, elegidas)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <i className="bi bi-stars" /> Explicar en ChatGPT
+                </a>
+              </div>
             </div>
           )
         })}

@@ -100,6 +100,60 @@ export function notaSimulacro(preguntas = [], respuestas = []) {
   return { total, correctas, falladas, enBlanco, porcentaje, superado: porcentaje >= OBJETIVO * 100 }
 }
 
+// ── Explicación en un chat externo ──────────────────────────────────────────
+//
+// El sitio se publica estático en GitHub Pages, así que no puede llamar a
+// ninguna API de chat: la clave viajaría dentro del bundle y `audit:public`
+// está precisamente para que eso no ocurra. Lo que sí puede es abrir el chat
+// con el prompt ya escrito, que es lo que monta `urlExplicacion`.
+
+const LETRAS_PROMPT = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+
+/** Chat que acepta el prompt en la propia URL y lo envía al abrirse. */
+export const CHAT_BASE = 'https://chatgpt.com/?q='
+
+/**
+ * Prompt para que un asistente explique una pregunta ya corregida.
+ *
+ * Las letras tienen que ser LAS QUE VIO el alumno, es decir las de `orden` y no
+ * las del XML: las opciones se barajan en cada tanda, así que numerar por el
+ * índice original haría que la explicación hablara de una «B» que en su
+ * pantalla era otra cosa. Por eso vive aquí y no suelto dentro del JSX.
+ */
+export function promptExplicacion(pregunta, seleccion = []) {
+  const opciones = pregunta.opciones || []
+  const orden = pregunta.orden?.length ? pregunta.orden : opciones.map((_, i) => i)
+  const correctas = pregunta.correctas || []
+  const elegidas = [...new Set(seleccion)]
+  const r = corrige(pregunta, elegidas)
+
+  const porPantalla = ids => [...ids].sort((a, b) => orden.indexOf(a) - orden.indexOf(b))
+  const nombra = idx => `${LETRAS_PROMPT[orden.indexOf(idx)] || '?'}) ${opciones[idx]?.texto ?? ''}`
+  const lista = orden.map((idx, pos) => `${LETRAS_PROMPT[pos]}) ${opciones[idx]?.texto ?? ''}`).join('\n')
+
+  const varias = correctas.length > 1
+  const cierre = !r.contestada
+    ? `La dejé en blanco: explícame cómo se razona hasta ${varias ? 'las correctas' : 'la correcta'} y qué descarta a las demás.`
+    : r.ok
+      ? `Acerté, pero quiero descartar que fuera por eliminación: confírmame por qué ${varias ? 'esas son las buenas' : 'esa es la buena'} y qué falla en las otras.`
+      : `Me equivoqué: explícame por qué ${varias ? 'las correctas lo son' : 'la correcta lo es'} y qué falla exactamente en lo que marqué.`
+
+  return [
+    'Estoy preparando el examen de radioaficionado en España y quiero entender esta pregunta.',
+    pregunta.temaTitulo ? `Tema: ${pregunta.temaTitulo}` : null,
+    `Pregunta: ${pregunta.enunciado}`,
+    `Opciones:\n${lista}`,
+    `${varias ? 'Respuestas correctas' : 'Respuesta correcta'}: ${porPantalla(correctas).map(nombra).join(' | ')}`,
+    `Lo que marqué: ${r.contestada ? porPantalla(elegidas).map(nombra).join(' | ') : 'nada'}`,
+    `${cierre} Sé breve y concreto, y responde en español.`,
+  ].filter(Boolean).join('\n\n')
+}
+
+/** La misma explicación, ya como enlace al chat. */
+export function urlExplicacion(pregunta, seleccion = []) {
+  return CHAT_BASE + encodeURIComponent(promptExplicacion(pregunta, seleccion))
+}
+
 /** mm:ss a partir de milisegundos, para el cronómetro del simulacro. */
 export function formatoReloj(ms) {
   const total = Math.max(0, Math.floor(ms / 1000))

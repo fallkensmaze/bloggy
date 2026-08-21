@@ -396,10 +396,13 @@ button.ra-option:disabled { cursor: default; }
     gap: 7px;
 }
 .ra-review-nota { margin-left: 42px; }
+.ra-review-acciones { margin: 12px 0 0 42px; }
+/* El boton de explicar es un enlace, y el subrayado global de :hover le sobra. */
+a.ra-btn:hover { text-decoration: none; }
 
 /* ── Responsive ── */
 @media (max-width: 640px) {
     .ra-stats-grid { grid-template-columns: repeat(2, 1fr); }
     .ra-nota { flex-direction: column; align-items: flex-start; gap: 10px; }
-    .ra-review-body, .ra-review-resumen, .ra-review-nota { margin-left: 0; }
+    .ra-review-body, .ra-review-resumen, .ra-review-nota, .ra-review-acciones { margin-left: 0; }
 }
