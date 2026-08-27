@@ -1,254 +1,194 @@
-// Implementación del formalismo TG-43 para braquiterapia HDR
-// Basado en AAPM TG-43 Update (2004)
+// Formalismo TG-43 para la fuente GammaMed Plus HDR (GMPir HDR 2012).
 
-import { SourcePosition, RadialDosePoint, AnisotropyPoint } from './types'
-import { radialDoseData, anisotropyData } from './sourceData'
+import type { BrachyPlan, SourcePosition, Vector3 } from './types'
+import {
+  anisotropyAnglesDeg,
+  anisotropyMatrix,
+  anisotropyRadii,
+  radialDoseData
+} from './sourceData'
 
-// Distancia euclidiana 3D
-function distance(
-  p1: [number, number, number],
-  p2: [number, number, number]
-): number {
-  const dx = p1[0] - p2[0]
-  const dy = p1[1] - p2[1]
-  const dz = p1[2] - p2[2]
-  return Math.sqrt(dx * dx + dy * dy + dz * dz)
+const EPS = 1e-10
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
 }
 
-// Interpolación lineal simple
-function linearInterpolate(
-  x: number,
-  x1: number,
-  y1: number,
-  x2: number,
-  y2: number
-): number {
-  if (Math.abs(x2 - x1) < 1e-10) return y1
+function dot(a: Vector3, b: Vector3): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+function magnitude(v: Vector3): number {
+  return Math.sqrt(dot(v, v))
+}
+
+function normalize(v?: Vector3): Vector3 {
+  if (!v) return [0, 0, 1]
+  const norm = magnitude(v)
+  if (norm < EPS) return [0, 0, 1]
+  return [v[0] / norm, v[1] / norm, v[2] / norm]
+}
+
+function linearInterpolate(x: number, x1: number, y1: number, x2: number, y2: number): number {
+  if (Math.abs(x2 - x1) < EPS) return y1
   return y1 + ((x - x1) * (y2 - y1)) / (x2 - x1)
 }
 
-// Interpolación log-lineal para función de dosis radial
-function interpolateRadialDose(r: number): number {
-  // Buscar puntos más cercanos
-  let r1 = radialDoseData[0]
-  let r2 = radialDoseData[radialDoseData.length - 1]
-  
-  for (let i = 0; i < radialDoseData.length - 1; i++) {
-    if (r >= radialDoseData[i].r && r <= radialDoseData[i + 1].r) {
-      r1 = radialDoseData[i]
-      r2 = radialDoseData[i + 1]
-      break
-    }
+function lowerBracket(values: readonly number[], value: number): number {
+  if (value <= values[0]) return 0
+  for (let i = 0; i < values.length - 1; i += 1) {
+    if (value <= values[i + 1]) return i
   }
-  
-  // Extrapolación si está fuera del rango
-  if (r < radialDoseData[0].r) {
-    r1 = radialDoseData[0]
-    r2 = radialDoseData[1]
-  } else if (r > radialDoseData[radialDoseData.length - 1].r) {
-    r1 = radialDoseData[radialDoseData.length - 2]
-    r2 = radialDoseData[radialDoseData.length - 1]
-  }
-  
-  // Interpolación log-lineal
-  const logR = Math.log(r)
-  const logR1 = Math.log(r1.r)
-  const logR2 = Math.log(r2.r)
-  
-  return linearInterpolate(logR, logR1, r1.gL, logR2, r2.gL)
+  return values.length - 2
 }
 
-// Interpolación bilineal para función de anisotropía
-function interpolateAnisotropy(r: number, theta: number): number {
-  // Obtener radios únicos
-  const uniqueR = Array.from(new Set(anisotropyData.map(p => p.r))).sort((a, b) => a - b)
-  
-  // Encontrar radios que rodean r
-  let r1 = uniqueR[0]
-  let r2 = uniqueR[uniqueR.length - 1]
-  
-  for (let i = 0; i < uniqueR.length - 1; i++) {
-    if (r >= uniqueR[i] && r <= uniqueR[i + 1]) {
-      r1 = uniqueR[i]
-      r2 = uniqueR[i + 1]
-      break
-    }
+// TG-43U1S1/HEBD: orden cero por debajo de rmin, interpolación log-lineal
+// dentro de la tabla y extrapolación exponencial ajustada a los tres últimos radios.
+export function interpolateRadialDose(r: number): number {
+  const positiveData = radialDoseData.filter(point => point.r >= 0.2)
+  const first = positiveData[0]
+  const last = positiveData[positiveData.length - 1]
+
+  if (!Number.isFinite(r) || r <= first.r) return first.gL
+
+  if (r <= last.r) {
+    const index = lowerBracket(positiveData.map(point => point.r), r)
+    const p1 = positiveData[index]
+    const p2 = positiveData[index + 1]
+    const logG = linearInterpolate(r, p1.r, Math.log(p1.gL), p2.r, Math.log(p2.gL))
+    return Math.exp(logG)
   }
-  
-  // Extrapolación si está fuera del rango
-  if (r < uniqueR[0]) {
-    r1 = uniqueR[0]
-    r2 = uniqueR[1]
-  } else if (r > uniqueR[uniqueR.length - 1]) {
-    r1 = uniqueR[uniqueR.length - 2]
-    r2 = uniqueR[uniqueR.length - 1]
-  }
-  
-  // Obtener datos para r1 y r2
-  const dataR1 = anisotropyData.filter(p => Math.abs(p.r - r1) < 0.01).sort((a, b) => a.theta - b.theta)
-  const dataR2 = anisotropyData.filter(p => Math.abs(p.r - r2) < 0.01).sort((a, b) => a.theta - b.theta)
-  
-  // Interpolar en theta para r1
-  let F1 = 1.0
-  for (let i = 0; i < dataR1.length - 1; i++) {
-    if (theta >= dataR1[i].theta && theta <= dataR1[i + 1].theta) {
-      F1 = linearInterpolate(theta, dataR1[i].theta, dataR1[i].F, dataR1[i + 1].theta, dataR1[i + 1].F)
-      break
-    }
-  }
-  
-  // Interpolar en theta para r2
-  let F2 = 1.0
-  for (let i = 0; i < dataR2.length - 1; i++) {
-    if (theta >= dataR2[i].theta && theta <= dataR2[i + 1].theta) {
-      F2 = linearInterpolate(theta, dataR2[i].theta, dataR2[i].F, dataR2[i + 1].theta, dataR2[i + 1].F)
-      break
-    }
-  }
-  
-  // Interpolar en r
-  if (Math.abs(r2 - r1) < 0.01) return F1
-  return linearInterpolate(r, r1, F1, r2, F2)
+
+  const fit = positiveData.slice(-3)
+  const meanR = fit.reduce((sum, point) => sum + point.r, 0) / fit.length
+  const meanLogG = fit.reduce((sum, point) => sum + Math.log(point.gL), 0) / fit.length
+  const numerator = fit.reduce(
+    (sum, point) => sum + (point.r - meanR) * (Math.log(point.gL) - meanLogG),
+    0
+  )
+  const denominator = fit.reduce((sum, point) => sum + (point.r - meanR) ** 2, 0)
+  const slope = numerator / denominator
+  return Math.exp(meanLogG + slope * (r - meanR))
 }
 
-// Función de geometría G(r,θ) para source lineal
+// Bilineal dentro de la tabla; vecino más próximo (orden cero) fuera de rmin/rmax.
+export function interpolateAnisotropy(r: number, theta: number): number {
+  const radius = clamp(r, anisotropyRadii[0], anisotropyRadii[anisotropyRadii.length - 1])
+  const thetaDeg = clamp(theta * 180 / Math.PI, 0, 180)
+
+  const rIndex = lowerBracket(anisotropyRadii, radius)
+  const thetaIndex = lowerBracket(anisotropyAnglesDeg, thetaDeg)
+  const r1 = anisotropyRadii[rIndex]
+  const r2 = anisotropyRadii[rIndex + 1]
+  const t1 = anisotropyAnglesDeg[thetaIndex]
+  const t2 = anisotropyAnglesDeg[thetaIndex + 1]
+
+  const f11 = anisotropyMatrix[thetaIndex][rIndex]
+  const f12 = anisotropyMatrix[thetaIndex][rIndex + 1]
+  const f21 = anisotropyMatrix[thetaIndex + 1][rIndex]
+  const f22 = anisotropyMatrix[thetaIndex + 1][rIndex + 1]
+  const atT1 = linearInterpolate(radius, r1, f11, r2, f12)
+  const atT2 = linearInterpolate(radius, r1, f21, r2, f22)
+
+  return linearInterpolate(thetaDeg, t1, atT1, t2, atT2)
+}
+
+function sourceCoordinates(source: SourcePosition, point: { x: number; y: number; z: number }) {
+  const displacement: Vector3 = [point.x - source.x, point.y - source.y, point.z - source.z]
+  const orientation = normalize(source.orientation)
+  const r = magnitude(displacement)
+  const axial = dot(displacement, orientation)
+  const transverse = Math.sqrt(Math.max(0, r * r - axial * axial))
+  const theta = r > EPS ? Math.acos(clamp(axial / r, -1, 1)) : 0
+  return { r, axial, transverse, theta }
+}
+
+// G_L(r,theta) / G_L(r0=1 cm, theta0=90º), con eje arbitrario de la fuente.
 export function getGeometryFunction(
   source: SourcePosition,
   point: { x: number; y: number; z: number }
 ): number {
-  const rRef = 1.0 // cm
-  const thetaRef = Math.PI / 2 // 90 grados
-  const L = source.L
-  
-  // Geometría de referencia
-  const betaRef = 2 * Math.atan(L / (2 * rRef))
-  const glRef = betaRef / (L * rRef * Math.sin(thetaRef))
-  
-  // Posiciones
-  const s: [number, number, number] = [source.x, source.y, source.z]
-  const p: [number, number, number] = [point.x, point.y, point.z]
-  const p1: [number, number, number] = [point.x, point.y, point.z - L / 2]
-  const p2: [number, number, number] = [point.x, point.y, point.z + L / 2]
-  
-  // Distancias
-  const R = distance(s, p)
-  const R1 = distance(s, p2)
-  const R2 = distance(s, p1)
-  
-  // Ángulos
-  const theta1 = Math.acos((point.z - source.z + L / 2) / R1)
-  const theta2 = Math.acos((point.z - source.z - L / 2) / R2)
-  const theta = Math.acos((point.z - source.z) / R)
-  
-  let gl: number
-  
-  // Caso especial: punto en el eje longitudinal
-  if (Math.abs(theta) < 1e-6 || Math.abs(theta - Math.PI) < 1e-6) {
-    gl = 1 / (R * R - (L * L) / 4)
+  const { axial, transverse } = sourceCoordinates(source, point)
+  const halfLength = source.L / 2
+  const betaRef = 2 * Math.atan(source.L / 2)
+  const geometryRef = betaRef / source.L
+
+  let geometry: number
+  if (transverse < EPS) {
+    geometry = 1 / Math.abs(axial * axial - halfLength * halfLength)
   } else {
-    const beta = Math.abs(theta2 - theta1)
-    gl = beta / (L * R * Math.sin(theta))
+    const beta = Math.atan2(axial + halfLength, transverse) -
+      Math.atan2(axial - halfLength, transverse)
+    geometry = Math.abs(beta) / (source.L * transverse)
   }
-  
-  return gl / glRef
+
+  return geometry / geometryRef
 }
 
-// Calcular dosis en un punto debido a una source
 export function calculateDoseFromSource(
   source: SourcePosition,
   point: { x: number; y: number; z: number }
 ): number {
-  // Convertir coordenadas de mm a cm si es necesario
-  const pointCm = {
-    x: point.x,
-    y: point.y,
-    z: point.z
-  }
-  
-  // Distancia source-punto
-  const s: [number, number, number] = [source.x, source.y, source.z]
-  const p: [number, number, number] = [pointCm.x, pointCm.y, pointCm.z]
-  const r = distance(s, p)
-  
-  // Ángulo polar
-  const dz = pointCm.z - source.z
-  const theta = Math.acos(dz / r)
-  
-  // Función de geometría
-  const G = getGeometryFunction(source, pointCm)
-  
-  // Función de dosis radial
-  const gL = interpolateRadialDose(r)
-  
-  // Función de anisotropía
-  const F = interpolateAnisotropy(r, theta)
-  
-  // Fórmula TG-43
-  // D = Sk * Lambda * G(r,theta) * gL(r) * F(r,theta) * t
-  const Sk = source.Sk
-  const Lambda = source.doseRateConstant
-  const t = source.dwellTime / 3600 // convertir segundos a horas
-  
-  const dose = Sk * Lambda * G * gL * F * t
-  
-  return dose // cGy
+  const { r, theta } = sourceCoordinates(source, point)
+  if (r < EPS) return Number.POSITIVE_INFINITY
+
+  const geometry = getGeometryFunction(source, point)
+  const radialDose = interpolateRadialDose(r)
+  const anisotropy = interpolateAnisotropy(r, theta)
+  const dwellHours = source.dwellTime / 3600
+
+  return source.Sk * source.doseRateConstant * geometry * radialDose * anisotropy * dwellHours
 }
 
-// Calcular dosis total en un punto debido a múltiples sources
 export function calculateTotalDose(
   sources: SourcePosition[],
   point: { x: number; y: number; z: number }
 ): number {
-  let totalDose = 0
-  
-  for (const source of sources) {
-    totalDose += calculateDoseFromSource(source, point)
-  }
-  
-  return totalDose / 100 // convertir cGy a Gy
+  const doseCgy = sources.reduce((sum, source) => sum + calculateDoseFromSource(source, point), 0)
+  return doseCgy / 100
 }
 
-// Calcular factor de decaimiento radioactivo
-export function calculateDecayFactor(
-  initialDate: Date,
-  treatmentDate: Date,
-  halfLife: number // días
-): number {
-  const timeDiff = treatmentDate.getTime() - initialDate.getTime()
-  const daysDiff = timeDiff / (1000 * 60 * 60 * 24)
-  
-  // A(t) = A0 * e^(-λt) = A0 * 2^(-t/T½)
+export function calculateDecayFactor(initialDate: Date, treatmentDate: Date, halfLife: number): number {
+  const daysDiff = (treatmentDate.getTime() - initialDate.getTime()) / 86_400_000
   return Math.pow(2, -daysDiff / halfLife)
 }
 
-// Calcular actividad actual de la fuente
 export function calculateCurrentActivity(
   initialActivity: number,
   initialDate: Date,
   currentDate: Date,
   halfLife: number
 ): number {
-  const decayFactor = calculateDecayFactor(initialDate, currentDate, halfLife)
-  return initialActivity * decayFactor
+  return initialActivity * calculateDecayFactor(initialDate, currentDate, halfLife)
 }
 
-// Crear train de sources desde dwells
 export function makeSourceTrain(
-  dwells: { coords: [number, number, number]; dwellTime: number }[],
+  dwells: { coords: Vector3; dwellTime: number; orientation?: Vector3 }[],
   refAirKermaRate: number,
   doseRateConstant: number,
   activeLength: number,
-  halfLife: number
+  halfLife: number,
+  timeMultiplier = 1
 ): SourcePosition[] {
   return dwells.map(dwell => ({
-    // Reordenar ejes: x=x/10, y=z/10, z=y/10 (mm a cm)
     x: dwell.coords[0] / 10,
-    y: dwell.coords[2] / 10,
-    z: dwell.coords[1] / 10,
-    dwellTime: dwell.dwellTime,
+    y: dwell.coords[1] / 10,
+    z: dwell.coords[2] / 10,
+    orientation: normalize(dwell.orientation),
+    dwellTime: dwell.dwellTime * timeMultiplier,
     Sk: refAirKermaRate,
     doseRateConstant,
     L: activeLength,
     tHalf: halfLife
   }))
+}
+
+export function getSetupFractionMultiplier(plan: BrachyPlan, setupNumber: number): number {
+  if (plan.fractionGroups.length === 0) return 1
+  const referenced = plan.fractionGroups.filter(group => group.referencedSetupNumbers.includes(setupNumber))
+  if (referenced.length > 0) {
+    return referenced.reduce((sum, group) => sum + group.numberOfFractions, 0)
+  }
+  if (plan.applicationSetups.length === 1) return plan.numberOfFractions || 1
+  return 1
 }

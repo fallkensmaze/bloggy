@@ -1,7 +1,12 @@
 import { useState, useRef } from 'react'
 import { parseRTPlanBrachy } from '../lib/brachy/rtplanParser'
-import { makeSourceTrain, calculateTotalDose, calculateDecayFactor, calculateCurrentActivity } from '../lib/brachy/tg43'
-import { IR192_CONSTANTS } from '../lib/brachy/sourceData'
+import {
+  makeSourceTrain,
+  calculateTotalDose,
+  calculateDecayFactor,
+  getSetupFractionMultiplier
+} from '../lib/brachy/tg43'
+import { IR192_CONSTANTS, SOURCE_MODEL } from '../lib/brachy/sourceData'
 import '../styles/tg43.css'
 
 function Tg43Calculator() {
@@ -13,6 +18,7 @@ function Tg43Calculator() {
   const [results, setResults] = useState(null)
   const [adjustedActivity, setAdjustedActivity] = useState(null)
   const [useAdjustedActivity, setUseAdjustedActivity] = useState(false)
+  const [doseScope, setDoseScope] = useState('perFraction')
   
   const fileInputRef = useRef()
 
@@ -38,14 +44,21 @@ function Tg43Calculator() {
             x: point.coords[0],
             y: point.coords[1],
             z: point.coords[2],
-            prescribedDose: point.prescribedDose || null
+            prescribedDosePerFraction: point.prescribedDosePerFraction ?? null,
+            prescribedDoseTotal: point.prescribedDoseTotal ?? null,
+            prescriptionSource: point.prescriptionSource || ''
           }))
           setCalculationPoints(planPoints)
           console.log('✓ Cargados', planPoints.length, 'puntos de referencia del plan')
         } else {
           // Si no hay puntos en el plan, inicializar con un punto de ejemplo
           setCalculationPoints([
-            { name: 'Punto A', x: 0, y: 0, z: 20, prescribedDose: null }
+            {
+              name: 'Punto A', x: 0, y: 0, z: 20,
+              prescribedDosePerFraction: null,
+              prescribedDoseTotal: null,
+              prescriptionSource: ''
+            }
           ])
         }
       } catch (err) {
@@ -63,13 +76,23 @@ function Tg43Calculator() {
   const addCalculationPoint = () => {
     setCalculationPoints([
       ...calculationPoints,
-      { name: `Punto ${calculationPoints.length + 1}`, x: 0, y: 0, z: 0, prescribedDose: null }
+      {
+        name: `Punto ${calculationPoints.length + 1}`, x: 0, y: 0, z: 0,
+        prescribedDosePerFraction: null,
+        prescribedDoseTotal: null,
+        prescriptionSource: ''
+      }
     ])
   }
 
   const updatePoint = (index, field, value) => {
     const updated = [...calculationPoints]
-    updated[index][field] = field === 'name' ? value : parseFloat(value) || 0
+    if (field === 'name') updated[index][field] = value
+    else if (value === '') updated[index][field] = null
+    else {
+      const parsed = Number(value)
+      updated[index][field] = Number.isFinite(parsed) ? parsed : null
+    }
     setCalculationPoints(updated)
   }
 
@@ -81,28 +104,31 @@ function Tg43Calculator() {
     if (!plan || calculationPoints.length === 0) return
 
     try {
-      // Crear source train desde todos los dwells
-      const allDwells = []
-      plan.channels.forEach(channel => {
-        allDwells.push(...channel.dwells)
-      })
-
       // Usar actividad ajustada si está habilitada, sino usar la del plan
       const activityToUse = useAdjustedActivity && adjustedActivity !== null 
         ? adjustedActivity 
         : plan.refAirKermaRate
 
-      const sources = makeSourceTrain(
-        allDwells,
-        activityToUse,
-        IR192_CONSTANTS.doseRateConstant,
-        IR192_CONSTANTS.activeLength,
-        plan.halfLife
-      )
-
-      console.log('Sources creadas:', sources.length)
-      console.log('Actividad usada:', activityToUse.toFixed(3), 'U')
-      console.log('Calculando dosis en', calculationPoints.length, 'puntos...')
+      const sessionSources = []
+      const totalPlanSources = []
+      plan.applicationSetups.forEach(setup => {
+        const dwells = setup.channels.flatMap(channel => channel.dwells)
+        sessionSources.push(...makeSourceTrain(
+          dwells,
+          activityToUse,
+          IR192_CONSTANTS.doseRateConstant,
+          IR192_CONSTANTS.activeLength,
+          plan.halfLife
+        ))
+        totalPlanSources.push(...makeSourceTrain(
+          dwells,
+          activityToUse,
+          IR192_CONSTANTS.doseRateConstant,
+          IR192_CONSTANTS.activeLength,
+          plan.halfLife,
+          getSetupFractionMultiplier(plan, setup.number)
+        ))
+      })
 
       // Calcular dosis en cada punto
       const calculatedResults = calculationPoints.map(point => {
@@ -113,14 +139,25 @@ function Tg43Calculator() {
           z: point.z / 10
         }
 
-        const dose = calculateTotalDose(sources, pointCm)
+        const dosePerFraction = calculateTotalDose(sessionSources, pointCm)
+        const doseTotal = calculateTotalDose(totalPlanSources, pointCm)
+        const prescribedPerFraction = point.prescribedDosePerFraction
+        const prescribedTotal = point.prescribedDoseTotal
         
         return {
           name: point.name,
           coords: [point.x, point.y, point.z],
-          prescribedDose: point.prescribedDose,
-          calculatedDose: dose,
-          difference: point.prescribedDose ? ((dose - point.prescribedDose) / point.prescribedDose * 100) : null
+          prescribedDosePerFraction: prescribedPerFraction,
+          prescribedDoseTotal: prescribedTotal,
+          prescriptionSource: point.prescriptionSource,
+          calculatedDosePerFraction: dosePerFraction,
+          calculatedDoseTotal: doseTotal,
+          differencePerFraction: prescribedPerFraction !== null && prescribedPerFraction !== 0
+            ? (dosePerFraction - prescribedPerFraction) / prescribedPerFraction * 100
+            : null,
+          differenceTotal: prescribedTotal !== null && prescribedTotal !== 0
+            ? (doseTotal - prescribedTotal) / prescribedTotal * 100
+            : null
         }
       })
 
@@ -139,6 +176,7 @@ function Tg43Calculator() {
     setResults(null)
     setAdjustedActivity(null)
     setUseAdjustedActivity(false)
+    setDoseScope('perFraction')
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
@@ -158,7 +196,7 @@ function Tg43Calculator() {
     const calibrationDate = parseDicomDate(plan.sourceCalibrationDate)
     const treatmentDate = plan.treatmentDate ? parseDicomDate(plan.treatmentDate) : new Date()
     
-    if (!calibrationDate) return null
+    if (!calibrationDate || !treatmentDate) return null
     
     const decayFactor = calculateDecayFactor(calibrationDate, treatmentDate, plan.halfLife)
     const currentActivity = plan.refAirKermaRate * decayFactor
@@ -254,20 +292,22 @@ function Tg43Calculator() {
                 <span className="tg43-info-value">{plan.sourceIsotope || 'Ir-192'}</span>
               </div>
               <div className="tg43-info-item">
-                <span className="tg43-info-label">Vida Media</span>
-                <span className="tg43-info-value">{plan.halfLife.toFixed(2)} días</span>
+                <span className="tg43-info-label">Modelo de fuente</span>
+                <span className="tg43-info-value">{SOURCE_MODEL.id}</span>
               </div>
               <div className="tg43-info-item">
                 <span className="tg43-info-label">Ref. Air Kerma Rate</span>
                 <span className="tg43-info-value">{plan.refAirKermaRate.toFixed(3)} U</span>
               </div>
               <div className="tg43-info-item">
-                <span className="tg43-info-label">Máquina</span>
-                <span className="tg43-info-value">{plan.treatmentModel || 'N/A'}</span>
+                <span className="tg43-info-label">Sesiones planificadas</span>
+                <span className="tg43-info-value">{plan.numberOfFractions}</span>
               </div>
               <div className="tg43-info-item">
-                <span className="tg43-info-label">Canales</span>
-                <span className="tg43-info-value">{plan.channels.length}</span>
+                <span className="tg43-info-label">Setups / canales</span>
+                <span className="tg43-info-value">
+                  {plan.applicationSetups.length} / {plan.channels.length}
+                </span>
               </div>
               <div className="tg43-info-item">
                 <span className="tg43-info-label">Total Dwells</span>
@@ -276,22 +316,35 @@ function Tg43Calculator() {
                 </span>
               </div>
             </div>
+
+            <div className="tg43-model-note">
+              <strong>{SOURCE_MODEL.name}</strong> · Λ = {SOURCE_MODEL.doseRateConstant.toFixed(4)} cGy·h⁻¹·U⁻¹ ·
+              L = {SOURCE_MODEL.activeLength.toFixed(2)} cm. Datos de consenso AAPM/ESTRO 2012.
+            </div>
+
+            {plan.warnings.length > 0 && (
+              <div className="tg43-warning-list">
+                {plan.warnings.map((warning, index) => (
+                  <div key={index}><i className="bi bi-exclamation-triangle"></i> {warning}</div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Decay Information */}
           {decayInfo && (
             <div className="tg43-decay-info">
-              <h3><i className="bi bi-hourglass-split"></i> Información de Decaimiento</h3>
+              <h3><i className="bi bi-hourglass-split"></i> Referencia temporal de la fuente</h3>
               
               <div className="tg43-decay-grid">
                 <div className="tg43-decay-item">
-                  <span className="tg43-info-label">Fecha de Calibración</span>
+                  <span className="tg43-info-label">Fecha de referencia de Sk</span>
                   <span className="tg43-info-value">
                     {decayInfo.calibrationDate.toLocaleDateString('es-ES')}
                   </span>
                 </div>
                 <div className="tg43-decay-item">
-                  <span className="tg43-info-label">Fecha de Tratamiento</span>
+                  <span className="tg43-info-label">Fecha del RTPLAN</span>
                   <span className="tg43-info-value">
                     {decayInfo.treatmentDate.toLocaleDateString('es-ES')}
                   </span>
@@ -301,11 +354,11 @@ function Tg43Calculator() {
                   <span className="tg43-info-value">{decayInfo.daysDiff} días</span>
                 </div>
                 <div className="tg43-decay-item">
-                  <span className="tg43-info-label">Actividad Inicial</span>
+                  <span className="tg43-info-label">Sk indicado en DICOM</span>
                   <span className="tg43-info-value">{decayInfo.initialActivity.toFixed(3)} U</span>
                 </div>
                 <div className="tg43-decay-item">
-                  <span className="tg43-info-label">Actividad Actual</span>
+                  <span className="tg43-info-label">Sk decaído a fecha del plan</span>
                   <span className="tg43-info-value" style={{ color: 'var(--accent-color)', fontWeight: 600 }}>
                     {decayInfo.currentActivity.toFixed(3)} U
                   </span>
@@ -328,12 +381,12 @@ function Tg43Calculator() {
                       }
                     }}
                   />
-                  <span>Usar actividad ajustada para cálculos</span>
+                  <span>Usar otro Sk para simular la entrega en una fecha distinta</span>
                 </label>
                 
                 {useAdjustedActivity && (
                   <div className="tg43-activity-input">
-                    <label>Actividad Ajustada (U):</label>
+                    <label>Sk alternativo (U):</label>
                     <input
                       type="number"
                       step="0.001"
@@ -351,6 +404,11 @@ function Tg43Calculator() {
                     </button>
                   </div>
                 )}
+              </div>
+
+              <div className="tg43-inline-note">
+                Por defecto se usa el Reference Air Kerma Rate del RTPLAN: los Channel Total Time están
+                definidos respecto a ese valor. El ajuste por decaimiento es opcional y cambia la entrega simulada.
               </div>
             </div>
           )}
@@ -412,17 +470,33 @@ function Tg43Calculator() {
                       />
                     </div>
                     <div className="tg43-coord-input">
-                      <label>Dosis Prescrita (Gy)</label>
+                      <label>Dosis por sesión (Gy)</label>
                       <input
                         type="number"
                         step="0.01"
-                        value={point.prescribedDose || ''}
-                        onChange={(e) => updatePoint(idx, 'prescribedDose', e.target.value)}
+                        value={point.prescribedDosePerFraction ?? ''}
+                        onChange={(e) => updatePoint(idx, 'prescribedDosePerFraction', e.target.value)}
+                        className="dark-input"
+                        placeholder="Opcional"
+                      />
+                    </div>
+                    <div className="tg43-coord-input">
+                      <label>Dosis total (Gy)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={point.prescribedDoseTotal ?? ''}
+                        onChange={(e) => updatePoint(idx, 'prescribedDoseTotal', e.target.value)}
                         className="dark-input"
                         placeholder="Opcional"
                       />
                     </div>
                   </div>
+                  {point.prescriptionSource && (
+                    <div className="tg43-prescription-source">
+                      <i className="bi bi-tag"></i> {point.prescriptionSource}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -435,7 +509,29 @@ function Tg43Calculator() {
           {/* Results */}
           {results && (
             <div className="tg43-section">
-              <h3><i className="bi bi-clipboard-data"></i> Resultados</h3>
+              <div className="tg43-section-header">
+                <h3><i className="bi bi-clipboard-data"></i> Resultados</h3>
+                <div className="tg43-scope-toggle" role="group" aria-label="Alcance de dosis">
+                  <button
+                    className={doseScope === 'perFraction' ? 'active' : ''}
+                    onClick={() => setDoseScope('perFraction')}
+                  >
+                    Por sesión
+                  </button>
+                  <button
+                    className={doseScope === 'total' ? 'active' : ''}
+                    onClick={() => setDoseScope('total')}
+                  >
+                    Plan completo
+                  </button>
+                </div>
+              </div>
+
+              <div className="tg43-inline-note tg43-dose-meaning">
+                {doseScope === 'perFraction'
+                  ? 'Dosis calculada con los tiempos de permanencia escritos en el RTPLAN para una sesión.'
+                  : `Dosis acumulada aplicando los ${plan.numberOfFractions} tratamientos indicados en Fraction Group Sequence.`}
+              </div>
               
               <div className="tg43-results-table">
                 <table>
@@ -443,31 +539,42 @@ function Tg43Calculator() {
                     <tr>
                       <th>Punto</th>
                       <th>Coordenadas (mm)</th>
-                      <th>Dosis Calculada (Gy)</th>
-                      <th>Dosis Prescrita (Gy)</th>
+                      <th>Dosis calculada (Gy)</th>
+                      <th>Dosis DICOM (Gy)</th>
                       <th>Diferencia (%)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {results.map((result, idx) => (
+                    {results.map((result, idx) => {
+                      const calculatedDose = doseScope === 'perFraction'
+                        ? result.calculatedDosePerFraction
+                        : result.calculatedDoseTotal
+                      const prescribedDose = doseScope === 'perFraction'
+                        ? result.prescribedDosePerFraction
+                        : result.prescribedDoseTotal
+                      const difference = doseScope === 'perFraction'
+                        ? result.differencePerFraction
+                        : result.differenceTotal
+                      return (
                       <tr key={idx}>
                         <td className="tg43-result-name">{result.name}</td>
                         <td className="tg43-result-coords">
                           [{result.coords[0].toFixed(1)}, {result.coords[1].toFixed(1)}, {result.coords[2].toFixed(1)}]
                         </td>
-                        <td className="tg43-result-dose">{result.calculatedDose.toFixed(3)}</td>
+                        <td className="tg43-result-dose">{calculatedDose.toFixed(3)}</td>
                         <td className="tg43-result-prescribed">
-                          {result.prescribedDose ? result.prescribedDose.toFixed(3) : '-'}
+                          {prescribedDose !== null && prescribedDose !== undefined
+                            ? prescribedDose.toFixed(3) : '-'}
                         </td>
                         <td className={`tg43-result-diff ${
-                          result.difference !== null 
-                            ? Math.abs(result.difference) < 3 ? 'good' : Math.abs(result.difference) < 5 ? 'warning' : 'bad'
+                          difference !== null
+                            ? Math.abs(difference) < 3 ? 'good' : Math.abs(difference) < 5 ? 'warning' : 'bad'
                             : ''
                         }`}>
-                          {result.difference !== null ? `${result.difference > 0 ? '+' : ''}${result.difference.toFixed(2)}%` : '-'}
+                          {difference !== null ? `${difference > 0 ? '+' : ''}${difference.toFixed(2)}%` : '-'}
                         </td>
                       </tr>
-                    ))}
+                    )})}
                   </tbody>
                 </table>
               </div>
@@ -475,8 +582,9 @@ function Tg43Calculator() {
               <div className="tg43-info-box">
                 <i className="bi bi-info-circle"></i>
                 <div>
-                  <strong>Nota:</strong> Los cálculos se basan en el formalismo TG-43 (AAPM 2004) 
-                  con datos tabulados para Ir-192. Las coordenadas deben estar en el sistema de referencia del plan.
+                  <strong>Nota:</strong> Cálculo independiente TG-43 con el modelo {SOURCE_MODEL.id}. La dosis
+                  “por sesión” procede de los tiempos DICOM; la dosis total usa Number of Fractions Planned.
+                  Las coordenadas se conservan en el sistema paciente DICOM.
                 </div>
               </div>
             </div>
