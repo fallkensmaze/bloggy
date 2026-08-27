@@ -258,7 +258,8 @@ function InfoGrid({ series }) {
     ['Píxel', `${finite(info.pixelSpacing[1], 2)} × ${finite(info.pixelSpacing[0], 2)} mm`],
     ['Espesor nominal', Number.isFinite(info.sliceThickness) ? `${finite(info.sliceThickness, 2)} mm` : '—'],
     ['Separación axial', `${finite(info.axialSpacing, 2)} mm`],
-    ['Unidades', info.units]
+    ['Unidades', info.units],
+    ['Calibración', info.calibration]
   ]
 
   return (
@@ -270,6 +271,18 @@ function InfoGrid({ series }) {
         </div>
       ))}
     </div>
+  )
+}
+
+function WarningList({ warnings }) {
+  return (
+    <>
+      {warnings.map((warning, index) => (
+        <div className="pet-analysis-warning" key={`${index}-${warning}`}>
+          <i className="bi bi-exclamation-triangle"></i><span>{warning}</span>
+        </div>
+      ))}
+    </>
   )
 }
 
@@ -582,6 +595,7 @@ function PetNemaAnalysis() {
         {series && (
           <>
             <InfoGrid series={series} />
+            <WarningList warnings={series.warnings} />
             <button type="button" className="pet-analysis-clear" onClick={clearSeries}>
               <i className="bi bi-x-lg"></i> Liberar la serie de memoria
             </button>
@@ -652,11 +666,7 @@ function PetNemaAnalysis() {
 
       {results && (
         <>
-          {[...series.warnings, ...results.warnings].map((warning, index) => (
-            <div className="pet-analysis-warning" key={`${index}-${warning}`}>
-              <i className="bi bi-exclamation-triangle"></i><span>{warning}</span>
-            </div>
-          ))}
+          <WarningList warnings={results.warnings} />
 
           <section className="calc-card pet-analysis-section">
             <SectionHeading

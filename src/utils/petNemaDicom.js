@@ -74,11 +74,72 @@ function getFunctionalGroups(dataset) {
   const perFrame = sequenceItems(dataset.PerFrameFunctionalGroupsSequence)
 
   return {
+    shared,
     pixelMeasures,
     sharedOrientation: toNumberArray(sharedOrientation),
     sharedPosition: toNumberArray(sharedPosition),
     perFrame
   }
+}
+
+// Modality LUT / Pixel Value Transformation, PS3.3 C.7.6.16.2.9.
+//
+// A source only counts as present when it declares a finite Rescale Slope. A
+// missing Rescale Intercept then means 0, which is what the macro says; it is
+// not a value we make up. Everything else falls through to the next source.
+function readPixelValueTransformation(functionalGroupItem, source) {
+  const transformation = firstSequenceItem(functionalGroupItem?.PixelValueTransformationSequence)
+  if (!transformation) return null
+  const slope = toNumber(transformation.RescaleSlope)
+  if (!Number.isFinite(slope)) return null
+  return {
+    slope,
+    intercept: toNumber(transformation.RescaleIntercept, 0),
+    rescaleType: toText(transformation.RescaleType),
+    source
+  }
+}
+
+function readDatasetTransformation(dataset) {
+  const slope = toNumber(dataset.RescaleSlope)
+  if (!Number.isFinite(slope)) return null
+  return {
+    slope,
+    intercept: toNumber(dataset.RescaleIntercept, 0),
+    rescaleType: toText(dataset.RescaleType),
+    source: 'dataset'
+  }
+}
+
+// One calibration per frame, resolved with the DICOM precedence
+// per-frame > shared > dataset > identity.
+//
+// This matters beyond tidiness: NEMA NU 2-2018 §7.4 measures background
+// variability over 60 ROIs spread across five axial planes, so feeding it
+// frames scaled by different factors invents variability that is not in the
+// image. And the identity fallback is the dangerous one - it throws nothing,
+// the analysis still runs and still reports a plausible contrast, only in
+// stored units instead of the declared ones.
+//
+// Pending: RealWorldValueMappingSequence (0040,9096) is the other quantitative
+// route in Enhanced objects and is not read here. No vendor-private scale
+// factor is applied either; if one ever turns out to be needed, it belongs in
+// this function and nowhere else.
+function getFrameCalibrations(dataset, functionalGroups, frameCount) {
+  const shared = readPixelValueTransformation(functionalGroups.shared, 'shared')
+  const fromDataset = readDatasetTransformation(dataset)
+  const fallback = { slope: 1, intercept: 0, rescaleType: '', source: 'fallback' }
+  const calibrations = []
+
+  for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+    const perFrame = readPixelValueTransformation(
+      functionalGroups.perFrame[frameIndex],
+      'per-frame'
+    )
+    calibrations.push(perFrame || shared || fromDataset || fallback)
+  }
+
+  return calibrations
 }
 
 function getPixelSpacing(dataset, functionalGroups) {
@@ -130,6 +191,7 @@ function extractHeader(dicomData, dataset, meta) {
   const cols = toNumber(dataset.Columns, 0)
   const declaredFrames = Math.max(1, toNumber(dataset.NumberOfFrames, 1))
   const geometry = getFrameGeometry(dataset, functionalGroups, declaredFrames)
+  const frameCalibrations = getFrameCalibrations(dataset, functionalGroups, declaredFrames)
   const spacingBetweenSlices = toNumber(
     dataset.SpacingBetweenSlices,
     toNumber(functionalGroups.pixelMeasures.SpacingBetweenSlices)
@@ -163,8 +225,11 @@ function extractHeader(dicomData, dataset, meta) {
     manufacturer: toText(dataset.Manufacturer),
     modelName: toText(dataset.ManufacturerModelName),
     units: toText(dataset.Units) || '—',
-    rescaleSlope: toNumber(dataset.RescaleSlope, 1),
-    rescaleIntercept: toNumber(dataset.RescaleIntercept, 0),
+    // No single rescaleSlope/rescaleIntercept on the header on purpose: the
+    // transformation belongs to a frame, not to a file, and a header-wide pair
+    // is exactly the shortcut that used to decode every frame with the same
+    // factor. Read frameCalibrations[frameIndex].
+    frameCalibrations,
     hasPixelData: Boolean(dicomData.dict['7FE00010']),
     ...geometry
   }
@@ -246,6 +311,7 @@ function decodeDicom(arrayBuffer) {
     const byteOffset = pixelData.byteOffset + frameIndex * bytesPerFrame
     const view = new DataView(pixelData.buffer, byteOffset, bytesPerFrame)
     const values = new Float32Array(pixelsPerFrame)
+    const { slope, intercept } = header.frameCalibrations[frameIndex]
     for (let pixelIndex = 0; pixelIndex < pixelsPerFrame; pixelIndex++) {
       const raw = readUnsignedPixel(
         view,
@@ -259,7 +325,7 @@ function decodeDicom(arrayBuffer) {
         header.highBit,
         header.pixelRepresentation
       )
-      values[pixelIndex] = stored * header.rescaleSlope + header.rescaleIntercept
+      values[pixelIndex] = stored * slope + intercept
     }
     frames.push(values)
   }
@@ -284,6 +350,72 @@ function populationStandardDeviation(values, average) {
   return Math.sqrt(
     values.reduce((total, value) => total + (value - average) ** 2, 0) / values.length
   )
+}
+
+// Two slopes that came from the same DS string are bit-identical, but slopes
+// written per frame are not necessarily, so the spread is judged relative to
+// the magnitude instead of by exact equality. The intercept gets an absolute
+// floor because in PET it is nearly always 0, where a relative tolerance has
+// nothing to scale against.
+const SLOPE_TOLERANCE_FLOOR = 1e-12
+const INTERCEPT_TOLERANCE_FLOOR = 1
+
+function spreadExceedsTolerance(minimum, maximum, absoluteFloor) {
+  const scale = Math.max(Math.abs(minimum), Math.abs(maximum), absoluteFloor)
+  return maximum - minimum > 1e-6 * scale
+}
+
+function summarizeCalibration(decodedFrames, units) {
+  let minimumSlope = Infinity
+  let maximumSlope = -Infinity
+  let minimumIntercept = Infinity
+  let maximumIntercept = -Infinity
+  let fallbackFrameCount = 0
+  const sources = new Set()
+  const rescaleTypes = new Set()
+
+  for (const { calibration } of decodedFrames) {
+    minimumSlope = Math.min(minimumSlope, calibration.slope)
+    maximumSlope = Math.max(maximumSlope, calibration.slope)
+    minimumIntercept = Math.min(minimumIntercept, calibration.intercept)
+    maximumIntercept = Math.max(maximumIntercept, calibration.intercept)
+    if (calibration.source === 'fallback') fallbackFrameCount++
+    sources.add(calibration.source)
+    if (calibration.rescaleType) rescaleTypes.add(calibration.rescaleType)
+  }
+
+  return {
+    units,
+    minimumSlope,
+    maximumSlope,
+    minimumIntercept,
+    maximumIntercept,
+    sources: [...sources],
+    rescaleTypes: [...rescaleTypes],
+    fallbackFrameCount,
+    frameCount: decodedFrames.length,
+    mixedAcrossFrames:
+      spreadExceedsTolerance(minimumSlope, maximumSlope, SLOPE_TOLERANCE_FLOOR)
+      || spreadExceedsTolerance(minimumIntercept, maximumIntercept, INTERCEPT_TOLERANCE_FLOOR)
+  }
+}
+
+// A range is shown exactly when the spread is the one that made the series
+// count as mixed, so the label never contradicts the warning.
+function formatCalibration(calibration) {
+  const decimals = (value) => Number(value.toFixed(6)).toString()
+  const span = (minimum, maximum, absoluteFloor) => (
+    spreadExceedsTolerance(minimum, maximum, absoluteFloor)
+      ? `${decimals(minimum)}–${decimals(maximum)}`
+      : decimals(minimum)
+  )
+  const slope = span(calibration.minimumSlope, calibration.maximumSlope, SLOPE_TOLERANCE_FLOOR)
+  const intercept = span(
+    calibration.minimumIntercept,
+    calibration.maximumIntercept,
+    INTERCEPT_TOLERANCE_FLOOR
+  )
+  return `slope ${slope} · intercept ${intercept} · ${calibration.sources.join(', ')}`
 }
 
 function yieldToBrowser() {
@@ -380,6 +512,7 @@ export async function loadPetDicomSeries(inputFiles, { onProgress } = {}) {
         pixels: frames[frameIndex],
         header,
         frameIndex,
+        calibration: header.frameCalibrations[frameIndex],
         orientation: header.frameOrientations[frameIndex] || header.frameOrientations[0] || [],
         position: header.framePositions[frameIndex] || header.framePositions[0] || []
       })
@@ -470,6 +603,25 @@ export async function loadPetDicomSeries(inputFiles, { onProgress } = {}) {
     warnings.push(`Las unidades DICOM son ${first.units || 'desconocidas'}; se esperaba BQML.`)
   }
 
+  const seriesUnits = [...new Set(decodedFrames.map((frame) => frame.header.units))]
+  if (seriesUnits.length > 1) {
+    warnings.push(
+      `La serie mezcla unidades DICOM (${seriesUnits.join(', ')}); se analiza con ${first.units}.`
+    )
+  }
+
+  const calibration = summarizeCalibration(decodedFrames, first.units)
+  if (calibration.mixedAcrossFrames) {
+    warnings.push(
+      'La serie PET usa factores de calibración distintos entre cortes/frames; se ha aplicado a cada imagen la transformación DICOM que le corresponde.'
+    )
+  }
+  if (calibration.fallbackFrameCount) {
+    warnings.push(
+      `${calibration.fallbackFrameCount} de ${calibration.frameCount} imágenes no declaran Rescale Slope/Intercept; se ha aplicado la transformación identidad (slope 1, intercept 0).`
+    )
+  }
+
   const equipment = `${first.manufacturer} ${first.modelName}`.trim() || '—'
   return {
     volume: decodedFrames.map((frame) => frame.pixels),
@@ -478,6 +630,7 @@ export async function loadPetDicomSeries(inputFiles, { onProgress } = {}) {
     pixelSpacing: first.pixelSpacing,
     dz,
     units: first.units,
+    calibration,
     warnings,
     info: {
       equipment,
@@ -490,6 +643,7 @@ export async function loadPetDicomSeries(inputFiles, { onProgress } = {}) {
       sliceThickness: first.sliceThickness,
       axialSpacing: dz,
       units: first.units,
+      calibration: formatCalibration(calibration),
       selectedFileCount: selected.length,
       receivedFileCount: files.length,
       invalidFileCount: invalidFiles,

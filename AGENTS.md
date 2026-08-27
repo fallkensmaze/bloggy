@@ -13,6 +13,7 @@ npm run test:anon      # DICOM anonymizer regression suite (PHI, conformance, RT
 npm run test:morse     # Morse trainer assertions (CW timing, Koch decks, quiz invariants)
 npm run test:radio     # Radio-exam XML parsing and quiz building
 npm run test:paste     # Secure Paste crypto (the document id must not decrypt anything)
+npm run test:pet       # PET DICOM quantitative calibration (per-frame Rescale transformation)
 npm run check:security # Anonymizer and paste tests, then build and audit the GitHub Pages artifact
 npm run deploy         # Build, audit and deploy dist/ to GitHub Pages
 ```
@@ -46,6 +47,16 @@ assertion that must never go green by accident: decrypting with a key derived fr
 looked wrong — the page still said "Cifrado AES-GCM" and the text still appeared, because
 the browser held both halves. Only a test that decrypts with what the *server* knows, and
 demands an error, can tell real encryption from decoration.
+
+The PET NEMA loader has `scripts/test-pet-nema.mjs` (`npm run test:pet`); run it after
+touching `src/utils/petNemaDicom.js`. It builds synthetic PET DICOM in memory and pins
+what each stored value becomes and which source its transformation came from, because a
+wrong Rescale transformation is silent: nothing throws, the phantom and the six spheres
+are still found, and the report still prints a plausible contrast — computed on stored
+values. The decoder used to read `RescaleSlope` only from the root dataset, so an
+Enhanced PET, where it lives in the functional groups, decoded with slope 1 and no one
+could tell. The suite also asserts the opposite direction: one file per slice keeps using
+its own slope, never a series-wide one.
 
 ## Architecture
 
@@ -108,6 +119,7 @@ Firestore collections:
 - `src/pages/PetNemaFractionation.jsx` - PET image-quality phantom fill planner, live countdowns and per-sample initial/residual syringe measurement workflow.
 - `src/utils/petNemaFractionation.js` - pure PET NEMA geometry, F-18 decay, theoretical ratios, per-sample recommendations and net activity-at-image projections.
 - `src/pages/PetNemaAnalysis.jsx` and `src/utils/petNemaAnalysis.js` - NEMA NU 2-2018 §7.4 image-quality analysis of the acquired series: contrast recovery, background variability and lung residual error. It takes the **measured** `a_H` and `a_B` concentrations and derives the real activity ratio; only their quotient enters the contrast normalisation, so the unit cancels as long as both are expressed alike and referred to the same instant. All six spheres are treated as hot, so it does not implement the NU 2-2007/2012 cold-sphere contrast used by tools such as jQC-PET.
+- `src/utils/petNemaDicom.js` - PET series loader. It owns **all** the DICOM in this chain: `petNemaAnalysis.js` receives a `volume[]` whose voxels are already quantitative and contains no DICOM logic at all. Keep it that way. Each frame gets its own Rescale transformation, resolved with the precedence per-frame `PixelValueTransformationSequence` → shared → root dataset → identity, and the resolved calibration is reported back in `series.calibration` so it can be verified. This is not cosmetic: NU 2-2018 §7.4 pools 60 background ROIs across five axial planes, so frames scaled by different factors would inject variability that is not in the image, and while a uniform scale factor cancels in the NEMA ratios, a wrong **intercept** does not. `RealWorldValueMappingSequence` is not read, and no vendor-private factor is applied.
 - `src/pages/RTPlanCompare.jsx` and `src/utils/rtPlanParser.js` - DICOM RT Plan comparison.
 - `src/pages/Tg43Calculator.jsx` and `src/lib/brachy/` - HDR Ir-192 TG-43 calculations.
 - `src/pages/AcrQcPage.jsx` and `src/lib/acr-qc.js` - ACR Medium Phantom DICOM analysis.
