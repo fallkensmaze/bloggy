@@ -70,11 +70,20 @@ function Badge({ ok, children }) {
   return <span className={`cor-badge cor-badge-${state}`}><i className={`bi bi-${ok == null ? 'dash' : ok ? 'check2' : 'exclamation'}`}></i>{children}</span>
 }
 
-function project(point) {
-  return [
-    0.82 * point[0] - 0.58 * point[1],
-    0.30 * point[0] + 0.43 * point[1] - 0.82 * point[2]
-  ]
+const DEFAULT_ELLIPSOID_VIEW = { yaw: -0.62, pitch: 0.48, zoom: 1 }
+
+function projectWithView(point, centre, view) {
+  const x = point[0] - centre[0]
+  const y = point[1] - centre[1]
+  const z = point[2] - centre[2]
+  const cosYaw = Math.cos(view.yaw)
+  const sinYaw = Math.sin(view.yaw)
+  const cosPitch = Math.cos(view.pitch)
+  const sinPitch = Math.sin(view.pitch)
+  const rotatedX = cosYaw * x - sinYaw * y
+  const rotatedY = sinYaw * x + cosYaw * y
+
+  return [rotatedX, sinPitch * rotatedY - cosPitch * z]
 }
 
 function vectorAdd(a, b) {
@@ -96,102 +105,202 @@ function ellipsoidPoint(model, latitude, longitude) {
   ), [...model.centre])
 }
 
+function drawEllipsoid(canvas, model, view) {
+  if (!canvas || !model) return
+  const width = 760
+  const height = 470
+  const ratio = Math.min(window.devicePixelRatio || 1, 2)
+  const pixelWidth = Math.round(width * ratio)
+  const pixelHeight = Math.round(height * ratio)
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth
+    canvas.height = pixelHeight
+  }
+  const context = canvas.getContext('2d')
+  context.setTransform(ratio, 0, 0, ratio, 0, 0)
+  context.clearRect(0, 0, width, height)
+
+  const radius = Math.max(1.5, model.maximumSemiAxisMm, model.sphereRadiusMm)
+  const displayScale = 150 / radius * view.zoom
+  const map = (point) => {
+    const projected = projectWithView(point, model.centre, view)
+    return [width / 2 + projected[0] * displayScale, height / 2 + projected[1] * displayScale]
+  }
+  const strokePath = (points, color, lineWidth = 1, dash = []) => {
+    context.beginPath()
+    points.forEach((point, index) => {
+      const [x, y] = map(point)
+      if (index === 0) context.moveTo(x, y)
+      else context.lineTo(x, y)
+    })
+    context.setLineDash(dash)
+    context.strokeStyle = color
+    context.lineWidth = lineWidth
+    context.stroke()
+    context.setLineDash([])
+  }
+
+  const axisLength = radius * 1.45
+  const roomAxes = [
+    { vector: [1, 0, 0], color: '#bf616a', label: 'X' },
+    { vector: [0, 1, 0], color: '#a3be8c', label: 'Y' },
+    { vector: [0, 0, 1], color: '#88c0d0', label: 'Z' }
+  ]
+  for (const axis of roomAxes) {
+    const start = vectorAdd(model.centre, vectorScale(axis.vector, -axisLength))
+    const end = vectorAdd(model.centre, vectorScale(axis.vector, axisLength))
+    strokePath([start, end], axis.color, 1, [5, 5])
+    const [x, y] = map(end)
+    context.fillStyle = axis.color
+    context.font = '700 11px IBM Plex Mono, monospace'
+    context.fillText(axis.label, x + 5, y - 4)
+  }
+
+  for (const line of model.lines) {
+    const half = radius * 1.75
+    const start = vectorAdd(line.closestPoint, vectorScale(line.direction, -half))
+    const end = vectorAdd(line.closestPoint, vectorScale(line.direction, half))
+    strokePath([start, end], 'rgba(123,136,161,0.18)', 0.8)
+  }
+
+  const loops = [-60, -30, 0, 30, 60]
+  for (const degrees of loops) {
+    const latitude = degrees * Math.PI / 180
+    const points = Array.from({ length: 65 }, (_, index) => (
+      ellipsoidPoint(model, latitude, index / 64 * Math.PI * 2)
+    ))
+    strokePath(points, degrees === 0 ? '#88c0d0' : 'rgba(136,192,208,0.38)', degrees === 0 ? 1.8 : 1)
+  }
+  for (let index = 0; index < 8; index++) {
+    const longitude = index / 8 * Math.PI * 2
+    const points = Array.from({ length: 49 }, (_, item) => (
+      ellipsoidPoint(model, -Math.PI / 2 + item / 48 * Math.PI, longitude)
+    ))
+    strokePath(points, 'rgba(136,192,208,0.42)', 1)
+  }
+
+  for (const line of model.lines) {
+    const [x, y] = map(line.closestPoint)
+    context.beginPath()
+    context.arc(x, y, 2.4, 0, Math.PI * 2)
+    context.fillStyle = COLORS[(line.detectorNumber - 1) % COLORS.length]
+    context.fill()
+  }
+  const [x, y] = map(model.centre)
+  context.beginPath()
+  context.arc(x, y, 5, 0, Math.PI * 2)
+  context.fillStyle = '#eceff4'
+  context.fill()
+  context.strokeStyle = '#2e3440'
+  context.lineWidth = 2
+  context.stroke()
+}
+
 function EllipsoidCanvas({ model }) {
   const ref = useRef(null)
+  const viewRef = useRef({ ...DEFAULT_ELLIPSOID_VIEW })
+  const dragRef = useRef(null)
+  const [dragging, setDragging] = useState(false)
+  const [autoRotate, setAutoRotate] = useState(() => (
+    typeof window === 'undefined' || !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  ))
+
+  const redraw = () => drawEllipsoid(ref.current, model, viewRef.current)
 
   useEffect(() => {
-    const canvas = ref.current
-    if (!canvas || !model) return
-    const width = 760
-    const height = 470
-    const ratio = Math.min(window.devicePixelRatio || 1, 2)
-    canvas.width = width * ratio
-    canvas.height = height * ratio
-    const context = canvas.getContext('2d')
-    context.setTransform(ratio, 0, 0, ratio, 0, 0)
-    context.clearRect(0, 0, width, height)
-
-    const radius = Math.max(1.5, model.maximumSemiAxisMm, model.sphereRadiusMm)
-    const scale = 150 / radius
-    const centreProjected = project(model.centre)
-    const map = (point) => {
-      const projected = project(point)
-      return [
-        width / 2 + (projected[0] - centreProjected[0]) * scale,
-        height / 2 + (projected[1] - centreProjected[1]) * scale
-      ]
-    }
-    const strokePath = (points, color, lineWidth = 1, dash = []) => {
-      context.beginPath()
-      points.forEach((point, index) => {
-        const [x, y] = map(point)
-        if (index === 0) context.moveTo(x, y)
-        else context.lineTo(x, y)
-      })
-      context.setLineDash(dash)
-      context.strokeStyle = color
-      context.lineWidth = lineWidth
-      context.stroke()
-      context.setLineDash([])
-    }
-
-    const axisLength = radius * 1.45
-    const roomAxes = [
-      { vector: [1, 0, 0], color: '#bf616a', label: 'X' },
-      { vector: [0, 1, 0], color: '#a3be8c', label: 'Y' },
-      { vector: [0, 0, 1], color: '#88c0d0', label: 'Z' }
-    ]
-    for (const axis of roomAxes) {
-      const start = vectorAdd(model.centre, vectorScale(axis.vector, -axisLength))
-      const end = vectorAdd(model.centre, vectorScale(axis.vector, axisLength))
-      strokePath([start, end], axis.color, 1, [5, 5])
-      const [x, y] = map(end)
-      context.fillStyle = axis.color
-      context.font = '700 11px IBM Plex Mono, monospace'
-      context.fillText(axis.label, x + 5, y - 4)
-    }
-
-    for (const line of model.lines) {
-      const half = radius * 1.75
-      const start = vectorAdd(line.closestPoint, vectorScale(line.direction, -half))
-      const end = vectorAdd(line.closestPoint, vectorScale(line.direction, half))
-      strokePath([start, end], 'rgba(123,136,161,0.18)', 0.8)
-    }
-
-    const loops = [-60, -30, 0, 30, 60]
-    for (const degrees of loops) {
-      const latitude = degrees * Math.PI / 180
-      const points = Array.from({ length: 65 }, (_, index) => (
-        ellipsoidPoint(model, latitude, index / 64 * Math.PI * 2)
-      ))
-      strokePath(points, degrees === 0 ? '#88c0d0' : 'rgba(136,192,208,0.38)', degrees === 0 ? 1.8 : 1)
-    }
-    for (let index = 0; index < 8; index++) {
-      const longitude = index / 8 * Math.PI * 2
-      const points = Array.from({ length: 49 }, (_, item) => (
-        ellipsoidPoint(model, -Math.PI / 2 + item / 48 * Math.PI, longitude)
-      ))
-      strokePath(points, 'rgba(136,192,208,0.42)', 1)
-    }
-
-    for (const line of model.lines) {
-      const [x, y] = map(line.closestPoint)
-      context.beginPath()
-      context.arc(x, y, 2.4, 0, Math.PI * 2)
-      context.fillStyle = COLORS[(line.detectorNumber - 1) % COLORS.length]
-      context.fill()
-    }
-    const [x, y] = map(model.centre)
-    context.beginPath()
-    context.arc(x, y, 5, 0, Math.PI * 2)
-    context.fillStyle = '#eceff4'
-    context.fill()
-    context.strokeStyle = '#2e3440'
-    context.lineWidth = 2
-    context.stroke()
+    viewRef.current = { ...DEFAULT_ELLIPSOID_VIEW }
+    redraw()
   }, [model])
 
-  return <canvas ref={ref} className="cor-ellipsoid" aria-label="Elipsoide tridimensional de las retroproyecciones del centro de rotación" />
+  useEffect(() => {
+    if (!autoRotate || !model) return undefined
+    let animationFrame
+    let previousTime
+    const animate = (time) => {
+      if (previousTime != null) viewRef.current.yaw += Math.min(40, time - previousTime) * 0.00022
+      previousTime = time
+      redraw()
+      animationFrame = window.requestAnimationFrame(animate)
+    }
+    animationFrame = window.requestAnimationFrame(animate)
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [autoRotate, model])
+
+  const changeZoom = (factor) => {
+    viewRef.current.zoom = Math.max(0.55, Math.min(2.5, viewRef.current.zoom * factor))
+    redraw()
+  }
+
+  const resetView = () => {
+    viewRef.current = { ...DEFAULT_ELLIPSOID_VIEW }
+    redraw()
+  }
+
+  const handlePointerDown = (event) => {
+    event.currentTarget.setPointerCapture(event.pointerId)
+    dragRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      yaw: viewRef.current.yaw,
+      pitch: viewRef.current.pitch
+    }
+    setDragging(true)
+    setAutoRotate(false)
+  }
+
+  const handlePointerMove = (event) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    viewRef.current.yaw = drag.yaw + (event.clientX - drag.x) * 0.008
+    viewRef.current.pitch = Math.max(-1.35, Math.min(1.35, drag.pitch + (event.clientY - drag.y) * 0.008))
+    redraw()
+  }
+
+  const handlePointerUp = (event) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return
+    dragRef.current = null
+    setDragging(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
+  const handleKeyDown = (event) => {
+    const step = 0.09
+    if (event.key === 'ArrowLeft') viewRef.current.yaw -= step
+    else if (event.key === 'ArrowRight') viewRef.current.yaw += step
+    else if (event.key === 'ArrowUp') viewRef.current.pitch = Math.max(-1.35, viewRef.current.pitch - step)
+    else if (event.key === 'ArrowDown') viewRef.current.pitch = Math.min(1.35, viewRef.current.pitch + step)
+    else if (event.key === '+' || event.key === '=') changeZoom(1.12)
+    else if (event.key === '-') changeZoom(1 / 1.12)
+    else return
+    event.preventDefault()
+    setAutoRotate(false)
+    redraw()
+  }
+
+  return (
+    <div className="cor-ellipsoid-wrap">
+      <canvas
+        ref={ref}
+        className={`cor-ellipsoid${dragging ? ' cor-ellipsoid-dragging' : ''}`}
+        tabIndex="0"
+        aria-label="Elipsoide tridimensional interactivo de las retroproyecciones del centro de rotación"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onWheel={(event) => { event.preventDefault(); setAutoRotate(false); changeZoom(Math.exp(-event.deltaY * 0.001)) }}
+        onKeyDown={handleKeyDown}
+      />
+      <div className="cor-ellipsoid-controls" aria-label="Controles de la vista tridimensional">
+        <button type="button" onClick={() => changeZoom(1.15)} title="Acercar"><i className="bi bi-zoom-in"></i></button>
+        <button type="button" onClick={() => changeZoom(1 / 1.15)} title="Alejar"><i className="bi bi-zoom-out"></i></button>
+        <button type="button" className={autoRotate ? 'active' : ''} onClick={() => setAutoRotate((current) => !current)} title="Activar o detener el giro automático"><i className={`bi bi-${autoRotate ? 'pause' : 'play'}-fill`}></i></button>
+        <button type="button" onClick={resetView} title="Restablecer vista"><i className="bi bi-arrow-counterclockwise"></i></button>
+      </div>
+      <span className="cor-ellipsoid-hint"><i className="bi bi-mouse"></i> Arrastra para rotar · rueda para zoom</span>
+    </div>
+  )
 }
 
 function ProjectionChart({ results, pixelSpacing }) {
