@@ -503,7 +503,173 @@ function UniformidadGamma() {
           />
         </div>
       )}
+
+      <CalculationMethodDetails />
     </div>
+  )
+}
+
+function CalculationMethodDetails() {
+  const comparisonRows = [
+    {
+      aspect: 'Remuestreo',
+      nema: 'Suma bloques de píxeles para obtener un píxel de análisis próximo a 6,4 mm.',
+      pylinac: 'Agrupa por potencias de 2 hasta alcanzar un píxel de al menos 4,48 mm.'
+    },
+    {
+      aspect: 'Origen del UFOV',
+      nema: 'Usa el UFOV geométrico declarado en el DICOM o en el perfil del equipo; si falta, lo estima y lo advierte.',
+      pylinac: 'Detecta el campo directamente en la imagen mediante umbral y conserva la mayor región conexa.'
+    },
+    {
+      aspect: 'Definición de UFOV y CFOV',
+      nema: 'El CFOV es el 75 % central de cada dimensión lineal del UFOV geométrico original.',
+      pylinac: 'Erosiona isotrópicamente el campo detectado: 95 % para UFOV y 71,25 % para CFOV.'
+    },
+    {
+      aspect: 'Tratamiento del borde',
+      nema: 'Aplica una sola vez la regla del 75 % en las filas y columnas exteriores, y excluye ceros y vecinos directos.',
+      pylinac: 'Aplica un umbral global, elimina objetos y huecos pequeños y erosiona la máscara; no usa la regla de borde NEMA.'
+    },
+    {
+      aspect: 'Suavizado',
+      nema: 'Se realiza después de definir los píxeles válidos y se normaliza con los vecinos que permanecen en la máscara.',
+      pylinac: 'Se realiza antes de extraer el campo y el borde exterior de la matriz se fuerza a cero.'
+    },
+    {
+      aspect: 'Uso del resultado',
+      nema: 'Es la vía principal para informar IU/DU y compararlas con el perfil de límites del equipo.',
+      pylinac: 'Es una comprobación independiente. Sus valores no establecen conformidad NEMA.'
+    }
+  ]
+
+  return (
+    <section className="calc-card unif-methodology" aria-labelledby="unif-method-title">
+      <div className="unif-methodology-title">
+        <span className="unif-methodology-icon"><i className="bi bi-journal-text"></i></span>
+        <div>
+          <h2 id="unif-method-title">Método de cálculo</h2>
+          <p>
+            Cada frame se analiza por dos vías. Ambas calculan la uniformidad integral y
+            diferencial, pero no seleccionan los mismos píxeles; por eso sus resultados pueden
+            ser distintos incluso partiendo de la misma imagen.
+          </p>
+        </div>
+      </div>
+
+      <div className="unif-methodology-grid">
+        <article className="unif-methodology-card unif-methodology-card-primary">
+          <div className="unif-methodology-card-head">
+            <span>Vía principal</span>
+            <h3>NEMA NU 1-2007 geométrico</h3>
+          </div>
+          <ol>
+            <li>
+              <strong>Preparación.</strong> Se suman bloques de píxeles para aproximar el píxel de
+              análisis a 6,4 mm. La web comprueba el tamaño efectivo y las cuentas disponibles.
+            </li>
+            <li>
+              <strong>Campos de visión.</strong> El UFOV se centra usando sus dimensiones físicas.
+              El CFOV ocupa el 75 % central de cada dimensión del UFOV geométrico, sin redefinirlo
+              a partir de un borde defectuoso.
+            </li>
+            <li>
+              <strong>Regla de borde.</strong> Sobre los datos sin suavizar se calcula la media del
+              CFOV. En una única pasada se excluyen los píxeles exteriores por debajo del 75 % de
+              esa media, los píxeles originalmente a cero y sus cuatro vecinos directos. Si un
+              bloque sumado contenía un cero, conserva esa marca para no reintroducirlo.
+            </li>
+            <li>
+              <strong>Suavizado.</strong> Se aplica una vez el núcleo NEMA de nueve puntos
+              <span className="unif-kernel">1-2-1 / 2-4-2 / 1-2-1</span>, normalizado sobre los
+              píxeles válidos.
+            </li>
+            <li>
+              <strong>Medidas.</strong> La IU usa el máximo y el mínimo de toda la región. La DU
+              busca la peor ventana de cinco píxeles contiguos, por separado en sentido horizontal
+              y vertical, tanto en UFOV como en CFOV.
+            </li>
+          </ol>
+        </article>
+
+        <article className="unif-methodology-card">
+          <div className="unif-methodology-card-head">
+            <span>Vía de contraste</span>
+            <h3>Aproximación Pylinac/IAEA</h3>
+          </div>
+          <ol>
+            <li>
+              <strong>Preparación.</strong> El binning se duplica progresivamente hasta que el píxel
+              efectivo alcanza al menos 4,48 mm.
+            </li>
+            <li>
+              <strong>Suavizado y umbral.</strong> Se aplica el mismo núcleo de nueve puntos. Se
+              calcula la media de los píxeles por encima del 10 % del máximo y se fija el umbral de
+              campo en el 75 % de esa media.
+            </li>
+            <li>
+              <strong>Máscara automática.</strong> Se eliminan objetos y huecos pequeños y se conserva
+              la mayor región conexa. El UFOV y el CFOV se obtienen por erosión isotrópica hasta el
+              95 % y el 71,25 % del campo detectado, respectivamente.
+            </li>
+            <li>
+              <strong>Medidas.</strong> Sobre esas máscaras se aplican las mismas fórmulas de IU y DU
+              que en la vía principal.
+            </li>
+          </ol>
+          <p className="unif-methodology-note">
+            Esta vía es una implementación aproximada de contraste: no ejecuta la biblioteca
+            Pylinac ni reproduce la geometría de borde de NEMA NU 1-2007.
+          </p>
+        </article>
+      </div>
+
+      <div className="unif-formulas" aria-label="Formulas de uniformidad">
+        <div>
+          <span>Uniformidad integral</span>
+          <strong>IU (%) = 100 x (Cmax - Cmin) / (Cmax + Cmin)</strong>
+          <small>Cmax y Cmin se buscan en todos los píxeles válidos de la región.</small>
+        </div>
+        <div>
+          <span>Uniformidad diferencial</span>
+          <strong>DU (%) = max [100 x (Cmax,5 - Cmin,5) / (Cmax,5 + Cmin,5)]</strong>
+          <small>El máximo se obtiene entre todas las ventanas válidas de cinco píxeles.</small>
+        </div>
+      </div>
+
+      <h3 className="unif-comparison-title">Diferencia entre los dos métodos</h3>
+      <div className="unif-table-wrap">
+        <table className="unif-table unif-comparison-table">
+          <thead>
+            <tr>
+              <th>Aspecto</th>
+              <th>NEMA geométrico</th>
+              <th>Aproximación Pylinac/IAEA</th>
+            </tr>
+          </thead>
+          <tbody>
+            {comparisonRows.map((row) => (
+              <tr key={row.aspect}>
+                <td><strong>{row.aspect}</strong></td>
+                <td>{row.nema}</td>
+                <td>{row.pylinac}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="unif-methodology-conclusion">
+        <i className="bi bi-info-circle"></i>
+        <p>
+          <strong>Cómo interpretar una discrepancia:</strong> normalmente se debe a que cada vía
+          incluye un borde y una matriz de análisis diferentes, no a que la fórmula de IU o DU
+          cambie. Para el veredicto se usa el método NEMA geométrico junto con la validez de la
+          adquisición y los límites específicos del equipo; la segunda vía sirve para detectar
+          dependencias del resultado con la segmentación del campo.
+        </p>
+      </div>
+    </section>
   )
 }
 
