@@ -11,9 +11,10 @@ npm run preview   # Preview production build locally
 npm run audit:public    # Reject sensitive tracked files or public artifacts
 npm run test:anon      # DICOM anonymizer regression suite (PHI, conformance, RT references)
 npm run test:morse     # Morse trainer assertions (CW timing, Koch decks, quiz invariants)
+npm run test:nema      # NEMA NU 1 intrinsic uniformity (edge rule, CFOV, DICOM geometry, states)
 npm run test:radio     # Radio-exam XML parsing and quiz building
 npm run test:paste     # Secure Paste crypto (the document id must not decrypt anything)
-npm run test:pet       # PET DICOM quantitative calibration (per-frame Rescale transformation)
+npm run test:pet       # PET DICOM calibration and NEMA NU 2 background ROI placement
 npm run check:security # Anonymizer and paste tests, then build and audit the GitHub Pages artifact
 npm run deploy         # Build, audit and deploy dist/ to GitHub Pages
 ```
@@ -48,6 +49,24 @@ looked wrong — the page still said "Cifrado AES-GCM" and the text still appear
 the browser held both halves. Only a test that decrypts with what the *server* knows, and
 demands an error, can tell real encryption from decoration.
 
+The intrinsic uniformity chain has `scripts/test-nema-uniformity.mjs` (`npm run test:nema`); run
+it after touching `src/utils/nemaAlgorithms.js`, `src/utils/dicomParser.js` or
+`src/utils/nemaAcquisition.js`. Every failure it pins is silent, because a uniformity number is
+always produced: nothing throws, the masks render, and the badge turns green or red either way.
+The expected values are derived in the file from NU 1-2007 §2.4 and written beside each case, so
+they can be checked by hand rather than trusted.
+
+The case worth knowing about is the last one. The UFOV this camera declares (386 × 532 mm) is,
+within 0.2 %, the physical extent of its crystal, so summing 0.5994 mm pixels into the 7.79 mm
+ones NEMA asks for leaves the outermost row of blocks straddling the edge: ten active raw rows
+out of thirteen. Those blocks come out at 76.9 % of the CFOV mean, the 75 % edge rule of the
+standard lets them through by less than two points, and they used to drag IU UFOV from 3.1 % to
+10.8 % — reporting a conforming detector as failing, on a real flood. NEMA already says to exclude
+pixels that held zero counts in the original image; the fix is that the exclusion has to survive
+the summation, so `safeBlockReduce()` flags any summed pixel whose block touched a zero. Do not
+try to fix it by aligning the block grid instead: 645 active rows admit only 49 complete 13-row
+blocks, so a 50th block straddles the edge under every alignment.
+
 The PET NEMA loader has `scripts/test-pet-nema.mjs` (`npm run test:pet`); run it after
 touching `src/utils/petNemaDicom.js`. It builds synthetic PET DICOM in memory and pins
 what each stored value becomes and which source its transformation came from, because a
@@ -57,6 +76,19 @@ values. The decoder used to read `RescaleSlope` only from the root dataset, so a
 Enhanced PET, where it lives in the functional groups, decoded with slope 1 and no one
 could tell. The suite also asserts the opposite direction: one file per slice keeps using
 its own slope, never a series-wide one.
+
+`npm run test:pet` also runs `scripts/test-pet-rois.mjs`, which covers the placement of the twelve
+background ROIs in `src/utils/petNemaAnalysis.js`. NU 2-2018 §7.4.1 puts them as close to the edge
+of the phantom as possible but never closer than 15 mm, and repeats them on five planes to reach
+60 ROIs. The placement used to pick one ROI per fixed angular sector in isolation, ask for 29.6 mm
+between centres and accept whatever it found when that failed: on the synthetic phantom in the
+suite that left two ROIs 12.4 mm apart — 24.6 mm of overlap between 37 mm circles reported as
+twelve independent measurements, so N_j was not the variability of the image. It also relaxed the
+clearance to the spheres through a ladder of [15, 10, 6, 3, 0], which lets a background ROI sit on
+hot activity: the background rises, Q_H falls, and the report still prints a plausible number. The
+15 mm to the spheres is **not** in the standard and is a reported preference; what is mandatory,
+and blocks the calculation, is the 15 mm to the edge and no overlap with a sphere or the lung
+insert.
 
 ## Architecture
 
@@ -115,7 +147,24 @@ Firestore collections:
 ### Main modules
 
 - `src/pages/Blog.jsx` - paginated Firestore feed. Renders Markdown, code highlighting and math.
-- `src/pages/UniformidadGamma.jsx` - DICOM flood upload, NEMA / Pylinac-IAEA calculation and canvas rendering.
+- `src/pages/UniformidadGamma.jsx` - DICOM flood upload, NEMA NU 1-2007 calculation, Pylinac/IAEA
+  cross-check and canvas rendering. It keeps apart three things that used to be a single green
+  badge: the NEMA number, the validity of the acquisition, and the comparison against the limits of
+  one camera. The resolution selector reports what each option really produces on the loaded file
+  (real matrix, effective pixel, counts in the central pixel), and a traceability panel carries
+  method version, geometry, pixels removed by cause, detector and window, checks and final state.
+- `src/utils/nemaAcquisition.js` - acquisition validation and the four states: `Conforme`,
+  `No conforme`, `No evaluable` and `Conforme numericamente, adquisicion no verificada`. A value
+  inside the Siemens limits is not conforming if the flood was taken above 20 000 cps, with a
+  collimator mounted, closer than 5 × the largest UFOV dimension, or with a pixel that is not
+  square. The 0.5 % square-pixel tolerance is attributable to DICOM decimal rounding and is
+  documented as a tolerance of this tool, not of NEMA.
+- `src/utils/dicomPixels.js` - shared stored-pixel decoding: which transfer syntaxes can be read,
+  `BitsStored`/`HighBit` masking with sign extension, the transfer syntax UID, and the frame count.
+  Both `dicomParser.js` and `petNemaDicom.js` go through it, so a compressed study is rejected in
+  one place and no reader invents frames out of surplus bytes. Note that this build of dcmjs returns
+  the file meta group as the dict itself: reading `dicomData.meta.dict` silently yields an empty
+  transfer syntax, which then passes as native.
 - `src/pages/PetNemaFractionation.jsx` - PET image-quality phantom fill planner, live countdowns and per-sample initial/residual syringe measurement workflow.
 - `src/utils/petNemaFractionation.js` - pure PET NEMA geometry, F-18 decay, theoretical ratios, per-sample recommendations and net activity-at-image projections.
 - `src/pages/PetNemaAnalysis.jsx` and `src/utils/petNemaAnalysis.js` - NEMA NU 2-2018 §7.4 image-quality analysis of the acquired series: contrast recovery, background variability and lung residual error. It takes the **measured** `a_H` and `a_B` concentrations and derives the real activity ratio; only their quotient enters the contrast normalisation, so the unit cancels as long as both are expressed alike and referred to the same instant. All six spheres are treated as hot, so it does not implement the NU 2-2007/2012 cold-sphere contrast used by tools such as jQC-PET.
@@ -168,5 +217,6 @@ Global styles live in `src/styles.css`. Feature-specific stylesheets live in `sr
 - `quiz.css`
 - `rtplan.css`
 - `tg43.css`
+- `uniformidad.css`
 
 The UI uses CSS custom properties from `src/styles.css`, such as `--bg-secondary`, `--text-muted`, `--accent-blue` and `--border`.

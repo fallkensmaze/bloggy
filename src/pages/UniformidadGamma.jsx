@@ -1,9 +1,38 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { parseDICOM } from '../utils/dicomParser'
-import { calculateNEMAComparison, SYMBIA_INTEVO_SPECS } from '../utils/nemaAlgorithms'
+import {
+  LIMIT_PROFILES,
+  NO_LIMIT_PROFILE,
+  calculateNEMAComparison,
+  describeResolution,
+  detectLimitProfile,
+  getLimitProfile
+} from '../utils/nemaAlgorithms'
+import { STATES, evaluateAcquisition } from '../utils/nemaAcquisition'
 import { renderCanvas } from '../utils/canvasRenderer'
+import { readJson, writeValue } from '../utils/localSettings'
+import '../styles/uniformidad.css'
 
-const LIMITS = SYMBIA_INTEVO_SPECS
+const DECLARATION_KEY = 'unif_declaracion_fisico'
+
+const RESOLUTION_OPTIONS = [
+  { value: '78', label: 'Bloque hacia 78 x 78 px' },
+  { value: 'auto', label: 'Auto NEMA 6,4 mm' },
+  { value: '64', label: 'Bloque hacia 64 x 64 px' },
+  { value: '128', label: 'Bloque hacia 128 x 128 px' },
+  { value: '0', label: 'Sin remuestreo' }
+]
+
+const EMPTY_DECLARATION = {
+  radionuclide: '',
+  energyWindow: '',
+  sourceDistanceCm: '',
+  distanceConfirmed: false,
+  countRateCps: '',
+  uniformityCorrection: '',
+  collimatorRemoved: '',
+  deviations: ''
+}
 
 function formatPercent(value) {
   return Number.isFinite(value) ? `${value.toFixed(2)} %` : 'Sin dato'
@@ -14,8 +43,12 @@ function formatShape(rows, cols) {
 }
 
 function formatBBox(bbox) {
-  if (!bbox) return ''
+  if (!bbox) return 'Sin dato'
   return `filas ${bbox.minR}-${bbox.maxR}, columnas ${bbox.minC}-${bbox.maxC}`
+}
+
+function formatCount(value) {
+  return Number.isFinite(value) ? Math.round(value).toLocaleString('es-ES') : 'Sin dato'
 }
 
 function maxDU(result, region) {
@@ -24,15 +57,116 @@ function maxDU(result, region) {
   return Math.max(result.DUvertCfov, result.DUhorizCfov)
 }
 
+function stateClass(state) {
+  if (state === STATES.CONFORME) return 'unif-state-ok'
+  if (state === STATES.NO_CONFORME) return 'unif-state-fail'
+  if (state === STATES.NO_VERIFICADA) return 'unif-state-warn'
+  return 'unif-state-none'
+}
+
+function stateIcon(state) {
+  if (state === STATES.CONFORME) return 'bi-check-circle-fill'
+  if (state === STATES.NO_CONFORME) return 'bi-x-circle-fill'
+  if (state === STATES.NO_VERIFICADA) return 'bi-exclamation-circle-fill'
+  return 'bi-dash-circle-fill'
+}
+
+function checkPill(status) {
+  if (status === 'ok') return { text: 'Cumple', className: 'unif-state-ok' }
+  if (status === 'fail') return { text: 'Incumple', className: 'unif-state-fail' }
+  if (status === 'unknown') return { text: 'Sin verificar', className: 'unif-state-warn' }
+  return { text: 'Informativo', className: 'unif-state-none' }
+}
+
+function describeOption(parsedDICOM, option) {
+  if (!parsedDICOM) return null
+  const info = describeResolution(
+    parsedDICOM.frames[0],
+    parsedDICOM.rows,
+    parsedDICOM.cols,
+    parsedDICOM.pixelSpacing,
+    option.value
+  )
+  const tolerance = info.pixelTolerance
+  const pixelText = tolerance
+    ? `${tolerance.finalPixel[0].toFixed(2)} x ${tolerance.finalPixel[1].toFixed(2)} mm`
+    : 'sin PixelSpacing'
+  const problems = []
+
+  if (!tolerance) problems.push('no evaluable sin PixelSpacing')
+  else {
+    if (!tolerance.square) problems.push('pixel no cuadrado')
+    if (!tolerance.insideTolerance) problems.push('fuera de 4,48-8,32 mm')
+  }
+  if (!info.enoughCounts) {
+    problems.push(`${formatCount(info.centerCounts)} cuentas en el centro, por debajo de ${formatCount(info.minCountsRequired)}`)
+  }
+
+  return {
+    ...info,
+    pixelText,
+    problems,
+    summary: `bloque ${info.blockSize.join(' x ')} -> ${formatShape(info.matrix[0], info.matrix[1])}, ${pixelText}${problems.length ? ' - no apto NEMA' : ''}`
+  }
+}
+
 function UniformidadGamma() {
+  const [buffer, setBuffer] = useState(null)
   const [parsedDICOM, setParsedDICOM] = useState(null)
   const [fileName, setFileName] = useState('')
   const [targetSize, setTargetSize] = useState('78')
+  const [profileChoice, setProfileChoice] = useState('auto')
+  const [fovOrder, setFovOrder] = useState('auto')
+  const [declaration, setDeclaration] = useState(EMPTY_DECLARATION)
   const [status, setStatus] = useState('Carga un archivo DICOM de flood intrinseco para comenzar')
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState(null)
 
   const fileInputRef = useRef()
+
+  useEffect(() => {
+    setDeclaration({ ...EMPTY_DECLARATION, ...readJson(DECLARATION_KEY, {}) })
+  }, [])
+
+  const updateDeclaration = (patch) => {
+    setDeclaration((previous) => {
+      const next = { ...previous, ...patch }
+      writeValue(DECLARATION_KEY, next)
+      return next
+    })
+    setResults(null)
+  }
+
+  const profile = useMemo(() => {
+    if (!parsedDICOM) return NO_LIMIT_PROFILE
+    if (profileChoice === 'auto') return detectLimitProfile(parsedDICOM)
+    return getLimitProfile(profileChoice)
+  }, [parsedDICOM, profileChoice])
+
+  const detectedProfile = useMemo(
+    () => (parsedDICOM ? detectLimitProfile(parsedDICOM) : NO_LIMIT_PROFILE),
+    [parsedDICOM]
+  )
+
+  const resolutionOptions = useMemo(
+    () => RESOLUTION_OPTIONS.map((option) => ({ option, info: describeOption(parsedDICOM, option) })),
+    [parsedDICOM]
+  )
+
+  const selectedResolution = resolutionOptions.find(({ option }) => option.value === targetSize)?.info
+
+  const readBuffer = (arrayBuffer, name, order) => {
+    const parsed = parseDICOM(arrayBuffer, { fovOrder: order === 'auto' ? undefined : order })
+    setParsedDICOM(parsed)
+    setFileName(name)
+    setResults(null)
+
+    const heads = parsed.frameInfo
+      .map((info) => (info.detectorNumber != null ? `detector ${info.detectorNumber}` : 'sin identificar'))
+      .join(', ')
+    setStatus(`DICOM cargado: ${parsed.numFrames} frame${parsed.numFrames > 1 ? 's' : ''} (${heads}).`)
+    return parsed
+  }
 
   const handleFileSelect = (file) => {
     if (!file) return
@@ -42,15 +176,11 @@ function UniformidadGamma() {
     const reader = new FileReader()
     reader.onload = (e) => {
       try {
-        const parsed = parseDICOM(e.target.result)
-        setParsedDICOM(parsed)
-        setFileName(file.name)
-        setResults(null)
-
-        const spacing = parsed.pixelSpacing ? ` PixelSpacing ${parsed.pixelSpacing.map((v) => v.toFixed(3)).join(' x ')} mm.` : ''
-        const fov = parsed.ufovSizeMm ? ` UFOV DICOM ${parsed.ufovSizeMm.map((v) => v.toFixed(1)).join(' x ')} mm.` : ''
-        setStatus(`DICOM cargado correctamente.${spacing}${fov}`)
+        setBuffer(e.target.result)
+        readBuffer(e.target.result, file.name, fovOrder)
       } catch (err) {
+        setBuffer(null)
+        setParsedDICOM(null)
         setStatus('Error al parsear el DICOM: ' + err.message)
       } finally {
         setLoading(false)
@@ -63,6 +193,17 @@ function UniformidadGamma() {
     reader.readAsArrayBuffer(file)
   }
 
+  const handleFovOrderChange = (value) => {
+    setFovOrder(value)
+    setResults(null)
+    if (!buffer) return
+    try {
+      readBuffer(buffer, fileName, value)
+    } catch (err) {
+      setStatus('Error al reinterpretar el DICOM: ' + err.message)
+    }
+  }
+
   const handleCalculate = () => {
     if (!parsedDICOM) return
 
@@ -71,23 +212,30 @@ function UniformidadGamma() {
 
     setTimeout(() => {
       try {
-        const frameResults = parsedDICOM.frames.map((rawData, index) => ({
-          frameIndex: index,
-          comparison: calculateNEMAComparison(rawData, parsedDICOM.rows, parsedDICOM.cols, {
+        const frameResults = parsedDICOM.frames.map((rawData, index) => {
+          const info = parsedDICOM.frameInfo[index]
+          const comparison = calculateNEMAComparison(rawData, parsedDICOM.rows, parsedDICOM.cols, {
             targetSize,
             pixelSpacingMm: parsedDICOM.pixelSpacing,
-            ufovSizeMm: parsedDICOM.ufovSizeMm,
+            ufovSizeMm: info.ufovSizeMm,
+            vendorFovMm: profile.fovMm,
             cropActive: false
           })
-        }))
+          const evaluation = evaluateAcquisition({
+            parsed: parsedDICOM,
+            frame: info,
+            result: comparison.geometric,
+            profile,
+            declaration
+          })
+          return { frameIndex: index, info, comparison, evaluation }
+        })
 
         setResults(frameResults)
-
-        const first = frameResults[0]?.comparison
-        const shapeMsg = first?.geometric?.available
-          ? ` NEMA: ${formatShape(first.geometric.rows, first.geometric.cols)}.`
-          : ''
-        setStatus(`Calculo completado para ${frameResults.length} frame${frameResults.length > 1 ? 's' : ''}.${shapeMsg}`)
+        const states = frameResults.map(({ info, evaluation }) => (
+          `detector ${info.detectorNumber ?? info.frameIndex + 1}: ${evaluation.state}`
+        ))
+        setStatus(`Calculo completado. ${states.join(' | ')}.`)
       } catch (err) {
         setStatus('Error durante el calculo: ' + err.message)
         console.error(err)
@@ -97,17 +245,12 @@ function UniformidadGamma() {
     }, 50)
   }
 
-  const handleTargetChange = (value) => {
-    setTargetSize(value)
-    setResults(null)
-  }
-
   return (
     <div className="page-body" style={{ maxWidth: '1160px' }}>
       <div className="page-header">
         <div className="page-icon"><i className="bi bi-grid-1x2-fill"></i></div>
         <h1 className="page-title">Uniformidad Intrinseca NEMA</h1>
-        <p className="page-subtitle">NEMA NU 1 y comparacion Pylinac/IAEA para flood intrinseco de gammacamara</p>
+        <p className="page-subtitle">NEMA NU 1-2007 y aproximacion Pylinac/IAEA para flood intrinseco de gammacamara</p>
       </div>
 
       <div className="calc-card" style={{ marginBottom: '20px' }}>
@@ -120,53 +263,27 @@ function UniformidadGamma() {
         />
 
         <div
+          className="unif-dropzone"
           onClick={() => fileInputRef.current?.click()}
           onDragOver={(e) => {
             e.preventDefault()
-            e.currentTarget.style.borderColor = 'var(--accent-blue)'
-            e.currentTarget.style.background = 'rgba(136,192,208,0.05)'
+            e.currentTarget.classList.add('unif-dropzone-active')
           }}
-          onDragLeave={(e) => {
-            e.currentTarget.style.borderColor = 'var(--border)'
-            e.currentTarget.style.background = 'transparent'
-          }}
+          onDragLeave={(e) => e.currentTarget.classList.remove('unif-dropzone-active')}
           onDrop={(e) => {
             e.preventDefault()
-            e.currentTarget.style.borderColor = 'var(--border)'
-            e.currentTarget.style.background = 'transparent'
+            e.currentTarget.classList.remove('unif-dropzone-active')
             handleFileSelect(e.dataTransfer.files[0])
           }}
-          style={{
-            border: '2px dashed var(--border)',
-            borderRadius: '12px',
-            padding: '44px 32px',
-            textAlign: 'center',
-            cursor: 'pointer',
-            transition: 'border-color 0.2s, background 0.2s'
-          }}
         >
-          <div style={{ fontSize: '2.8rem', color: 'var(--text-muted)', marginBottom: '10px' }}>
-            <i className="bi bi-file-medical"></i>
-          </div>
-          <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>
-            Arrastra el archivo DICOM aqui
-          </div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            o haz clic para seleccionar - flood intrinseco (.dcm)
-          </div>
+          <i className="bi bi-file-medical"></i>
+          <strong>Arrastra el archivo DICOM aqui</strong>
+          <span>o haz clic para seleccionar - flood intrinseco (.dcm)</span>
         </div>
 
         {parsedDICOM && (
-          <div style={{
-            display: 'block',
-            marginTop: '14px',
-            padding: '10px 16px',
-            background: 'var(--bg-tertiary)',
-            borderRadius: '8px',
-            fontSize: '13px',
-            color: 'var(--text-secondary)'
-          }}>
-            <i className="bi bi-file-earmark-check" style={{ color: 'var(--accent-green)', marginRight: '6px' }}></i>
+          <div className="unif-file">
+            <i className="bi bi-file-earmark-check"></i>
             {fileName} - {formatShape(parsedDICOM.rows, parsedDICOM.cols)} - {parsedDICOM.numFrames} frame{parsedDICOM.numFrames > 1 ? 's' : ''}
             {parsedDICOM.pixelSpacing && (
               <span> - PixelSpacing {parsedDICOM.pixelSpacing.map((v) => v.toFixed(3)).join(' x ')} mm</span>
@@ -174,138 +291,294 @@ function UniformidadGamma() {
             {parsedDICOM.ufovSizeMm && (
               <span> - UFOV {parsedDICOM.ufovSizeMm.map((v) => v.toFixed(1)).join(' x ')} mm</span>
             )}
+            {parsedDICOM.manufacturer && <span> - {parsedDICOM.manufacturer} {parsedDICOM.modelName}</span>}
           </div>
         )}
 
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-          gap: '16px',
-          marginTop: '18px'
-        }}>
+        {parsedDICOM?.warnings?.map((warning) => (
+          <div className="unif-notice" key={warning}>
+            <i className="bi bi-exclamation-triangle"></i>
+            <span>{warning}</span>
+          </div>
+        ))}
+
+        <div className="unif-grid">
           <div>
             <label className="field-label">Frames DICOM</label>
             <div className="dark-input" style={{ opacity: parsedDICOM ? 1 : 0.65 }}>
               {parsedDICOM ? `Todos (${parsedDICOM.numFrames})` : 'Todos'}
             </div>
           </div>
+
           <div>
-            <label className="field-label">Resolucion analisis</label>
+            <label className="field-label" htmlFor="unif-resolution">Resolucion de analisis</label>
             <select
+              id="unif-resolution"
               className="dark-select"
               value={targetSize}
-              onChange={(e) => handleTargetChange(e.target.value)}
+              onChange={(e) => {
+                setTargetSize(e.target.value)
+                setResults(null)
+              }}
             >
-              <option value="78">78 x 78 px (7.8 mm Siemens)</option>
-              <option value="auto">Auto NEMA 6.4 mm</option>
-              <option value="64">64 x 64 px</option>
-              <option value="128">128 x 128 px</option>
-              <option value="0">Sin remuestreo</option>
+              {resolutionOptions.map(({ option, info }) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}{info ? ` - ${info.summary}` : ''}
+                </option>
+              ))}
             </select>
+            {selectedResolution && (
+              <small className={`unif-hint${selectedResolution.problems.length ? ' unif-hint-bad' : ''}`}>
+                Matriz real {formatShape(selectedResolution.matrix[0], selectedResolution.matrix[1])} con bloque{' '}
+                {selectedResolution.blockSize.join(' x ')}; pixel efectivo {selectedResolution.pixelText};{' '}
+                {formatCount(selectedResolution.centerCounts)} cuentas en el pixel central.
+                {selectedResolution.problems.length
+                  ? ` No apto para NEMA: ${selectedResolution.problems.join('; ')}.`
+                  : ' Cumple el intervalo 4,48-8,32 mm y el minimo de cuentas.'}
+              </small>
+            )}
+          </div>
+
+          <div>
+            <label className="field-label" htmlFor="unif-profile">Perfil de limites</label>
+            <select
+              id="unif-profile"
+              className="dark-select"
+              value={profileChoice}
+              onChange={(e) => {
+                setProfileChoice(e.target.value)
+                setResults(null)
+              }}
+            >
+              <option value="auto">Automatico por equipo</option>
+              {LIMIT_PROFILES.map((item) => (
+                <option key={item.id} value={item.id}>{item.label}</option>
+              ))}
+              <option value="none">Sin perfil (solo valores NEMA)</option>
+            </select>
+            <small className="unif-hint">
+              {profileChoice === 'auto'
+                ? (detectedProfile.id === 'none'
+                  ? 'El equipo del DICOM no coincide con ningun perfil: se informaran los valores NEMA sin veredicto.'
+                  : `Detectado: ${detectedProfile.label}.`)
+                : `Seleccionado a mano: ${profile.label}.`}
+              {' '}{profile.source}{profile.version !== '-' ? ` (version ${profile.version})` : ''}.
+            </small>
+          </div>
+
+          <div>
+            <label className="field-label" htmlFor="unif-fov">Orden de FieldOfViewDimensions</label>
+            <select
+              id="unif-fov"
+              className="dark-select"
+              value={fovOrder}
+              onChange={(e) => handleFovOrderChange(e.target.value)}
+            >
+              <option value="auto">Automatico (medido en la imagen)</option>
+              <option value="standard">Estandar PS3.3 [filas, columnas]</option>
+              <option value="swapped">Invertido [columnas, filas]</option>
+            </select>
+            {parsedDICOM?.fov && (
+              <small className="unif-hint">
+                Almacenado {parsedDICOM.fov.raw.join(' x ')} mm; se usa{' '}
+                {parsedDICOM.fov.dimensionsMm.map((v) => v.toFixed(0)).join(' x ')} mm (orden{' '}
+                {parsedDICOM.fov.order === 'swapped' ? 'invertido' : 'estandar'}, decidido por{' '}
+                {parsedDICOM.fov.decidedBy.replace('_', ' ')}
+                {Number.isFinite(parsedDICOM.fov.deviation)
+                  ? `, desviacion ${(parsedDICOM.fov.deviation * 100).toFixed(1)} %`
+                  : ''}
+                ).
+              </small>
+            )}
           </div>
         </div>
 
-        <button
-          onClick={handleCalculate}
-          disabled={!parsedDICOM || loading}
-          style={{
-            width: '100%',
-            marginTop: '18px',
-            padding: '12px',
-            background: 'var(--accent-blue)',
-            color: 'var(--bg-primary)',
-            border: 'none',
-            borderRadius: '8px',
-            fontSize: '15px',
-            fontWeight: 600,
-            fontFamily: 'var(--font-sans)',
-            cursor: parsedDICOM && !loading ? 'pointer' : 'not-allowed',
-            opacity: parsedDICOM && !loading ? 1 : 0.35,
-            transition: 'opacity 0.15s'
-          }}
-        >
+        <details className="unif-declaration" style={{ marginTop: '18px' }}>
+          <summary>Declaracion del fisico (lo que el DICOM no dice)</summary>
+          <div className="unif-grid">
+            <label>
+              <span className="field-label">Radionucleido</span>
+              <input
+                className="dark-input"
+                value={declaration.radionuclide}
+                placeholder={parsedDICOM?.radionuclide || 'Tc-99m'}
+                onChange={(e) => updateDeclaration({ radionuclide: e.target.value })}
+              />
+            </label>
+            <label>
+              <span className="field-label">Ventana energetica</span>
+              <input
+                className="dark-input"
+                value={declaration.energyWindow}
+                placeholder={parsedDICOM?.frameInfo?.[0]?.energyWindowName || '140 keV +-15 %'}
+                onChange={(e) => updateDeclaration({ energyWindow: e.target.value })}
+              />
+            </label>
+            <label>
+              <span className="field-label">Distancia fuente-detector (cm)</span>
+              <input
+                className="dark-input"
+                inputMode="decimal"
+                value={declaration.sourceDistanceCm}
+                onChange={(e) => updateDeclaration({ sourceDistanceCm: e.target.value })}
+              />
+            </label>
+            <div className="unif-check-inline">
+              <input
+                id="unif-distance-ok"
+                type="checkbox"
+                checked={declaration.distanceConfirmed}
+                onChange={(e) => updateDeclaration({ distanceConfirmed: e.target.checked })}
+              />
+              <label htmlFor="unif-distance-ok">Confirmo distancia mayor o igual a 5 veces el UFOV</label>
+            </div>
+            <label>
+              <span className="field-label">Tasa de cuentas (cps)</span>
+              <input
+                className="dark-input"
+                inputMode="decimal"
+                value={declaration.countRateCps}
+                placeholder={Number.isFinite(parsedDICOM?.actualFrameDurationMs) ? 'Se calcula del DICOM' : ''}
+                onChange={(e) => updateDeclaration({ countRateCps: e.target.value })}
+              />
+            </label>
+            <label>
+              <span className="field-label">Correccion de uniformidad</span>
+              <input
+                className="dark-input"
+                value={declaration.uniformityCorrection}
+                placeholder={parsedDICOM?.correctedImage?.join(', ') || 'aplicada / no aplicada'}
+                onChange={(e) => updateDeclaration({ uniformityCorrection: e.target.value })}
+              />
+            </label>
+            <label>
+              <span className="field-label">Colimador retirado</span>
+              <select
+                className="dark-select"
+                value={declaration.collimatorRemoved}
+                onChange={(e) => updateDeclaration({ collimatorRemoved: e.target.value })}
+              >
+                <option value="">Sin declarar</option>
+                <option value="si">Si, adquisicion intrinseca</option>
+                <option value="no">No, habia colimador</option>
+              </select>
+            </label>
+            <label>
+              <span className="field-label">Desviaciones del procedimiento</span>
+              <input
+                className="dark-input"
+                value={declaration.deviations}
+                onChange={(e) => updateDeclaration({ deviations: e.target.value })}
+              />
+            </label>
+          </div>
+          <p>
+            Se guarda en este navegador para no repetirla en cada flood. Solo se usa para las
+            comprobaciones que el DICOM no permite resolver; los campos que si vienen en el
+            fichero se leen de el y no hace falta rellenarlos.
+          </p>
+        </details>
+
+        <button className="unif-run" onClick={handleCalculate} disabled={!parsedDICOM || loading}>
           <i className="bi bi-play-fill"></i>&nbsp; Calcular todos los frames por las dos vias
         </button>
 
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          marginTop: '12px',
-          padding: '9px 14px',
-          background: 'var(--bg-tertiary)',
-          borderRadius: '8px',
-          fontSize: '13px',
-          color: 'var(--text-muted)',
-          minHeight: '38px'
-        }}>
-          {loading ? (
-            <>
-              <span style={{
-                display: 'inline-block',
-                width: '14px',
-                height: '14px',
-                border: '2px solid var(--border)',
-                borderTopColor: 'var(--accent-blue)',
-                borderRadius: '50%',
-                animation: 'spin 0.75s linear infinite'
-              }}></span>
-              <span>{status}</span>
-            </>
-          ) : (
-            <>
-              <i className="bi bi-info-circle"></i>
-              <span>{status}</span>
-            </>
-          )}
+        <div className="unif-status">
+          {loading ? <span className="unif-spinner"></span> : <i className="bi bi-info-circle"></i>}
+          <span>{status}</span>
         </div>
       </div>
 
-      {results?.map(({ frameIndex, comparison }) => (
-        <FrameResultsBlock
-          key={frameIndex}
-          frameIndex={frameIndex}
-          comparison={comparison}
-          limits={LIMITS}
-        />
+      {results?.map((frameResult) => (
+        <FrameResultsBlock key={frameResult.frameIndex} {...frameResult} parsedDICOM={parsedDICOM} />
       ))}
 
       {results?.length > 0 && (
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-          <CopyMethodButton results={results} methodKey="geometric" label="NEMA Geométrico" />
-          <CopyMethodButton results={results} methodKey="pylinac" label="Pylinac/IAEA" />
+        <div className="unif-copy-row">
+          <CopyButton label="Copiar NEMA geometrico" build={() => buildTable(results, 'geometric')} />
+          <CopyButton label="Copiar Pylinac/IAEA" build={() => buildTable(results, 'pylinac')} />
+          <CopyButton
+            label="Copiar trazabilidad"
+            build={() => buildTraceability(results, parsedDICOM)}
+          />
         </div>
       )}
-
-      <style>{`
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
     </div>
   )
 }
 
-function getBadge(value, limit) {
-  if (!Number.isFinite(value)) {
-    return {
-      text: 'Sin dato',
-      background: 'rgba(123,136,161,0.12)',
-      color: 'var(--text-muted)',
-      border: '1px solid rgba(123,136,161,0.25)'
-    }
-  }
+function buildTable(results, methodKey) {
+  const fmt = (value) => (Number.isFinite(value) ? value.toFixed(2).replace('.', ',') : '')
+  const rows = results
+    .map(({ frameIndex, info, comparison }) => {
+      const result = comparison[methodKey]
+      if (!result?.available) return null
+      const du = (region) => Math.max(result[`DUvert${region}`], result[`DUhoriz${region}`])
+      return [
+        `H${info.detectorNumber ?? frameIndex + 1}`,
+        fmt(du('Cfov')),
+        fmt(du('Ufov')),
+        fmt(result.IUcfov),
+        fmt(result.IUufov)
+      ].join('\t')
+    })
+    .filter(Boolean)
 
-  const ok = value <= limit
-  return {
-    text: ok ? 'Conforme' : 'No conforme',
-    background: ok ? 'rgba(163,190,140,0.15)' : 'rgba(191,97,106,0.15)',
-    color: ok ? 'var(--accent-green)' : 'var(--accent-red)',
-    border: ok ? '1px solid rgba(163,190,140,0.3)' : '1px solid rgba(191,97,106,0.3)'
-  }
+  if (!rows.length) return ''
+  return [['Uniformidad', 'UDCC', 'UDCT', 'UICC', 'UICT'].join('\t'), ...rows].join('\n')
 }
 
-function FrameResultsBlock({ frameIndex, comparison, limits }) {
+function buildTraceability(results, parsedDICOM) {
+  const lines = []
+
+  for (const { info, comparison, evaluation } of results) {
+    const metadata = comparison.geometric.metadata || {}
+    lines.push(`Detector ${info.detectorNumber ?? info.frameIndex + 1} - ${evaluation.state}`)
+    lines.push(`  Motivo: ${evaluation.reason}`)
+    lines.push(`  Metodo: ${metadata.methodVersion} (${metadata.method})`)
+    lines.push(`  Equipo: ${parsedDICOM.manufacturer} ${parsedDICOM.modelName} [${parsedDICOM.softwareVersions.join(' | ')}]`)
+    lines.push(`  Perfil de limites: ${evaluation.profile?.label} - ${evaluation.profile?.source}`)
+    lines.push(`  Pixel original: ${parsedDICOM.pixelSpacing?.map((v) => v.toFixed(3)).join(' x ') || 'sin dato'} mm`)
+    lines.push(`  Pixel de analisis: ${metadata.pixelSpacingResampledMm?.map((v) => v.toFixed(2)).join(' x ') || 'sin dato'} mm (bloque ${metadata.blockSize?.join(' x ')})`)
+    lines.push(`  Matriz de analisis: ${metadata.resampledShape?.join(' x ')}`)
+    lines.push(`  UFOV: ${metadata.ufovSource} ${formatBBox(metadata.ufovBBoxInitial)}`)
+    lines.push(`  CFOV: ${formatBBox(metadata.cfovBBoxFinal)}`)
+    lines.push(`  Pixeles eliminados: umbral ${metadata.nRemovedByThreshold}, cero o contaminado ${metadata.nRemovedZeroOrContaminated}, vecindad ${metadata.nRemovedByNeighbour}`)
+    lines.push(`  Pixeles validos: UFOV ${metadata.nUfovPixelsValid}, CFOV ${metadata.nCfovPixelsValid}`)
+    lines.push(`  Ventana: ${info.energyWindowName || 'sin dato'}`)
+
+    for (const row of evaluation.comparison) {
+      lines.push(`  ${row.label}: ${row.value.toFixed(2)} % (limite ${row.limit} %)`)
+    }
+    for (const item of evaluation.checks) {
+      lines.push(`  [${item.status}] ${item.label}: ${item.value}`)
+    }
+    lines.push('')
+  }
+
+  return lines.join('\n')
+}
+
+function CopyButton({ label, build }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    const text = build()
+    if (!text) return
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  return (
+    <button onClick={handleCopy} className={copied ? 'unif-copied' : ''}>
+      {copied ? 'Copiado' : label}
+    </button>
+  )
+}
+
+function FrameResultsBlock({ frameIndex, info, comparison, evaluation, parsedDICOM }) {
   const canvasOrigRef = useRef()
   const canvasGeoUFOVRef = useRef()
   const canvasGeoCFOVRef = useRef()
@@ -336,57 +609,34 @@ function FrameResultsBlock({ frameIndex, comparison, limits }) {
     }
   }, [comparison])
 
+  const detectorLabel = info.detectorNumber != null
+    ? `Detector ${info.detectorNumber}`
+    : `Frame ${frameIndex + 1}`
+  const windowLabel = info.energyWindowName
+    ? `${info.energyWindowName} - ${info.energyWindowLowerLimit.toFixed(1)} a ${info.energyWindowUpperLimit.toFixed(1)} keV`
+    : 'Ventana energetica sin identificar'
+
   return (
     <div style={{ marginBottom: '28px' }}>
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: '16px',
-        marginBottom: '14px',
-        padding: '12px 16px',
-        background: 'var(--bg-secondary)',
-        border: '1px solid var(--border)',
-        borderRadius: '8px'
-      }}>
-        <div style={{ fontSize: '17px', fontWeight: 700, color: 'var(--text-primary)' }}>
-          Frame {frameIndex + 1}
+      <div className="unif-frame-head">
+        <div>
+          <h2>{detectorLabel}</h2>
+          <small>{windowLabel} - {formatShape(comparison.input.rows, comparison.input.cols)}</small>
         </div>
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          {formatShape(comparison.input.rows, comparison.input.cols)}
-        </div>
+        <span className={`unif-state ${stateClass(evaluation.state)}`}>
+          <i className={`bi ${stateIcon(evaluation.state)}`}></i>
+          {evaluation.state}
+        </span>
       </div>
 
-      {comparison.input.activeCrop && (
-        <div style={{
-          marginBottom: '16px',
-          padding: '11px 16px',
-          background: 'rgba(235,203,139,0.08)',
-          borderLeft: '3px solid var(--accent-orange)',
-          borderRadius: '0 8px 8px 0',
-          fontSize: '12px',
-          color: 'var(--text-muted)'
-        }}>
-          Se detecto padding negro en la matriz DICOM. La visualizacion y el calculo usan el campo activo:
-          {' '}{formatShape(comparison.input.rows, comparison.input.cols)} dentro de {formatShape(comparison.input.originalRows, comparison.input.originalCols)}.
-        </div>
-      )}
+      <p className="unif-reason">{evaluation.reason}</p>
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-        gap: '14px',
-        marginBottom: '20px'
-      }}>
-        <ImagePanel
-          label="Imagen analizada"
-          canvasRef={canvasOrigRef}
-          subtitle={`${formatShape(comparison.input.rows, comparison.input.cols)} - frame ${frameIndex + 1}`}
-        />
+      <div className="unif-images">
+        <ImagePanel label="Imagen analizada" canvasRef={canvasOrigRef} subtitle={`${formatShape(comparison.input.rows, comparison.input.cols)} - ${detectorLabel.toLowerCase()}`} />
         {comparison.geometric.available && (
           <>
             <ImagePanel label="NEMA UFOV" canvasRef={canvasGeoUFOVRef} subtitle="Mascara del metodo geometrico" />
-            <ImagePanel label="NEMA CFOV" canvasRef={canvasGeoCFOVRef} subtitle="75 % central" />
+            <ImagePanel label="NEMA CFOV" canvasRef={canvasGeoCFOVRef} subtitle="75 % central del UFOV geometrico" />
           </>
         )}
         {comparison.pylinac.available && (
@@ -397,183 +647,90 @@ function FrameResultsBlock({ frameIndex, comparison, limits }) {
         )}
       </div>
 
-      <MethodResults result={comparison.geometric} limits={limits} />
-      <MethodResults result={comparison.pylinac} limits={limits} />
+      <NemaResults result={comparison.geometric} evaluation={evaluation} />
+      <AcquisitionChecks evaluation={evaluation} />
+      <TraceabilityPanel
+        info={info}
+        comparison={comparison}
+        evaluation={evaluation}
+        parsedDICOM={parsedDICOM}
+      />
+      <PylinacResults result={comparison.pylinac} />
     </div>
   )
 }
 
-function CopyMethodButton({ results, methodKey, label }) {
-  const [copied, setCopied] = useState(false)
-
-  const handleCopy = () => {
-    const fmt = v => Number.isFinite(v) ? v.toFixed(2).replace('.', ',') : ''
-    const rows = results
-      .map(({ frameIndex, comparison }) => {
-        const r = comparison[methodKey]
-        if (!r?.available) return null
-        const du = (region) => Math.max(r[`DUvert${region}`], r[`DUhoriz${region}`])
-        return [`H${frameIndex + 1}`, fmt(du('Cfov')), fmt(du('Ufov')), fmt(r.IUcfov), fmt(r.IUufov)].join('\t')
-      })
-      .filter(Boolean)
-    if (!rows.length) return
-    const lines = [
-      ['Uniformidad', 'UDCC', 'UDCT', 'UICC', 'UICT'].join('\t'),
-      ...rows
-    ]
-    navigator.clipboard.writeText(lines.join('\n')).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
-  }
-
-  return (
-    <button
-      onClick={handleCopy}
-      title={`Copiar ${label} en formato Excel`}
-      style={{
-        background: copied ? 'var(--accent-green, #22c55e)' : 'var(--bg-tertiary)',
-        color: copied ? '#fff' : 'var(--text-muted)',
-        border: '1px solid var(--border)',
-        borderRadius: '6px',
-        padding: '4px 12px',
-        fontSize: '11px',
-        cursor: 'pointer',
-        transition: 'all 0.2s'
-      }}
-    >
-      {copied ? 'Copiado' : `Copiar ${label}`}
-    </button>
-  )
-}
-
-function MethodResults({ result, limits }) {
-  if (!result) return null
-
-  if (!result.available) {
+function NemaResults({ result, evaluation }) {
+  if (!result?.available) {
     return (
       <div className="calc-card" style={{ marginBottom: '20px' }}>
-        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-          {result.method === 'nema_geometric' ? 'NEMA geometrico' : 'Pylinac/IAEA'}
-        </div>
-        <div style={{ fontSize: '13px', color: 'var(--accent-red)' }}>{result.error}</div>
+        <div className="unif-section-title">NEMA geometrico</div>
+        <div style={{ fontSize: '13px', color: 'var(--accent-red)' }}>{result?.error}</div>
       </div>
     )
   }
 
-  const duUfov = maxDU(result, 'ufov')
-  const duCfov = maxDU(result, 'cfov')
-  const tableRows = [
-    { param: 'Uniformidad Integral (IU)', region: 'UFOV', val: result.IUufov, limit: limits.IUufov },
-    { param: 'Uniformidad Integral (IU)', region: 'CFOV', val: result.IUcfov, limit: limits.IUcfov },
-    { param: 'Uniformidad Diferencial vertical', region: 'UFOV', val: result.DUvertUfov, limit: limits.DUufov },
-    { param: 'Uniformidad Diferencial horizontal', region: 'UFOV', val: result.DUhorizUfov, limit: limits.DUufov },
-    { param: 'Uniformidad Diferencial vertical', region: 'CFOV', val: result.DUvertCfov, limit: limits.DUcfov },
-    { param: 'Uniformidad Diferencial horizontal', region: 'CFOV', val: result.DUhorizCfov, limit: limits.DUcfov }
-  ]
+  const profile = evaluation.profile
+  const hasSpecs = Boolean(profile?.specs)
+  const metadata = result.metadata || {}
 
   return (
     <div className="calc-card" style={{ marginBottom: '20px' }}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'baseline',
-        gap: '16px',
-        flexWrap: 'wrap',
-        marginBottom: '16px'
-      }}>
+      <div className="unif-method-head">
         <div>
-          <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)' }}>{result.label}</div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            {formatShape(result.rows, result.cols)}
-            {result.metadata?.blockSize && <span> - block {result.metadata.blockSize.join(' x ')}</span>}
-            {result.metadata?.binSize && <span> - bin {result.metadata.binSize}</span>}
-            {result.metadata?.ufovSource && <span> - UFOV {result.metadata.ufovSource}</span>}
-            {result.metadata?.ufovBBoxFinal && <span> - UFOV bbox {formatBBox(result.metadata.ufovBBoxFinal)}</span>}
-            {result.metadata?.cfovBBoxFinal && <span> - CFOV bbox {formatBBox(result.metadata.cfovBBoxFinal)}</span>}
-          </div>
+          <h3>Metodo NEMA NU 1-2007 estricto</h3>
+          <p>
+            {formatShape(result.rows, result.cols)} - bloque {metadata.blockSize?.join(' x ')} - pixel{' '}
+            {metadata.pixelSpacingResampledMm?.map((v) => v.toFixed(2)).join(' x ')} mm - UFOV {metadata.ufovSource}
+          </p>
         </div>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-          Limites Siemens Symbia Intevo / Intevo Bold
+        <div className="unif-profile-tag">
+          {hasSpecs ? profile.label : 'Sin perfil de limites'}
+          <br />
+          {profile?.source}
         </div>
       </div>
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))',
-        gap: '14px',
-        marginBottom: '20px'
-      }}>
-        <MetricCard label="IU UFOV" value={result.IUufov} limit={limits.IUufov} />
-        <MetricCard label="IU CFOV" value={result.IUcfov} limit={limits.IUcfov} />
-        <MetricCard label="DU UFOV" value={duUfov} limit={limits.DUufov} />
-        <MetricCard label="DU CFOV" value={duCfov} limit={limits.DUcfov} />
+      <div className="unif-metrics">
+        <Metric label="IU UFOV" value={result.IUufov} limit={hasSpecs ? profile.specs.IUufov : null} />
+        <Metric label="IU CFOV" value={result.IUcfov} limit={hasSpecs ? profile.specs.IUcfov : null} />
+        <Metric label="DU UFOV" value={maxDU(result, 'ufov')} limit={hasSpecs ? profile.specs.DUufov : null} />
+        <Metric label="DU CFOV" value={maxDU(result, 'cfov')} limit={hasSpecs ? profile.specs.DUcfov : null} />
       </div>
 
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13.5px' }}>
+      <div className="unif-table-wrap">
+        <table className="unif-table">
           <thead>
             <tr>
-              {['Parametro', 'Region', 'Valor', 'Limite ref.', 'Estado'].map((h) => (
-                <th key={h} style={{
-                  background: 'var(--bg-tertiary)',
-                  color: 'var(--text-muted)',
-                  fontWeight: 600,
-                  fontSize: '10.5px',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px',
-                  padding: '10px 16px',
-                  textAlign: 'left',
-                  borderBottom: '1px solid var(--border)'
-                }}>{h}</th>
-              ))}
+              <th>Parametro</th>
+              <th>Region</th>
+              <th>Valor</th>
+              <th>Limite del perfil</th>
+              <th>Comparacion</th>
             </tr>
           </thead>
           <tbody>
-            {tableRows.map((row, idx) => {
-              const badge = getBadge(row.val, row.limit)
+            {[
+              { param: 'Uniformidad integral (IU)', region: 'UFOV', value: result.IUufov, key: 'IUufov' },
+              { param: 'Uniformidad integral (IU)', region: 'CFOV', value: result.IUcfov, key: 'IUcfov' },
+              { param: 'Uniformidad diferencial vertical', region: 'UFOV', value: result.DUvertUfov, key: 'DUufov' },
+              { param: 'Uniformidad diferencial horizontal', region: 'UFOV', value: result.DUhorizUfov, key: 'DUufov' },
+              { param: 'Uniformidad diferencial vertical', region: 'CFOV', value: result.DUvertCfov, key: 'DUcfov' },
+              { param: 'Uniformidad diferencial horizontal', region: 'CFOV', value: result.DUhorizCfov, key: 'DUcfov' }
+            ].map((row, index) => {
+              const limit = hasSpecs ? profile.specs[row.key] : null
+              const within = limit != null && Number.isFinite(row.value) ? row.value <= limit : null
               return (
-                <tr key={idx}>
-                  <td style={{
-                    padding: '11px 16px',
-                    borderBottom: '1px solid var(--border-sub)',
-                    color: 'var(--text-secondary)'
-                  }}>{row.param}</td>
-                  <td style={{
-                    padding: '11px 16px',
-                    borderBottom: '1px solid var(--border-sub)',
-                    color: 'var(--text-muted)',
-                    fontSize: '12px'
-                  }}>{row.region}</td>
-                  <td style={{
-                    padding: '11px 16px',
-                    borderBottom: '1px solid var(--border-sub)',
-                    fontVariantNumeric: 'tabular-nums',
-                    fontWeight: 600,
-                    color: 'var(--text-primary)'
-                  }}>{formatPercent(row.val)}</td>
-                  <td style={{
-                    padding: '11px 16px',
-                    borderBottom: '1px solid var(--border-sub)',
-                    color: 'var(--text-muted)'
-                  }}>{`<= ${row.limit.toFixed(1)} %`}</td>
-                  <td style={{
-                    padding: '11px 16px',
-                    borderBottom: '1px solid var(--border-sub)'
-                  }}>
-                    <span style={{
-                      display: 'inline-block',
-                      padding: '3px 10px',
-                      borderRadius: '20px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      minWidth: '80px',
-                      textAlign: 'center',
-                      background: badge.background,
-                      color: badge.color,
-                      border: badge.border
-                    }}>
-                      {badge.text}
+                <tr key={index}>
+                  <td>{row.param}</td>
+                  <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{row.region}</td>
+                  <td className="unif-num">{formatPercent(row.value)}</td>
+                  <td style={{ color: 'var(--text-muted)' }}>
+                    {limit != null ? `<= ${limit.toFixed(1)} %` : 'Sin perfil'}
+                  </td>
+                  <td>
+                    <span className={`unif-pill ${within === null ? 'unif-state-none' : within ? 'unif-state-ok' : 'unif-state-fail'}`}>
+                      {within === null ? 'Sin limite' : within ? 'Dentro' : 'Fuera'}
                     </span>
                   </td>
                 </tr>
@@ -586,84 +743,174 @@ function MethodResults({ result, limits }) {
   )
 }
 
-function MetricCard({ label, value, limit }) {
-  const badge = getBadge(value, limit)
-
+function AcquisitionChecks({ evaluation }) {
   return (
-    <div style={{
-      background: 'var(--bg-secondary)',
-      border: '1px solid var(--border)',
-      borderRadius: '8px',
-      padding: '18px',
-      textAlign: 'center'
-    }}>
-      <div style={{
-        fontSize: '10px',
-        fontWeight: 600,
-        textTransform: 'uppercase',
-        letterSpacing: '0.7px',
-        color: 'var(--text-muted)',
-        marginBottom: '8px'
-      }}>{label}</div>
-      <div style={{
-        fontSize: '1.8rem',
-        fontWeight: 700,
-        fontVariantNumeric: 'tabular-nums',
-        color: 'var(--text-primary)'
-      }}>{Number.isFinite(value) ? value.toFixed(2) : '--'}</div>
-      <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>%</div>
-      <div style={{
-        display: 'inline-block',
-        marginTop: '8px',
-        padding: '3px 10px',
-        borderRadius: '20px',
-        fontSize: '11px',
-        fontWeight: 600,
-        background: badge.background,
-        color: badge.color,
-        border: badge.border
-      }}>
-        {badge.text}
+    <div className="calc-card" style={{ marginBottom: '20px' }}>
+      <div className="unif-section-title">Validez de la adquisicion</div>
+      <div className="unif-table-wrap">
+        <table className="unif-table">
+          <thead>
+            <tr>
+              <th>Requisito</th>
+              <th>Valor</th>
+              <th>Estado</th>
+              <th>Detalle</th>
+            </tr>
+          </thead>
+          <tbody>
+            {evaluation.checks.map((item) => {
+              const pill = checkPill(item.status)
+              return (
+                <tr key={item.id}>
+                  <td>{item.label}</td>
+                  <td className="unif-num">{item.value}</td>
+                  <td><span className={`unif-pill ${pill.className}`}>{pill.text}</span></td>
+                  <td className="unif-detail">{item.detail}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   )
 }
 
-function ImagePanel({ label, canvasRef, subtitle }) {
+function TraceabilityPanel({ info, comparison, evaluation, parsedDICOM }) {
+  const metadata = comparison.geometric.metadata || {}
+  const rows = [
+    ['Metodo y version', `${metadata.method} - ${metadata.methodVersion}`],
+    ['Equipo', `${parsedDICOM.manufacturer} ${parsedDICOM.modelName}`],
+    ['Software', parsedDICOM.softwareVersions.join(' | ') || 'Sin dato'],
+    ['Transfer syntax', parsedDICOM.transferSyntaxUID || 'Implicit VR Little Endian'],
+    ['Bits', `${parsedDICOM.bitsStored} de ${parsedDICOM.bitsAllocated} (high bit ${parsedDICOM.highBit}, ${parsedDICOM.pixelRepresentation === 1 ? 'con signo' : 'sin signo'})`],
+    ['Pixel original', parsedDICOM.pixelSpacing ? `${parsedDICOM.pixelSpacing.map((v) => v.toFixed(3)).join(' x ')} mm` : 'Sin dato'],
+    ['Pixel de analisis', metadata.pixelSpacingResampledMm ? `${metadata.pixelSpacingResampledMm.map((v) => v.toFixed(2)).join(' x ')} mm` : 'Sin dato'],
+    ['Bloque de suma', metadata.blockSize?.join(' x ') || 'Sin dato'],
+    ['Matriz de analisis', metadata.resampledShape ? formatShape(metadata.resampledShape[0], metadata.resampledShape[1]) : 'Sin dato'],
+    ['Origen del UFOV', metadata.ufovSource || 'Sin dato'],
+    ['UFOV geometrico', formatBBox(metadata.ufovBBoxInitial)],
+    ['UFOV valido', formatBBox(metadata.ufovBBoxFinal)],
+    ['CFOV', formatBBox(metadata.cfovBBoxFinal)],
+    ['FOV almacenado', parsedDICOM.fov ? `${parsedDICOM.fov.raw.join(' x ')} mm, orden ${parsedDICOM.fov.order === 'swapped' ? 'invertido' : 'estandar'}` : 'Sin dato'],
+    ['Umbral de borde', `${formatCount(metadata.edgeThreshold)} cuentas (75 % de ${formatCount(metadata.cfovMeanRaw)})`],
+    ['Eliminados por umbral', formatCount(metadata.nRemovedByThreshold)],
+    ['Eliminados por cero o bloque contaminado', formatCount(metadata.nRemovedZeroOrContaminated)],
+    ['Eliminados por vecindad', formatCount(metadata.nRemovedByNeighbour)],
+    ['Bloques contaminados en el UFOV', formatCount(metadata.nZeroContaminatedInUfov)],
+    ['Pixeles validos UFOV / CFOV', `${formatCount(metadata.nUfovPixelsValid)} / ${formatCount(metadata.nCfovPixelsValid)}`],
+    ['Cuentas pixel central', formatCount(metadata.centerCountResampled)],
+    ['Cuentas maximas en CFOV', formatCount(metadata.maxCountCfov)],
+    ['Detector y ventana', `${info.detectorNumber != null ? `Detector ${info.detectorNumber}` : 'Sin identificar'} - ${info.energyWindowName || 'sin ventana'}`],
+    ['Colimador', info.collimatorType || 'Sin dato'],
+    ['Correcciones', parsedDICOM.correctedImage.join(', ') || 'Sin dato'],
+    ['Perfil de limites', `${evaluation.profile?.label} (${evaluation.profile?.source})`],
+    ['Estado final', evaluation.state]
+  ]
+
+  // Ningun aviso calculado debe quedarse sin salir por algun sitio.
+  if (metadata.ufovFromImage) {
+    rows.splice(11, 0, ['Aviso', 'El UFOV no viene del DICOM: se ha estimado por isolinea sobre la propia imagen.'])
+  }
+  if (metadata.fallbackReason) {
+    rows.splice(11, 0, ['Aviso', `Se recurrio al UFOV automatico: ${metadata.fallbackReason}`])
+  }
+
   return (
-    <div style={{
-      background: 'var(--bg-secondary)',
-      border: '1px solid var(--border)',
-      borderRadius: '8px',
-      padding: '14px',
-      textAlign: 'center'
-    }}>
-      <div style={{
-        fontSize: '10.5px',
-        fontWeight: 600,
-        textTransform: 'uppercase',
-        letterSpacing: '0.6px',
-        color: 'var(--text-muted)',
-        marginBottom: '10px'
-      }}>
-        <i className={`bi ${label.includes('Imagen') ? 'bi-image' : label.includes('UFOV') ? 'bi-bounding-box' : 'bi-bounding-box-circles'}`}></i>
-        &nbsp; {label}
+    <details className="calc-card unif-trace" style={{ marginBottom: '20px' }}>
+      <summary>Trazabilidad del calculo</summary>
+      <dl>
+        {rows.map(([term, value]) => (
+          <div key={term}>
+            <dt>{term}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  )
+}
+
+function PylinacResults({ result }) {
+  if (!result) return null
+
+  return (
+    <div className="calc-card" style={{ marginBottom: '20px' }}>
+      <div className="unif-method-head">
+        <div>
+          <h3>Aproximacion Pylinac/IAEA</h3>
+          <p>
+            Segunda via de contraste. No implementa la geometria de NU 1-2007: halla el campo por
+            umbral y erosion isotropica en vez de por el UFOV declarado, y no aplica la regla de
+            borde de la norma. Sus numeros no declaran conformidad NEMA.
+          </p>
+        </div>
       </div>
-      <canvas
-        ref={canvasRef}
-        style={{
-          width: '100%',
-          height: 'auto',
-          imageRendering: 'pixelated',
-          borderRadius: '6px',
-          display: 'block'
-        }}
-      />
-      <div style={{
-        fontSize: '11px',
-        color: 'var(--text-muted)',
-        marginTop: '6px'
-      }}>{subtitle}</div>
+
+      {!result.available ? (
+        <div style={{ fontSize: '13px', color: 'var(--accent-red)' }}>{result.error}</div>
+      ) : (
+        <div className="unif-table-wrap">
+          <table className="unif-table">
+            <thead>
+              <tr>
+                <th>Parametro</th>
+                <th>UFOV</th>
+                <th>CFOV</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Uniformidad integral (IU)</td>
+                <td className="unif-num">{formatPercent(result.IUufov)}</td>
+                <td className="unif-num">{formatPercent(result.IUcfov)}</td>
+              </tr>
+              <tr>
+                <td>Uniformidad diferencial maxima</td>
+                <td className="unif-num">{formatPercent(maxDU(result, 'ufov'))}</td>
+                <td className="unif-num">{formatPercent(maxDU(result, 'cfov'))}</td>
+              </tr>
+              <tr>
+                <td>Matriz y binning</td>
+                <td className="unif-detail" colSpan={2}>
+                  {formatShape(result.rows, result.cols)} con bin {result.metadata?.binSize}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Metric({ label, value, limit }) {
+  const within = limit != null && Number.isFinite(value) ? value <= limit : null
+
+  return (
+    <div className="unif-metric">
+      <span>{label}</span>
+      <strong>{Number.isFinite(value) ? value.toFixed(2) : '--'}</strong>
+      <small>
+        {limit != null ? `limite ${limit.toFixed(1)} %` : 'sin limite aplicable'}
+      </small>
+      <span className={`unif-pill ${within === null ? 'unif-state-none' : within ? 'unif-state-ok' : 'unif-state-fail'}`} style={{ marginTop: '8px' }}>
+        {within === null ? 'Sin limite' : within ? 'Dentro' : 'Fuera'}
+      </span>
+    </div>
+  )
+}
+
+function ImagePanel({ label, canvasRef, subtitle }) {
+  const icon = label.includes('Imagen')
+    ? 'bi-image'
+    : label.includes('UFOV') ? 'bi-bounding-box' : 'bi-bounding-box-circles'
+
+  return (
+    <div className="unif-image">
+      <h4><i className={`bi ${icon}`}></i>&nbsp; {label}</h4>
+      <canvas ref={canvasRef} />
+      <small>{subtitle}</small>
     </div>
   )
 }

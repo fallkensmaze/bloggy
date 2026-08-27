@@ -2,13 +2,13 @@ import dcmjs from 'dcmjs'
 
 const { DicomMessage, DicomMetaDictionary } = dcmjs.data
 
-const NATIVE_TRANSFER_SYNTAXES = new Set([
-  '',
-  '1.2.840.10008.1.2',
-  '1.2.840.10008.1.2.1',
-  '1.2.840.10008.1.2.1.99',
-  '1.2.840.10008.1.2.2'
-])
+import {
+  NATIVE_TRANSFER_SYNTAXES,
+  getPixelDataBytes,
+  normalizeStoredPixel,
+  readTransferSyntaxUid,
+  readUnsignedPixel
+} from "./dicomPixels.js"
 
 function firstValue(value) {
   if (Array.isArray(value)) return value[0]
@@ -60,11 +60,6 @@ function getNaturalizedMeta(dicomData) {
   }
 }
 
-function getTransferSyntaxUid(dicomData, meta) {
-  const naturalized = toText(meta.TransferSyntaxUID)
-  if (naturalized) return naturalized
-  return toText(dicomData.meta?.dict?.['00020010']?.Value)
-}
 
 function getFunctionalGroups(dataset) {
   const shared = firstSequenceItem(dataset.SharedFunctionalGroupsSequence) || {}
@@ -210,7 +205,7 @@ function extractHeader(dicomData, dataset, meta) {
     highBit: toNumber(dataset.HighBit, toNumber(dataset.BitsStored, 16) - 1),
     pixelRepresentation: toNumber(dataset.PixelRepresentation, 0),
     samplesPerPixel: Math.max(1, toNumber(dataset.SamplesPerPixel, 1)),
-    transferSyntaxUid: getTransferSyntaxUid(dicomData, meta),
+    transferSyntaxUid: readTransferSyntaxUid(dicomData),
     pixelSpacing: getPixelSpacing(dataset, functionalGroups),
     spacingBetweenSlices,
     sliceThickness,
@@ -238,46 +233,6 @@ function extractHeader(dicomData, dataset, meta) {
 function readHeader(arrayBuffer) {
   const { dicomData, dataset, meta } = readDicomStructure(arrayBuffer)
   return extractHeader(dicomData, dataset, meta)
-}
-
-function getPixelDataBytes(pixelDataElement, arrayBuffer) {
-  const value = pixelDataElement.Value || pixelDataElement.value
-  const first = Array.isArray(value) ? value[0] : value
-
-  if (first instanceof ArrayBuffer) return new Uint8Array(first)
-  if (ArrayBuffer.isView(first)) {
-    return new Uint8Array(first.buffer, first.byteOffset, first.byteLength)
-  }
-  if (typeof first === 'string') {
-    const binary = atob(first)
-    const bytes = new Uint8Array(binary.length)
-    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index)
-    return bytes
-  }
-
-  if (
-    pixelDataElement.dataOffset == null
-    || pixelDataElement.length == null
-    || pixelDataElement.length <= 0
-  ) {
-    throw new Error('Pixel Data sin offset o encapsulado no soportado.')
-  }
-  return new Uint8Array(arrayBuffer, pixelDataElement.dataOffset, pixelDataElement.length)
-}
-
-function readUnsignedPixel(view, byteOffset, bitsAllocated, littleEndian) {
-  if (bitsAllocated === 8) return view.getUint8(byteOffset)
-  if (bitsAllocated === 16) return view.getUint16(byteOffset, littleEndian)
-  if (bitsAllocated === 32) return view.getUint32(byteOffset, littleEndian)
-  throw new Error(`Bits Allocated=${bitsAllocated} no soportado.`)
-}
-
-function normalizeStoredPixel(rawValue, bitsStored, highBit, pixelRepresentation) {
-  const shift = Math.max(0, highBit - bitsStored + 1)
-  const range = 2 ** bitsStored
-  let value = Math.floor(rawValue / 2 ** shift) % range
-  if (pixelRepresentation === 1 && value >= range / 2) value -= range
-  return value
 }
 
 function decodeDicom(arrayBuffer) {

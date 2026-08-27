@@ -10,7 +10,7 @@ import {
   Legend
 } from 'chart.js'
 import { Bar, Line } from 'react-chartjs-2'
-import { analyzePetNema } from '../utils/petNemaAnalysis'
+import { analyzePetNema, describeBackgroundRois } from '../utils/petNemaAnalysis'
 import { collectDroppedFiles, loadPetDicomSeries } from '../utils/petNemaDicom'
 import '../styles/pet-nema-analysis.css'
 
@@ -41,6 +41,21 @@ function parseDecimal(value) {
 
 function finite(value, digits = 2) {
   return Number.isFinite(value) ? value.toFixed(digits) : '—'
+}
+
+// En el servicio se adquieren las dos: 4:1 es la relacion esfera-fondo que
+// prescribe NU 2-2018 y 8:1 es una adquisicion adicional propia, no un error
+// operativo. La etiqueta lo dice; los calculos de Q_H, N_j y error pulmonar son
+// los mismos y derivan la relacion real de a_H/a_B.
+function protocolLabel(ratio) {
+  if (!Number.isFinite(ratio)) return null
+  if (Math.abs(ratio - 4) <= 0.5) {
+    return { text: 'Adquisición conforme al protocolo NU 2-2018', local: false }
+  }
+  if (Math.abs(ratio - 8) <= 0.5) {
+    return { text: 'Adquisición adicional del servicio (histórica 8:1)', local: true }
+  }
+  return { text: 'Relación fuera de los protocolos habituales 4:1 y 8:1', local: true }
 }
 
 function concentrationPresentation(value, units) {
@@ -100,8 +115,26 @@ function drawEllipse(context, x, y, radiusX, radiusY, color, width = 1.5) {
   context.stroke()
 }
 
-function CentralRoiCanvas({ series, results }) {
+const BACKGROUND_ROI_DIAMETER_MM = 37
+
+// Blue is a ROI that meets everything NEMA requires. Orange is one that
+// overlaps another background ROI: the standard does not forbid it, so it is a
+// quantified warning, not a failure. Red is a mandatory constraint broken -
+// closer than 15 mm to the edge of the phantom, or touching a sphere or the
+// lung insert - and while any ROI is red the calculation and the export stay
+// blocked, because a background ROI over hot activity is not measuring
+// background.
+function roiColor(diagnostic) {
+  if (!diagnostic) return CHART_COLORS.blue
+  if (diagnostic.violatesEdge || diagnostic.violatesSphere || diagnostic.violatesLung) return CHART_COLORS.red
+  if (diagnostic.overlapsWith.length) return CHART_COLORS.orange
+  return CHART_COLORS.blue
+}
+
+function CentralRoiCanvas({ series, results, rois, diagnostics, onMoveRoi }) {
   const canvasRef = useRef(null)
+  const viewRef = useRef(null)
+  const dragRef = useRef(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -135,6 +168,7 @@ function CentralRoiCanvas({ series, results }) {
     const scaleY = logicalHeight / cropHeight
     const mapX = (pixelX) => (pixelX - x0) * scaleX
     const mapY = (pixelY) => (pixelY - y0) * scaleY
+    viewRef.current = { x0, y0, scaleX, scaleY, logicalWidth, logicalHeight, pixelWidth, pixelHeight }
 
     for (const sphere of results.spheres) {
       drawEllipse(
@@ -151,17 +185,29 @@ function CentralRoiCanvas({ series, results }) {
       context.fillText(`${sphere.diameterMm}`, mapX(sphere.centerX) + 7, mapY(sphere.centerY) - 7)
     }
 
-    for (const roi of results.backgroundRois) {
+    rois.forEach((roi, index) => {
+      const diagnostic = diagnostics?.rois?.[index]
+      const color = roiColor(diagnostic)
+      const centerX = mapX(roi.xMm / pixelWidth)
+      const centerY = mapY(roi.yMm / pixelHeight)
+
       drawEllipse(
         context,
-        mapX(roi.xMm / pixelWidth),
-        mapY(roi.yMm / pixelHeight),
-        37 / 2 / pixelWidth * scaleX,
-        37 / 2 / pixelHeight * scaleY,
-        CHART_COLORS.blue,
-        1.3
+        centerX,
+        centerY,
+        BACKGROUND_ROI_DIAMETER_MM / 2 / pixelWidth * scaleX,
+        BACKGROUND_ROI_DIAMETER_MM / 2 / pixelHeight * scaleY,
+        color,
+        color === CHART_COLORS.blue ? 1.3 : 2
       )
-    }
+      context.fillStyle = color
+      context.font = '600 10px Inter, sans-serif'
+      context.textAlign = 'center'
+      context.textBaseline = 'middle'
+      context.fillText(`${index + 1}`, centerX, centerY)
+      context.textAlign = 'start'
+      context.textBaseline = 'alphabetic'
+    })
 
     drawEllipse(
       context,
@@ -172,9 +218,69 @@ function CentralRoiCanvas({ series, results }) {
       CHART_COLORS.green,
       1.8
     )
-  }, [series, results])
+  }, [series, results, rois, diagnostics])
 
-  return <canvas ref={canvasRef} className="pet-analysis-canvas" aria-label="Corte central PET con las ROIs NEMA" />
+  const toMillimetres = (event) => {
+    const view = viewRef.current
+    const canvas = canvasRef.current
+    if (!view || !canvas) return null
+
+    const rect = canvas.getBoundingClientRect()
+    const logicalX = (event.clientX - rect.left) / rect.width * view.logicalWidth
+    const logicalY = (event.clientY - rect.top) / rect.height * view.logicalHeight
+    return {
+      xMm: (logicalX / view.scaleX + view.x0) * view.pixelWidth,
+      yMm: (logicalY / view.scaleY + view.y0) * view.pixelHeight
+    }
+  }
+
+  const handlePointerDown = (event) => {
+    if (!onMoveRoi) return
+    const point = toMillimetres(event)
+    if (!point) return
+
+    let nearest = null
+    let nearestDistance = Infinity
+    rois.forEach((roi, index) => {
+      const distance = Math.hypot(roi.xMm - point.xMm, roi.yMm - point.yMm)
+      if (distance < nearestDistance) {
+        nearestDistance = distance
+        nearest = index
+      }
+    })
+
+    if (nearest == null || nearestDistance > BACKGROUND_ROI_DIAMETER_MM / 2) return
+    dragRef.current = nearest
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }
+
+  const handlePointerMove = (event) => {
+    if (dragRef.current == null) return
+    const point = toMillimetres(event)
+    if (!point) return
+    onMoveRoi(dragRef.current, point)
+  }
+
+  const handlePointerUp = (event) => {
+    if (dragRef.current == null) return
+    dragRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className={`pet-analysis-canvas${onMoveRoi ? ' pet-analysis-canvas-editable' : ''}`}
+      aria-label="Corte central PET con las ROIs NEMA"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+    />
+  )
 }
 
 function CoronalCanvas({ series, results }) {
@@ -334,6 +440,7 @@ function PetNemaAnalysis() {
   const [progressState, setProgressState] = useState(null)
   const [status, setStatus] = useState('Arrastra una carpeta o los archivos DICOM de la serie PET.')
   const [error, setError] = useState('')
+  const [manualRois, setManualRois] = useState(null)
 
   const activityRatio = useMemo(() => {
     const hot = parseDecimal(sphereActivity)
@@ -344,6 +451,51 @@ function PetNemaAnalysis() {
   const resetAnalysis = () => {
     setResults(null)
     setError('')
+    setManualRois(null)
+  }
+
+  // Las ROIs que se dibujan y se miden: las manuales si el usuario ha movido
+  // alguna, y si no la solucion automatica del ultimo calculo.
+  const activeRois = manualRois || results?.backgroundRois || null
+
+  // Validacion en vivo con la misma geometria que uso el optimizador, para que
+  // arrastrar una ROI marque el incumplimiento sin tener que recalcular.
+  const roiDiagnostics = useMemo(() => {
+    if (!series || !results || !activeRois) return null
+    const [pixelHeight, pixelWidth] = series.pixelSpacing
+    return describeBackgroundRois(
+      activeRois.map((roi) => ({ xMm: roi.xMm, yMm: roi.yMm })),
+      results.distanceToEdgePx,
+      series.rows,
+      series.cols,
+      pixelWidth,
+      pixelHeight,
+      { xMm: results.phantom.xMm, yMm: results.phantom.yMm },
+      results.spheres,
+      results.options
+    )
+  }, [series, results, activeRois])
+
+  const roiBlocked = Boolean(roiDiagnostics?.violations.length)
+  const appliedRois = results?.backgroundRois || null
+  const roiDirty = Boolean(manualRois && appliedRois && manualRois.some((roi, index) => (
+    roi.xMm !== appliedRois[index].xMm || roi.yMm !== appliedRois[index].yMm
+  )))
+  const roiManual = roiDirty || Boolean(results?.backgroundRoiMetrics.manual)
+
+  const handleMoveRoi = (index, point) => {
+    setManualRois((previous) => {
+      const base = previous || results.backgroundRois.map((roi) => ({ xMm: roi.xMm, yMm: roi.yMm }))
+      const next = base.map((roi) => ({ xMm: roi.xMm, yMm: roi.yMm }))
+      next[index] = { xMm: point.xMm, yMm: point.yMm }
+      return next
+    })
+  }
+
+  const restoreAutomaticRois = () => {
+    setManualRois(null)
+    setError('')
+    if (results?.backgroundRoiMetrics.manual) calculate(null)
   }
 
   const handleFiles = async (incomingFiles) => {
@@ -395,8 +547,9 @@ function PetNemaAnalysis() {
     }
   }
 
-  const calculate = async () => {
+  const calculate = async (roisOverride) => {
     if (!series) return
+    const roisToUse = roisOverride === undefined ? manualRois : roisOverride
     const hot = parseDecimal(sphereActivity)
     const background = parseDecimal(backgroundActivity)
     const threshold = parseDecimal(thresholdPercent)
@@ -417,10 +570,11 @@ function PetNemaAnalysis() {
         centralSliceIndex: manualCentral,
         sphereThresholdFraction: threshold / 100,
         lungRangeStartIndex: manualLungStart,
-        lungRangeEndIndex: manualLungEnd
+        lungRangeEndIndex: manualLungEnd,
+        backgroundRois: roisToUse || undefined
       })
       setResults(analysis)
-      setStatus(`Análisis completado según ${analysis.standard}.`)
+      setStatus(`Análisis completado según ${analysis.standard}${roisToUse ? ' con las ROIs de fondo colocadas a mano' : ''}.`)
     } catch (analysisError) {
       setError(analysisError.message)
       setStatus('No se pudo completar el análisis.')
@@ -440,7 +594,7 @@ function PetNemaAnalysis() {
   }
 
   const exportQn = () => {
-    if (!results) return
+    if (!results || roiBlocked) return
     const rows = [
       ['diametro_mm', 'C_hot_DICOM', 'C_fondo_DICOM', 'Q_pct', 'N_pct'],
       ...results.spheres.map((sphere) => [
@@ -455,7 +609,7 @@ function PetNemaAnalysis() {
   }
 
   const exportLung = () => {
-    if (!results) return
+    if (!results || roiBlocked) return
     const rows = [
       ['corte', 'distancia_mm', 'delta_pulmon_pct'],
       ...results.lung.profile.map((point) => [
@@ -635,6 +789,11 @@ function PetNemaAnalysis() {
             <div className="pet-analysis-ratio">
               <span>Relación a_H/a_B</span>
               <strong>{Number.isFinite(activityRatio) ? `${finite(activityRatio, 2)}:1` : '—'}</strong>
+              {protocolLabel(activityRatio) && (
+                <span className={`pet-analysis-protocol${protocolLabel(activityRatio).local ? ' pet-analysis-protocol-local' : ''}`}>
+                  {protocolLabel(activityRatio).text}
+                </span>
+              )}
             </div>
           </div>
 
@@ -657,7 +816,7 @@ function PetNemaAnalysis() {
             <p>El rango pulmonar automático excluye 30 mm de cada extremo axial del maniquí.</p>
           </details>
 
-          <button className="pet-analysis-calculate" type="button" disabled={loading} onClick={calculate}>
+          <button className="pet-analysis-calculate" type="button" disabled={loading || roiBlocked} onClick={() => calculate()}>
             <i className={`bi ${loading ? 'bi-hourglass-split' : 'bi-play-fill'}`}></i>
             {loading ? ' Calculando…' : ' Calcular análisis NEMA'}
           </button>
@@ -681,7 +840,11 @@ function PetNemaAnalysis() {
                 detail={results.automaticCentralSlice == null ? 'selección manual' : `automático: ${results.automaticCentralSlice + 1}`}
                 accent="blue"
               />
-              <Metric label="Relación real" value={`${finite(results.activityRatio, 2)}:1`} detail="a_H/a_B" />
+              <Metric
+                label="Relación real"
+                value={`${finite(results.activityRatio, 2)}:1`}
+                detail={protocolLabel(results.activityRatio)?.text || 'a_H/a_B'}
+              />
               <Metric
                 label="Coplanaridad"
                 value={`${finite(results.alignment.maximumAxialDeviationMm, 1)} mm`}
@@ -701,13 +864,47 @@ function PetNemaAnalysis() {
             <SectionHeading icon="bi-image" title="ROIs y alineación" subtitle="Superposición sobre el corte central y comprobación coronal" />
             <div className="pet-analysis-view-grid">
               <figure>
-                <CentralRoiCanvas series={series} results={results} />
-                <figcaption>Corte {results.centralSlice + 1}: esferas, 12 posiciones de fondo e inserto pulmonar.</figcaption>
+                <CentralRoiCanvas
+                  series={series}
+                  results={results}
+                  rois={activeRois}
+                  diagnostics={roiDiagnostics}
+                  onMoveRoi={handleMoveRoi}
+                />
+                <figcaption>
+                  Corte {results.centralSlice + 1}: esferas, 12 posiciones de fondo e inserto pulmonar.
+                  Arrastra cualquier ROI de fondo para recolocarla; las mismas coordenadas se aplican a los cinco cortes.
+                </figcaption>
                 <div className="pet-analysis-legend">
                   <span><i className="red"></i> Esferas</span>
-                  <span><i className="blue"></i> Fondo</span>
+                  <span><i className="blue"></i> Fondo correcto</span>
+                  <span><i className="orange"></i> Fondo solapado</span>
+                  <span><i className="red"></i> Fondo no conforme</span>
                   <span><i className="green"></i> Pulmón</span>
                 </div>
+                <div className="pet-analysis-roi-actions">
+                  <button type="button" onClick={restoreAutomaticRois} disabled={!roiManual}>
+                    <i className="bi bi-arrow-counterclockwise"></i> Restaurar distribución automática
+                  </button>
+                  <span>
+                    {roiDirty
+                      ? 'Posiciones manuales sin aplicar: vuelve a calcular para que entren en Q y N.'
+                      : roiManual
+                        ? 'Posiciones manuales aplicadas a los cinco cortes.'
+                        : 'Distribución automática: lo más cerca posible del borde, a 15 mm como mínimo.'}
+                  </span>
+                </div>
+                {roiDiagnostics?.violations.map((violation) => (
+                  <div className="pet-analysis-violation" key={violation}>
+                    <i className="bi bi-x-octagon"></i><span>{violation}</span>
+                  </div>
+                ))}
+                {roiBlocked && (
+                  <div className="pet-analysis-violation">
+                    <i className="bi bi-lock"></i>
+                    <span>El cálculo y la exportación están bloqueados mientras alguna ROI incumpla una restricción obligatoria.</span>
+                  </div>
+                )}
               </figure>
               <figure>
                 <CoronalCanvas series={series} results={results} />
@@ -777,21 +974,92 @@ function PetNemaAnalysis() {
             <div className="pet-analysis-diagnostics">
               <Metric label="Nivel de fondo estimado" value={`${finite(concentrationPresentation(results.phantom.backgroundLevel, series.units).value, 2)} ${concentrationPresentation(results.phantom.backgroundLevel, series.units).unit}`} />
               <Metric label="Radio del anillo" value={`${finite(results.phantom.averageRadiusMm, 1)} ± ${finite(results.phantom.radiusSdMm, 1)} mm`} />
-              <Metric label="Separación mínima entre ROIs" value={`${finite(results.minimumBackgroundRoiSeparationMm, 1)} mm`} />
               <Metric label="Cuerpo axial" value={`${results.bodyRange.startSlice + 1}–${results.bodyRange.endSlice + 1}`} detail={`${finite(results.bodyRange.lengthMm, 0)} mm`} />
+              <Metric
+                label="Colocación"
+                value={roiManual ? 'Manual' : 'Automática'}
+                detail="12 ROIs de 37 mm"
+              />
             </div>
+
+            <h3 className="pet-analysis-subheading">Geometría de las ROIs de fondo</h3>
+            <div className="pet-analysis-diagnostics">
+              <Metric
+                label="Separación mínima entre centros"
+                value={`${finite(roiDiagnostics?.minimumCenterSeparationMm, 1)} mm`}
+                detail={roiDiagnostics?.minimumCenterSeparationMm >= 37 ? 'sin solapamiento' : 'hay solapamiento'}
+                accent={roiDiagnostics?.minimumCenterSeparationMm >= 37 ? 'green' : 'orange'}
+              />
+              <Metric
+                label="Solapamiento lineal máximo"
+                value={`${finite(roiDiagnostics?.maximumLinearOverlapMm, 1)} mm`}
+                detail={`S = max(0, 37 − d mín)`}
+                accent={roiDiagnostics?.maximumLinearOverlapMm > 0 ? 'orange' : 'green'}
+              />
+              <Metric
+                label="Parejas solapadas"
+                value={`${roiDiagnostics?.overlappingPairCount ?? 0}`}
+                detail={roiDiagnostics?.worstOverlapPair
+                  ? `peor: ROIs ${roiDiagnostics.worstOverlapPair.a} y ${roiDiagnostics.worstOverlapPair.b}`
+                  : 'ninguna'}
+                accent={roiDiagnostics?.overlappingPairCount ? 'orange' : 'green'}
+              />
+              <Metric
+                label="Holgura mínima al borde"
+                value={`${finite(roiDiagnostics?.minimumEdgeClearanceMm, 1)} mm`}
+                detail={`mínimo NEMA ${results.options.edgeMarginMm} mm`}
+                accent={roiDiagnostics?.minimumEdgeClearanceMm >= results.options.edgeMarginMm ? 'green' : 'red'}
+              />
+              <Metric
+                label="Holgura mínima a las esferas"
+                value={`${finite(roiDiagnostics?.minimumSphereClearanceMm, 1)} mm`}
+                detail={`objetivo ${results.options.sphereMarginMm} mm, obligatorio no solapar`}
+                accent={roiDiagnostics?.minimumSphereClearanceMm >= 0 ? 'green' : 'red'}
+              />
+            </div>
+
             <details className="pet-analysis-details">
               <summary>Ver las 12 posiciones de fondo</summary>
               <div className="pet-analysis-table-wrap">
                 <table className="pet-analysis-table">
-                  <thead><tr><th>ROI</th><th>x (mm)</th><th>y (mm)</th><th>Holgura a esferas</th></tr></thead>
+                  <thead>
+                    <tr>
+                      <th>ROI</th>
+                      <th>x (mm)</th>
+                      <th>y (mm)</th>
+                      <th>Al borde</th>
+                      <th>A esferas</th>
+                      <th>Solapamiento</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {results.backgroundRois.map((roi, index) => (
-                      <tr key={index}><td>{index + 1}</td><td>{finite(roi.xMm, 1)}</td><td>{finite(roi.yMm, 1)}</td><td>{finite(roi.sphereGapMm, 1)} mm</td></tr>
+                    {(roiDiagnostics?.rois || []).map((roi, index) => (
+                      <tr key={index}>
+                        <td>{index + 1}</td>
+                        <td>{finite(roi.xMm, 1)}</td>
+                        <td>{finite(roi.yMm, 1)}</td>
+                        <td className={roi.violatesEdge ? 'pet-analysis-cell-bad' : ''}>
+                          {finite(roi.edgeClearanceMm, 1)} mm
+                        </td>
+                        <td className={roi.violatesSphere ? 'pet-analysis-cell-bad' : roi.tightToSphere ? 'pet-analysis-cell-warn' : ''}>
+                          {finite(roi.sphereGapMm, 1)} mm
+                        </td>
+                        <td className={roi.maximumOverlapMm > 0 ? 'pet-analysis-cell-warn' : ''}>
+                          {roi.maximumOverlapMm > 0
+                            ? `${finite(roi.maximumOverlapMm, 1)} mm con ${roi.overlapsWith.map((other) => other + 1).join(', ')}`
+                            : '—'}
+                        </td>
+                      </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              <p className="pet-analysis-slices">
+                El solapamiento entre ROIs de fondo no incumple NU 2-2018: se informa porque en esa
+                zona las 60 medidas dejan de ser independientes. Lo que sí es obligatorio, y bloquea
+                el cálculo, es la holgura de {results.options.edgeMarginMm} mm al borde del maniquí y
+                no solapar ninguna esfera ni el inserto pulmonar.
+              </p>
             </details>
             <p className="pet-analysis-slices">
               Cortes de fondo: {results.backgroundSlices.map((slice) => `${slice.index + 1} (${slice.offsetMm >= 0 ? '+' : ''}${finite(slice.offsetMm, 0)} mm)`).join(' · ')}
@@ -801,8 +1069,8 @@ function PetNemaAnalysis() {
           <section className="calc-card pet-analysis-section pet-analysis-export">
             <SectionHeading icon="bi-download" title="Exportar resultados" subtitle="CSV sin metadatos identificativos del paciente" />
             <div>
-              <button type="button" onClick={exportQn}><i className="bi bi-filetype-csv"></i> Contraste y fondo</button>
-              <button type="button" onClick={exportLung}><i className="bi bi-filetype-csv"></i> Perfil pulmonar</button>
+              <button type="button" onClick={exportQn} disabled={roiBlocked}><i className="bi bi-filetype-csv"></i> Contraste y fondo</button>
+              <button type="button" onClick={exportLung} disabled={roiBlocked}><i className="bi bi-filetype-csv"></i> Perfil pulmonar</button>
             </div>
             <p>Herramienta de apoyo para control de calidad. Verifica visualmente las ROIs y conserva el protocolo de adquisición junto al informe.</p>
           </section>

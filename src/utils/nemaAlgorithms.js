@@ -4,14 +4,62 @@
 const NEMA_TARGET_PIXEL_MM = 6.4
 const NEMA_PIXEL_TOL = 0.30
 const NEMA_MIN_COUNTS_CENTER = 10000
+const NEMA_METHOD_VERSION = 'nema-nu1-2007/2026.08'
+const PIXEL_SQUARE_TOL = 0.005 // redondeo DICOM, no es una tolerancia NEMA
 const NEMA_KERNEL = [1, 2, 1, 2, 4, 2, 1, 2, 1]
-const SYMBIA_INTEVO_FOV_MM = [386.0, 532.0] // [row_mm, col_mm]
+// Acceptance limits are a property of the equipment, not of NEMA. NU 1-2007
+// defines how to measure IU and DU; what counts as passing comes from the
+// manufacturer specification of a particular camera. So a profile is only
+// applied when the file says it belongs to that camera, or when the user picks
+// it on purpose, and the report always names the profile and its provenance.
+//
+// The matcher deliberately does not look at ManufacturerModelName: the Symbia
+// Intevo in this department writes "Encore2" there, and the only place the
+// model appears is inside SoftwareVersions ("syngo CT VC50>Symbia Intevo 6").
+export const LIMIT_PROFILES = [
+  {
+    id: 'symbia_intevo',
+    label: 'Siemens Symbia Intevo / Intevo Bold',
+    source: 'Especificaciones del fabricante recogidas en el servicio',
+    version: 'interna',
+    fovMm: [386.0, 532.0],
+    specs: {
+      IUufov: 3.7,
+      IUcfov: 2.9,
+      DUufov: 2.7,
+      DUcfov: 2.5
+    },
+    match(info) {
+      const haystack = [
+        info?.manufacturer,
+        info?.modelName,
+        ...(Array.isArray(info?.softwareVersions) ? info.softwareVersions : [info?.softwareVersions])
+      ].filter(Boolean).join(' ').toUpperCase()
 
-export const SYMBIA_INTEVO_SPECS = {
-  IUufov: 3.7,
-  IUcfov: 2.9,
-  DUufov: 2.7,
-  DUcfov: 2.5
+      return haystack.includes('SIEMENS') && haystack.includes('INTEVO')
+    }
+  }
+]
+
+export const NO_LIMIT_PROFILE = {
+  id: 'none',
+  label: 'Sin perfil de limites',
+  source: 'Solo valores NEMA, sin comparacion con especificaciones',
+  version: '-',
+  fovMm: null,
+  specs: null,
+  match: () => false
+}
+
+export function getLimitProfile(id) {
+  return LIMIT_PROFILES.find((profile) => profile.id === id) || NO_LIMIT_PROFILE
+}
+
+// Returns the profile whose match() recognises the equipment, or the empty
+// profile. Never guesses: an unrecognised camera reports NEMA numbers with no
+// conformity verdict attached.
+export function detectLimitProfile(info) {
+  return LIMIT_PROFILES.find((profile) => profile.match(info)) || NO_LIMIT_PROFILE
 }
 
 function isFiniteNumber(value) {
@@ -232,15 +280,41 @@ function differentialUniformity(data, excludedMask, rows, cols, windowSize = 5) 
   return { maxVert, maxHoriz, vertPos, horizPos }
 }
 
+// Sums blockRows x blockCols raw pixels into one analysis pixel.
+//
+// It also reports which analysis pixels are contaminated: a summed pixel whose
+// block contains at least one raw pixel with zero counts. That flag is the
+// whole point of this function beyond the sum.
+//
+// Why it matters, measured on a real Symbia Intevo intrinsic flood: the useful
+// field of view declared in DICOM (386 x 532 mm) is, within 0.2 %, the physical
+// extent of the active crystal area. With 0.5994 mm raw pixels and the 13 x 13
+// blocks that bring them to 7.79 mm, the UFOV cannot be tiled without the
+// outermost row of blocks straddling the edge of the crystal: those blocks sum
+// ten active raw rows and three rows of nothing. They came out at 75.9 % and
+// 82.7 % of the CFOV mean while every interior row sat at 98 %, so the 75 %
+// edge threshold of NEMA let them through - the first by nine tenths of a
+// point - and they dragged the UFOV integral uniformity from 3.1 % to 10.8 %,
+// turning a conforming detector into a failing one.
+//
+// Aligning the block grid with the active field instead does not help and must
+// not be attempted: 645 active raw rows admit only 49 complete 13-row blocks,
+// so a 50th block straddles the edge under every possible alignment. The
+// contaminated blocks have to be excluded, which is what NEMA already asks for
+// when it says to exclude pixels that contained zero counts in the original
+// image - the exclusion simply has to survive the summation.
 function safeBlockReduce(data, rows, cols, blockRows, blockCols) {
   const bR = Math.max(1, Math.trunc(blockRows))
   const bC = Math.max(1, Math.trunc(blockCols))
 
   if (bR === 1 && bC === 1) {
+    const zeroContaminated = new Uint8Array(rows * cols)
+    for (let i = 0; i < data.length; i++) zeroContaminated[i] = data[i] === 0 ? 1 : 0
     return {
       data: new Float64Array(data),
       rows,
       cols,
+      zeroContaminated,
       cropInfo: {
         originalShape: [rows, cols],
         croppedShape: [rows, cols],
@@ -260,18 +334,23 @@ function safeBlockReduce(data, rows, cols, blockRows, blockCols) {
   const outRows = croppedRows / bR
   const outCols = croppedCols / bC
   const out = new Float64Array(outRows * outCols)
+  const zeroContaminated = new Uint8Array(outRows * outCols)
 
   for (let r = 0; r < outRows; r++) {
     for (let c = 0; c < outCols; c++) {
       let sum = 0
+      let contaminated = 0
       for (let br = 0; br < bR; br++) {
         const srcR = startR + r * bR + br
         const srcOffset = srcR * cols + startC + c * bC
         for (let bc = 0; bc < bC; bc++) {
-          sum += data[srcOffset + bc]
+          const value = data[srcOffset + bc]
+          sum += value
+          if (value === 0) contaminated = 1
         }
       }
       out[r * outCols + c] = sum
+      zeroContaminated[r * outCols + c] = contaminated
     }
   }
 
@@ -279,6 +358,7 @@ function safeBlockReduce(data, rows, cols, blockRows, blockCols) {
     data: out,
     rows: outRows,
     cols: outCols,
+    zeroContaminated,
     cropInfo: {
       originalShape: [rows, cols],
       croppedShape: [croppedRows, croppedCols],
@@ -304,14 +384,21 @@ function validatePixelSize(pixelSpacingMm, blockSize, targetMm = NEMA_TARGET_PIX
   ]
   const lo = targetMm * (1 - NEMA_PIXEL_TOL)
   const hi = targetMm * (1 + NEMA_PIXEL_TOL)
+  const largest = Math.max(finalPixel[0], finalPixel[1])
 
   return {
     finalPixel,
     insideTolerance: finalPixel.every((value) => value >= lo && value <= hi),
+    square: Math.abs(finalPixel[0] - finalPixel[1]) <= PIXEL_SQUARE_TOL * largest,
     tolerance: [lo, hi]
   }
 }
 
+// NEMA includes a pixel in the field when at least 50 % of its area falls
+// inside it. For a rectangle aligned with the pixel grid that criterion is
+// exactly a round() on each linear dimension, which is what this does: there is
+// no partial-area integral to compute, because the only pixels a rectangular
+// edge can split are the ones the rounding already decides.
 function centeredBBoxFromFovMm(rows, cols, pixelSizeMm, ufovSizeMm) {
   const ufovRows = Math.min(rows, Math.max(1, Math.round(ufovSizeMm[0] / pixelSizeMm[0])))
   const ufovCols = Math.min(cols, Math.max(1, Math.round(ufovSizeMm[1] / pixelSizeMm[1])))
@@ -393,57 +480,90 @@ function dilate4(mask, rows, cols) {
   return out
 }
 
-function removeBorderPixels(data, rows, cols, currentUfovMask) {
-  const bbox = bboxFromMask(currentUfovMask, rows, cols, 1)
+// NEMA NU 1-2007 2.4: one pass, not a loop.
+//
+//   1. mean counts per pixel over the geometric CFOV, on unsmoothed data
+//   2. in the outer rows and columns of the UFOV, zero every pixel below 75 %
+//      of that mean
+//   3. zero every pixel having at least one of its four direct neighbours at
+//      zero counts
+//   4. exclude the pixels that already held zero counts
+//
+// This used to iterate until nothing more could be removed, capped at 20 % of
+// the UFOV. Iterating eats the real defect at the detector edge one ring at a
+// time and quietly improves the very uniformity it is meant to measure.
+//
+// invalidMask marks the pixels that count as zero for steps 3 and 4: genuine
+// zeros, and summed blocks contaminated by raw zeros (see safeBlockReduce).
+// Treating a contaminated block as a zero pixel is a deliberate reading of the
+// standard, not a quotation of it, so the neighbour rule applies around it too.
+function applyNemaEdgeRule(data, rows, cols, ufovGeomMask, invalidMask) {
+  const bbox = bboxFromMask(ufovGeomMask, rows, cols, 1)
   const cfovBBox = clipBBox(cfovBoundsFromBBox(bbox), rows, cols)
   const cfovRect = makeRectAnalysisMask(rows, cols, cfovBBox)
-  const cfovMask = new Uint8Array(rows * cols)
+  const cfovSeed = new Uint8Array(rows * cols)
 
-  for (let i = 0; i < cfovMask.length; i++) {
-    cfovMask[i] = cfovRect[i] && currentUfovMask[i] ? 1 : 0
+  for (let i = 0; i < cfovSeed.length; i++) {
+    cfovSeed[i] = cfovRect[i] && ufovGeomMask[i] && !invalidMask[i] ? 1 : 0
   }
 
-  const cfovMean = meanWhere(data, cfovMask)
+  const cfovMean = meanWhere(data, cfovSeed)
   const threshold = 0.75 * cfovMean
-  const zeroByRule = new Uint8Array(rows * cols)
+  const seed = new Uint8Array(rows * cols)
+  let nThreshold = 0
 
   for (let c = bbox.minC; c <= bbox.maxC; c++) {
     const topIdx = bbox.minR * cols + c
     const bottomIdx = bbox.maxR * cols + c
-    if (currentUfovMask[topIdx] && data[topIdx] < threshold) zeroByRule[topIdx] = 1
-    if (currentUfovMask[bottomIdx] && data[bottomIdx] < threshold) zeroByRule[bottomIdx] = 1
+    if (ufovGeomMask[topIdx] && data[topIdx] < threshold && !seed[topIdx]) {
+      seed[topIdx] = 1
+      nThreshold++
+    }
+    if (ufovGeomMask[bottomIdx] && data[bottomIdx] < threshold && !seed[bottomIdx]) {
+      seed[bottomIdx] = 1
+      nThreshold++
+    }
   }
 
   for (let r = bbox.minR; r <= bbox.maxR; r++) {
     const leftIdx = r * cols + bbox.minC
     const rightIdx = r * cols + bbox.maxC
-    if (currentUfovMask[leftIdx] && data[leftIdx] < threshold) zeroByRule[leftIdx] = 1
-    if (currentUfovMask[rightIdx] && data[rightIdx] < threshold) zeroByRule[rightIdx] = 1
-  }
-
-  let hasRemoval = false
-  for (let i = 0; i < zeroByRule.length; i++) {
-    if (zeroByRule[i]) {
-      hasRemoval = true
-      break
+    if (ufovGeomMask[leftIdx] && data[leftIdx] < threshold && !seed[leftIdx]) {
+      seed[leftIdx] = 1
+      nThreshold++
+    }
+    if (ufovGeomMask[rightIdx] && data[rightIdx] < threshold && !seed[rightIdx]) {
+      seed[rightIdx] = 1
+      nThreshold++
     }
   }
 
-  if (!hasRemoval) {
-    return { removed: false, mask: currentUfovMask, count: 0 }
+  let nInvalid = 0
+  for (let i = 0; i < seed.length; i++) {
+    if (!ufovGeomMask[i] || !invalidMask[i]) continue
+    if (!seed[i]) nInvalid++
+    seed[i] = 1
   }
 
-  const expanded = dilate4(zeroByRule, rows, cols)
-  const next = new Uint8Array(currentUfovMask.length)
-  let count = 0
+  const expanded = dilate4(seed, rows, cols)
+  const mask = new Uint8Array(rows * cols)
+  let nNeighbour = 0
 
-  for (let i = 0; i < currentUfovMask.length; i++) {
-    const remove = expanded[i] && currentUfovMask[i]
-    if (remove) count++
-    next[i] = currentUfovMask[i] && !remove ? 1 : 0
+  for (let i = 0; i < mask.length; i++) {
+    const removed = Boolean(expanded[i] && ufovGeomMask[i])
+    if (removed && !seed[i]) nNeighbour++
+    mask[i] = ufovGeomMask[i] && !removed ? 1 : 0
   }
 
-  return { removed: true, mask: next, count }
+  return {
+    mask,
+    cfovMean,
+    threshold,
+    nRemovedByThreshold: nThreshold,
+    nRemovedZeroOrContaminated: nInvalid,
+    nRemovedByNeighbour: nNeighbour,
+    nRemovedTotal: nThreshold + nInvalid + nNeighbour
+  }
 }
 
 function preprocessNema(data, rows, cols, options = {}) {
@@ -466,55 +586,59 @@ function preprocessNema(data, rows, cols, options = {}) {
     ufovSource = `auto_isoline_${(options.autoFraction ?? 0.5).toFixed(2)}`
   }
 
-  let currentMask = ufovGeom
-  let totalRemoved = 0
-  let iteration = 0
-  const maxIterations = 1000
-  const initialUfovCount = ufovGeom.reduce((sum, v) => sum + v, 0)
-  let maxErosionReached = false
+  const invalidMask = options.invalidMask || new Uint8Array(rows * cols)
+  const edge = applyNemaEdgeRule(data, rows, cols, ufovGeom, invalidMask)
+  const validMask = edge.mask
 
-  while (iteration < maxIterations) {
-    iteration++
-    const removal = removeBorderPixels(data, rows, cols, currentMask)
-    currentMask = removal.mask
-    totalRemoved += removal.count
-    if (totalRemoved > 0.2 * initialUfovCount) { maxErosionReached = true; break }
-    if (!removal.removed) break
-  }
-
-  const finalBBox = bboxFromMask(currentMask, rows, cols, 1)
-  const cfovBBox = clipBBox(cfovBoundsFromBBox(finalBBox), rows, cols)
+  // The CFOV is 75 % of the linear dimensions of the geometric UFOV. Deriving
+  // it from the eroded bounding box, as this used to, let a defective edge
+  // shrink and shift the central field until a defect sitting on its border
+  // fell outside the analysis altogether.
+  const cfovBBox = clipBBox(cfovBoundsFromBBox(initialBBox), rows, cols)
   const cfovRect = makeRectAnalysisMask(rows, cols, cfovBBox)
   const cfovMask = new Uint8Array(rows * cols)
 
   for (let i = 0; i < cfovMask.length; i++) {
-    cfovMask[i] = cfovRect[i] && currentMask[i] ? 1 : 0
+    cfovMask[i] = cfovRect[i] && validMask[i] ? 1 : 0
   }
 
+  const finalBBox = bboxFromMask(validMask, rows, cols, 1)
   bboxFromMask(cfovMask, rows, cols, 1)
 
-  const ufovData = nemaSmoothMasked(data, rows, cols, currentMask)
-  const cfovData = nemaSmoothMasked(data, rows, cols, cfovMask)
+  // Smoothed once, over the UFOV. The CFOV is interior to the UFOV, so every
+  // kernel weight a CFOV pixel needs is already available here; smoothing a
+  // second time against the CFOV mask, as this used to, starved the pixels on
+  // the CFOV border of neighbours that were perfectly valid.
+  const smoothed = nemaSmoothMasked(data, rows, cols, validMask)
+
+  let nZeroContaminated = 0
+  for (let i = 0; i < invalidMask.length; i++) {
+    if (invalidMask[i] && ufovGeom[i]) nZeroContaminated++
+  }
 
   return {
-    ufovData,
-    cfovData,
-    ufovMask: analysisToExcludedMask(currentMask),
+    ufovData: smoothed,
+    cfovData: smoothed,
+    ufovMask: analysisToExcludedMask(validMask),
     cfovMask: analysisToExcludedMask(cfovMask),
     ufovBBox: finalBBox,
     cfovBBox,
     metadata: {
       method: 'nema_geometric',
+      methodVersion: NEMA_METHOD_VERSION,
       ufovSource,
       ufovBBoxInitial: initialBBox,
       ufovBBoxFinal: finalBBox,
       cfovBBoxFinal: cfovBBox,
-      nIterationsBorderRemoval: iteration,
-      nRemovedTotal: totalRemoved,
-      nUfovPixelsFinal: finalBBox.count,
-      nCfovPixelsFinal: cfovMask.reduce((sum, value) => sum + value, 0),
-      reachedMaxIterations: iteration >= maxIterations,
-      maxErosionReached
+      cfovMeanRaw: edge.cfovMean,
+      edgeThreshold: edge.threshold,
+      nRemovedByThreshold: edge.nRemovedByThreshold,
+      nRemovedZeroOrContaminated: edge.nRemovedZeroOrContaminated,
+      nRemovedByNeighbour: edge.nRemovedByNeighbour,
+      nRemovedTotal: edge.nRemovedTotal,
+      nZeroContaminatedInUfov: nZeroContaminated,
+      nUfovPixelsValid: validMask.reduce((sum, value) => sum + value, 0),
+      nCfovPixelsValid: cfovMask.reduce((sum, value) => sum + value, 0)
     }
   }
 }
@@ -914,7 +1038,17 @@ export function calculateNemaGeometric(rawData, rows, cols, options = {}) {
   )
   const pixelSizeMm = pixelValidation?.finalPixel ?? null
   const centerCount = reduced.data[Math.floor(reduced.rows / 2) * reduced.cols + Math.floor(reduced.cols / 2)]
-  const ufovSizeMm = options.ufovSizeMm || (pixelSizeMm ? SYMBIA_INTEVO_FOV_MM : null)
+
+  // No vendor geometry is assumed any more. This used to fall back to the
+  // Symbia field of view whenever the pixel size was known, so any camera whose
+  // DICOM lacked FieldOfViewDimensions was silently analysed over a 386 x 532 mm
+  // rectangle that belonged to a different detector. Without a declared field
+  // the UFOV is found from the image itself and the caller is told so.
+  const vendorFovMm = options.vendorFovMm || null
+  const ufovSizeMm = options.ufovSizeMm || vendorFovMm
+  const ufovSource = options.ufovSizeMm
+    ? 'dicom_fov_mm_centered'
+    : (vendorFovMm ? 'vendor_profile_fov_mm_centered' : null)
 
   let prep
   try {
@@ -922,13 +1056,23 @@ export function calculateNemaGeometric(rawData, rows, cols, options = {}) {
       ufovSizeMm: options.autoUfovFromIsoline ? null : ufovSizeMm,
       pixelSizeMm: options.autoUfovFromIsoline ? null : pixelSizeMm,
       autoFraction: options.autoFraction ?? 0.5,
-      ufovSource: options.ufovSizeMm ? 'dicom_fov_mm_centered' : 'symbia_fov_mm_centered'
+      invalidMask: reduced.zeroContaminated,
+      ufovSource
     })
   } catch (err) {
     prep = preprocessNema(reduced.data, reduced.rows, reduced.cols, {
-      autoFraction: options.autoFraction ?? 0.5
+      autoFraction: options.autoFraction ?? 0.5,
+      invalidMask: reduced.zeroContaminated
     })
     prep.metadata.fallbackReason = err.message
+  }
+
+  // NEMA asks for at least 10 000 counts in a pixel of the analysis matrix, and
+  // is read both ways in the field: the central pixel, or the busiest one. Both
+  // are reported so the reader can apply either criterion without re-running.
+  let maxCountCfov = 0
+  for (let i = 0; i < reduced.data.length; i++) {
+    if (!prep.cfovMask[i] && reduced.data[i] > maxCountCfov) maxCountCfov = reduced.data[i]
   }
 
   const metadata = {
@@ -941,7 +1085,11 @@ export function calculateNemaGeometric(rawData, rows, cols, options = {}) {
     pixelSpacingResampledMm: pixelSizeMm,
     pixelTolerance: pixelValidation,
     centerCountResampled: centerCount,
-    centerCountWarning: centerCount < NEMA_MIN_COUNTS_CENTER
+    maxCountCfov,
+    minCountsRequired: NEMA_MIN_COUNTS_CENTER,
+    centerCountWarning: centerCount < NEMA_MIN_COUNTS_CENTER,
+    maxCountWarning: maxCountCfov < NEMA_MIN_COUNTS_CENTER,
+    ufovFromImage: !ufovSizeMm || Boolean(options.autoUfovFromIsoline)
   }
 
   return buildResult(
@@ -1033,7 +1181,7 @@ export function calculatePylinacLike(rawData, rows, cols, options = {}) {
 
   return buildResult(
     'pylinac_like',
-    'Pylinac/IAEA',
+    'Aproximacion Pylinac/IAEA',
     reduced.rows,
     reduced.cols,
     thresholded,
@@ -1100,4 +1248,79 @@ export function calculateNEMAComparison(rawData, rows, cols, options = {}) {
 
 export function calculateNEMA(rawData, rows, cols, targetSize) {
   return calculateNEMAComparison(rawData, rows, cols, { targetSize }).geometric
+}
+
+// Measures the extent of the active detector area in the image itself, in
+// pixels. It exists so the reader can decide empirically how a vendor ordered
+// FieldOfViewDimensions instead of hardcoding a guess: the stored geometry is
+// checked against what the flood actually covers.
+export function measureActiveField(data, rows, cols) {
+  let sum = 0
+  let count = 0
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] > 0) {
+      sum += data[i]
+      count++
+    }
+  }
+  if (!count) return null
+
+  const mask = makeThresholdMask(data, 0.5 * (sum / count))
+  let component
+  try {
+    component = largestComponent(mask, rows, cols)
+  } catch {
+    return null
+  }
+
+  const { minR, maxR, minC, maxC } = component.bbox
+  return {
+    bbox: component.bbox,
+    rowsPx: maxR - minR + 1,
+    colsPx: maxC - minC + 1,
+    pixelCount: component.count
+  }
+}
+
+// What a resampling option actually produces on this image.
+//
+// The selector used to promise "78 x 78 px (7.8 mm)", which is only true for a
+// 1024 matrix with 0.6 mm pixels. The block size is derived from the matrix, so
+// the resulting matrix and the physical pixel depend on the file: this reports
+// the real numbers, including the counts the central pixel would end up with,
+// so an option that cannot reach the NEMA minimum can be labelled as such
+// before it is used.
+export function describeResolution(rawData, rows, cols, pixelSpacingMm, targetSize) {
+  const parsedTarget = targetSize === 'auto' || targetSize == null ? null : Number(targetSize)
+  const size = Number.isFinite(parsedTarget) ? parsedTarget : null
+  let blockSize = [1, 1]
+
+  if (size && size > 0) {
+    blockSize = [Math.max(1, Math.floor(rows / size)), Math.max(1, Math.floor(cols / size))]
+  } else if (size !== 0 && pixelSpacingMm) {
+    blockSize = computeBlockSize(pixelSpacingMm) ?? [1, 1]
+  }
+
+  const [bR, bC] = blockSize
+  const outRows = Math.floor(rows / bR)
+  const outCols = Math.floor(cols / bC)
+  const startR = Math.floor((rows - outRows * bR) / 2)
+  const startC = Math.floor((cols - outCols * bC) / 2)
+  const centerRow = Math.floor(outRows / 2)
+  const centerCol = Math.floor(outCols / 2)
+  let centerCounts = 0
+
+  for (let br = 0; br < bR; br++) {
+    const srcOffset = (startR + centerRow * bR + br) * cols + startC + centerCol * bC
+    for (let bc = 0; bc < bC; bc++) centerCounts += rawData[srcOffset + bc]
+  }
+
+  return {
+    blockSize,
+    matrix: [outRows, outCols],
+    pixelTolerance: validatePixelSize(pixelSpacingMm, blockSize),
+    centerCounts,
+    enoughCounts: centerCounts >= NEMA_MIN_COUNTS_CENTER,
+    minCountsRequired: NEMA_MIN_COUNTS_CENTER
+  }
 }

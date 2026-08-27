@@ -445,7 +445,47 @@ export function distanceTransform(mask, rows, cols) {
   return result
 }
 
-function generateBackgroundRois(
+const BACKGROUND_ROI_DIAMETER_MM = NEMA_SPHERE_DIAMETERS_MM.at(-1)
+
+// Weights of the placement cost, in millimetres, so they are directly
+// comparable. NEMA fixes the objective - the ROIs go as close to the edge of
+// the phantom as possible - and everything else is a preference, so depth
+// carries weight 1 and the two quality terms carry twice that: enough to break
+// a tie between two positions at similar depth, not enough to pull a ROI away
+// from the edge the standard asks it to hug.
+const OVERLAP_WEIGHT = 2
+const SPHERE_GAP_WEIGHT = 2
+
+function sampleDepthMm(distanceToEdgePx, rows, cols, xMm, yMm, pixelWidth, pixelHeight) {
+  const x = Math.floor(xMm / pixelWidth)
+  const y = Math.floor(yMm / pixelHeight)
+  if (x < 0 || y < 0 || x >= cols || y >= rows) return 0
+  return distanceToEdgePx[y * cols + x] * pixelWidth
+}
+
+function sphereClearance(xMm, yMm, spheres, pixelWidth, pixelHeight, radius) {
+  let gap = Infinity
+  for (const sphere of spheres) {
+    const distance = Math.hypot(
+      xMm - sphere.centerX * pixelWidth,
+      yMm - sphere.centerY * pixelHeight
+    )
+    gap = Math.min(gap, distance - radius - sphere.diameterMm / 2)
+  }
+  return gap
+}
+
+// Every position a 37 mm background ROI may legally occupy.
+//
+// The hard constraints are the ones NEMA NU 2-2018 7.4.1 states and the ones
+// physics states: the ROI edge stays at least 15 mm from the edge of the
+// phantom, and the ROI does not overlap a sphere or the lung insert - a
+// background ROI that covers hot activity is not measuring background. The
+// 15 mm clearance to the spheres that the previous version tried to enforce is
+// not in the standard, and in the IEC phantom it is often geometrically
+// impossible together with hugging the edge: it is a preference here, measured
+// and reported per ROI, never a silent relaxation.
+function collectBackgroundCandidates(
   distanceToEdgePx,
   rows,
   cols,
@@ -455,87 +495,277 @@ function generateBackgroundRois(
   spheres,
   options
 ) {
-  const radius = NEMA_SPHERE_DIAMETERS_MM.at(-1) / 2
+  const radius = BACKGROUND_ROI_DIAMETER_MM / 2
+  const lungKeepOutMm = options.lungInsertDiameterMm / 2 + radius
   const candidates = []
 
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
-      const index = y * cols + x
-      const depthMm = distanceToEdgePx[index] * pixelWidth
-      if (depthMm < radius + options.edgeMarginMm) continue
+      const depthMm = distanceToEdgePx[y * cols + x] * pixelWidth
+      const edgeClearanceMm = depthMm - radius
+      if (edgeClearanceMm < options.edgeMarginMm) continue
 
       const xMm = (x + 0.5) * pixelWidth
       const yMm = (y + 0.5) * pixelHeight
-      if (
-        Math.hypot(xMm - phantomCenter.xMm, yMm - phantomCenter.yMm)
-        < options.lungInsertDiameterMm / 2 + radius
-      ) continue
+      if (Math.hypot(xMm - phantomCenter.xMm, yMm - phantomCenter.yMm) < lungKeepOutMm) continue
 
-      let sphereGapMm = Infinity
-      for (const sphere of spheres) {
-        const gap = Math.hypot(
-          xMm - sphere.centerX * pixelWidth,
-          yMm - sphere.centerY * pixelHeight
-        ) - radius - sphere.diameterMm / 2
-        sphereGapMm = Math.min(sphereGapMm, gap)
-      }
+      const sphereGapMm = sphereClearance(xMm, yMm, spheres, pixelWidth, pixelHeight, radius)
+      if (sphereGapMm < 0) continue
 
       let angleDegrees = Math.atan2(yMm - phantomCenter.yMm, xMm - phantomCenter.xMm) * 180 / Math.PI
       if (angleDegrees < 0) angleDegrees += 360
-      candidates.push({ xMm, yMm, depthMm, sphereGapMm, angleDegrees })
+
+      candidates.push({ xMm, yMm, depthMm, edgeClearanceMm, sphereGapMm, angleDegrees })
     }
   }
 
-  const selected = []
-  const desiredSeparation = NEMA_SPHERE_DIAMETERS_MM.at(-1) * 0.8
-  const fallbackMargins = [options.sphereMarginMm, 10, 6, 3, 0]
+  return candidates
+}
 
-  for (let sectorIndex = 0; sectorIndex < options.backgroundRoiCount; sectorIndex++) {
-    const lowerAngle = sectorIndex * 360 / options.backgroundRoiCount
-    const upperAngle = (sectorIndex + 1) * 360 / options.backgroundRoiCount
-    const sector = candidates.filter((candidate) => (
-      candidate.angleDegrees >= lowerAngle && candidate.angleDegrees < upperAngle
-    ))
+function placementCost(candidate, chosen, skipIndex, sphereMarginMm) {
+  let cost = candidate.depthMm
+  cost += SPHERE_GAP_WEIGHT * Math.max(0, sphereMarginMm - candidate.sphereGapMm)
 
-    let available = []
-    for (const margin of fallbackMargins) {
-      available = sector.filter((candidate) => candidate.sphereGapMm >= margin)
-      if (available.length) break
-    }
-    if (!available.length) continue
-
-    let chosen = available[0]
-    if (!selected.length) {
-      for (const candidate of available) {
-        if (candidate.depthMm < chosen.depthMm) chosen = candidate
-      }
-    } else {
-      const withSeparation = available.map((candidate) => ({
-        candidate,
-        nearestMm: Math.min(...selected.map((previous) => (
-          Math.hypot(candidate.xMm - previous.xMm, candidate.yMm - previous.yMm)
-        )))
-      }))
-      const free = withSeparation.filter((entry) => entry.nearestMm >= desiredSeparation)
-      if (free.length) {
-        let best = free[0]
-        for (const entry of free) {
-          if (entry.candidate.depthMm < best.candidate.depthMm) best = entry
-        }
-        chosen = best.candidate
-      } else {
-        let best = withSeparation[0]
-        for (const entry of withSeparation) {
-          if (entry.nearestMm > best.nearestMm) best = entry
-        }
-        chosen = best.candidate
-      }
-    }
-
-    selected.push(chosen)
+  for (let index = 0; index < chosen.length; index++) {
+    if (index === skipIndex || !chosen[index]) continue
+    const other = chosen[index]
+    const distance = Math.hypot(candidate.xMm - other.xMm, candidate.yMm - other.yMm)
+    cost += OVERLAP_WEIGHT * Math.max(0, BACKGROUND_ROI_DIAMETER_MM - distance)
   }
 
-  return selected
+  return cost
+}
+
+function better(candidate, cost, incumbent, incumbentCost) {
+  if (!incumbent) return true
+  if (cost < incumbentCost - 1e-9) return true
+  if (cost > incumbentCost + 1e-9) return false
+  // Deterministic tie-breaks: closer to the edge, then further from the
+  // spheres, then by angle and coordinates. Candidates arrive in raster order,
+  // so an exact tie always keeps the first one seen.
+  if (candidate.depthMm < incumbent.depthMm - 1e-9) return true
+  if (candidate.depthMm > incumbent.depthMm + 1e-9) return false
+  if (candidate.sphereGapMm > incumbent.sphereGapMm + 1e-9) return true
+  if (candidate.sphereGapMm < incumbent.sphereGapMm - 1e-9) return false
+  if (candidate.angleDegrees < incumbent.angleDegrees - 1e-9) return true
+  if (candidate.angleDegrees > incumbent.angleDegrees + 1e-9) return false
+  if (candidate.xMm < incumbent.xMm - 1e-9) return true
+  if (candidate.xMm > incumbent.xMm + 1e-9) return false
+  return candidate.yMm < incumbent.yMm - 1e-9
+}
+
+// Places the twelve ROIs globally instead of one per rigid angular sector.
+//
+// The sectors are still used to seed the search - they spread the starting
+// points around the phantom - but the positions are then refined against a
+// single global cost, so a ROI is free to leave its sector when that leaves
+// every ROI better placed. The previous version chose each sector in isolation,
+// asked for 29.6 mm between centres, and accepted whatever it found when that
+// failed, which allowed two nearly coincident ROIs to be reported as twelve.
+export function generateBackgroundRois(
+  distanceToEdgePx,
+  rows,
+  cols,
+  pixelWidth,
+  pixelHeight,
+  phantomCenter,
+  spheres,
+  options
+) {
+  const candidates = collectBackgroundCandidates(
+    distanceToEdgePx,
+    rows,
+    cols,
+    pixelWidth,
+    pixelHeight,
+    phantomCenter,
+    spheres,
+    options
+  )
+
+  const count = options.backgroundRoiCount
+  if (candidates.length < count) {
+    throw new Error(
+      `Solo hay ${candidates.length} posiciones validas para las ${count} ROIs de fondo de `
+      + `${BACKGROUND_ROI_DIAMETER_MM} mm: no se puede cumplir a la vez el margen de `
+      + `${options.edgeMarginMm} mm al borde del maniqui y el no solapamiento con las esferas `
+      + 'y el inserto pulmonar. Coloca las ROIs manualmente sobre el corte central.'
+    )
+  }
+
+  const chosen = new Array(count).fill(null)
+
+  for (let sector = 0; sector < count; sector++) {
+    const lower = sector * 360 / count
+    const upper = (sector + 1) * 360 / count
+    let best = null
+    let bestCost = Infinity
+
+    for (const candidate of candidates) {
+      if (candidate.angleDegrees < lower || candidate.angleDegrees >= upper) continue
+      const cost = placementCost(candidate, chosen, sector, options.sphereMarginMm)
+      if (better(candidate, cost, best, bestCost)) {
+        best = candidate
+        bestCost = cost
+      }
+    }
+
+    chosen[sector] = best
+  }
+
+  // Sectors that had no legal position at all are filled from the global pool,
+  // so the twelve ROIs always exist when twelve legal positions exist.
+  for (let index = 0; index < count; index++) {
+    if (chosen[index]) continue
+    let best = null
+    let bestCost = Infinity
+    for (const candidate of candidates) {
+      if (chosen.some((roi, other) => other !== index && roi && roi.xMm === candidate.xMm && roi.yMm === candidate.yMm)) continue
+      const cost = placementCost(candidate, chosen, index, options.sphereMarginMm)
+      if (better(candidate, cost, best, bestCost)) {
+        best = candidate
+        bestCost = cost
+      }
+    }
+    chosen[index] = best
+  }
+
+  if (chosen.some((roi) => !roi)) {
+    throw new Error(
+      `No se han podido colocar las ${count} ROIs de fondo cumpliendo el margen de `
+      + `${options.edgeMarginMm} mm al borde y el no solapamiento con esferas e inserto pulmonar. `
+      + 'Coloca las ROIs manualmente sobre el corte central.'
+    )
+  }
+
+  for (let pass = 0; pass < 24; pass++) {
+    let moved = false
+
+    for (let index = 0; index < count; index++) {
+      const current = chosen[index]
+      let best = current
+      let bestCost = placementCost(current, chosen, index, options.sphereMarginMm)
+
+      for (const candidate of candidates) {
+        const cost = placementCost(candidate, chosen, index, options.sphereMarginMm)
+        if (better(candidate, cost, best, bestCost)) {
+          best = candidate
+          bestCost = cost
+        }
+      }
+
+      if (best !== current) {
+        chosen[index] = best
+        moved = true
+      }
+    }
+
+    if (!moved) break
+  }
+
+  return chosen.map((roi) => ({ ...roi }))
+}
+
+// Measures a set of background ROIs, whether it came from the optimiser or from
+// the user dragging them on the central slice. Overlap between background ROIs
+// is reported as a quantified warning, not as a NEMA violation: the standard
+// does not forbid it, and in a phantom this size it can be unavoidable. What is
+// a violation, and blocks the calculation, is a ROI too close to the edge or
+// touching a sphere.
+export function describeBackgroundRois(
+  rois,
+  distanceToEdgePx,
+  rows,
+  cols,
+  pixelWidth,
+  pixelHeight,
+  phantomCenter,
+  spheres,
+  options
+) {
+  const radius = BACKGROUND_ROI_DIAMETER_MM / 2
+  const lungKeepOutMm = options.lungInsertDiameterMm / 2 + radius
+  const measured = rois.map((roi, index) => {
+    const depthMm = sampleDepthMm(distanceToEdgePx, rows, cols, roi.xMm, roi.yMm, pixelWidth, pixelHeight)
+    const sphereGapMm = sphereClearance(roi.xMm, roi.yMm, spheres, pixelWidth, pixelHeight, radius)
+    const lungGapMm = Math.hypot(roi.xMm - phantomCenter.xMm, roi.yMm - phantomCenter.yMm) - lungKeepOutMm
+    let angleDegrees = Math.atan2(roi.yMm - phantomCenter.yMm, roi.xMm - phantomCenter.xMm) * 180 / Math.PI
+    if (angleDegrees < 0) angleDegrees += 360
+
+    return {
+      index,
+      xMm: roi.xMm,
+      yMm: roi.yMm,
+      depthMm,
+      edgeClearanceMm: depthMm - radius,
+      sphereGapMm,
+      lungGapMm,
+      angleDegrees,
+      overlapsWith: [],
+      maximumOverlapMm: 0
+    }
+  })
+
+  let minimumCenterSeparationMm = Infinity
+  let overlappingPairCount = 0
+  let worstOverlapPair = null
+  let maximumLinearOverlapMm = 0
+
+  for (let a = 0; a < measured.length; a++) {
+    for (let b = a + 1; b < measured.length; b++) {
+      const distance = Math.hypot(measured[a].xMm - measured[b].xMm, measured[a].yMm - measured[b].yMm)
+      minimumCenterSeparationMm = Math.min(minimumCenterSeparationMm, distance)
+      const overlap = Math.max(0, BACKGROUND_ROI_DIAMETER_MM - distance)
+      if (overlap > 0) {
+        overlappingPairCount++
+        measured[a].overlapsWith.push(b)
+        measured[b].overlapsWith.push(a)
+        measured[a].maximumOverlapMm = Math.max(measured[a].maximumOverlapMm, overlap)
+        measured[b].maximumOverlapMm = Math.max(measured[b].maximumOverlapMm, overlap)
+        if (overlap > maximumLinearOverlapMm) {
+          maximumLinearOverlapMm = overlap
+          worstOverlapPair = { a: a + 1, b: b + 1, overlapMm: overlap, separationMm: distance }
+        }
+      }
+    }
+  }
+
+  const violations = []
+  for (const roi of measured) {
+    roi.violatesEdge = roi.edgeClearanceMm < options.edgeMarginMm - 1e-6
+    roi.violatesSphere = roi.sphereGapMm < -1e-6
+    roi.violatesLung = roi.lungGapMm < -1e-6
+    roi.tightToSphere = !roi.violatesSphere && roi.sphereGapMm < options.sphereMarginMm
+
+    if (roi.violatesEdge) {
+      violations.push(
+        `La ROI ${roi.index + 1} queda a ${roi.edgeClearanceMm.toFixed(1)} mm del borde del maniqui, `
+        + `por debajo de los ${options.edgeMarginMm} mm de NEMA NU 2-2018 §7.4.1.`
+      )
+    }
+    if (roi.violatesSphere) {
+      violations.push(
+        `La ROI ${roi.index + 1} solapa una esfera caliente en ${Math.abs(roi.sphereGapMm).toFixed(1)} mm.`
+      )
+    }
+    if (roi.violatesLung) {
+      violations.push(
+        `La ROI ${roi.index + 1} solapa el inserto pulmonar en ${Math.abs(roi.lungGapMm).toFixed(1)} mm.`
+      )
+    }
+  }
+
+  return {
+    rois: measured,
+    minimumCenterSeparationMm,
+    maximumLinearOverlapMm,
+    overlappingPairCount,
+    worstOverlapPair,
+    minimumEdgeClearanceMm: Math.min(...measured.map((roi) => roi.edgeClearanceMm)),
+    minimumSphereClearanceMm: Math.min(...measured.map((roi) => roi.sphereGapMm)),
+    tightToSphereCount: measured.filter((roi) => roi.tightToSphere).length,
+    violations
+  }
 }
 
 function maskBounds(mask, rows, cols) {
@@ -704,7 +934,24 @@ export function analyzePetNema(series, userOptions = {}) {
     )
   }
 
-  const backgroundRois = generateBackgroundRois(
+  // Manual positions win over the optimiser when the user has moved them, but
+  // they go through exactly the same validation: the same coordinates are then
+  // used on the five axial planes that make up the 60 background ROIs.
+  const manualRois = Array.isArray(options.backgroundRois) && options.backgroundRois.length
+    ? options.backgroundRois.map((roi) => ({ xMm: Number(roi.xMm), yMm: Number(roi.yMm) }))
+    : null
+
+  if (manualRois && manualRois.length !== options.backgroundRoiCount) {
+    throw new Error(
+      `Se han indicado ${manualRois.length} ROIs de fondo manuales y NEMA §7.4.1 exige `
+      + `${options.backgroundRoiCount}.`
+    )
+  }
+  if (manualRois && manualRois.some((roi) => !Number.isFinite(roi.xMm) || !Number.isFinite(roi.yMm))) {
+    throw new Error('Alguna ROI de fondo manual no tiene coordenadas validas.')
+  }
+
+  const placedRois = manualRois || generateBackgroundRois(
     distanceToEdgePx,
     rows,
     cols,
@@ -714,28 +961,47 @@ export function analyzePetNema(series, userOptions = {}) {
     spheres,
     options
   )
+
+  const background = describeBackgroundRois(
+    placedRois,
+    distanceToEdgePx,
+    rows,
+    cols,
+    pixelWidth,
+    pixelHeight,
+    phantomCenter,
+    spheres,
+    options
+  )
+  const backgroundRois = background.rois
+
   if (backgroundRois.length !== options.backgroundRoiCount) {
     throw new Error(
       `Solo se han colocado ${backgroundRois.length}/${options.backgroundRoiCount} ROIs de fondo; no se pueden completar las 60 ROIs de NEMA §7.4.1.`
     )
   }
 
-  let minimumBackgroundRoiSeparationMm = Infinity
-  for (let a = 0; a < backgroundRois.length; a++) {
-    for (let b = a + 1; b < backgroundRois.length; b++) {
-      minimumBackgroundRoiSeparationMm = Math.min(
-        minimumBackgroundRoiSeparationMm,
-        Math.hypot(
-          backgroundRois[a].xMm - backgroundRois[b].xMm,
-          backgroundRois[a].yMm - backgroundRois[b].yMm
-        )
-      )
-    }
+  // A mandatory constraint is not negotiable: without the 15 mm to the edge of
+  // the phantom, or with a ROI over a sphere, the background concentration is
+  // not a background concentration and no contrast computed from it means
+  // anything. The calculation stops rather than reporting a number.
+  if (background.violations.length) {
+    throw new Error(background.violations.join(' '))
   }
-  const tightBackgroundRois = backgroundRois.filter((roi) => roi.sphereGapMm < options.sphereMarginMm).length
-  if (tightBackgroundRois) {
+
+  if (background.overlappingPairCount) {
     warnings.push(
-      `${tightBackgroundRois} ROI${tightBackgroundRois === 1 ? '' : 's'} de fondo queda${tightBackgroundRois === 1 ? '' : 'n'} a menos de ${options.sphereMarginMm} mm de una esfera; se informa la holgura real.`
+      `${background.overlappingPairCount} pareja${background.overlappingPairCount === 1 ? '' : 's'} de ROIs de fondo se solapa${background.overlappingPairCount === 1 ? '' : 'n'}; `
+      + `el solapamiento lineal maximo es ${background.maximumLinearOverlapMm.toFixed(1)} mm entre las ROIs `
+      + `${background.worstOverlapPair.a} y ${background.worstOverlapPair.b} (centros a ${background.worstOverlapPair.separationMm.toFixed(1)} mm). `
+      + 'NEMA no lo prohibe, pero las 60 medidas dejan de ser independientes en esa zona.'
+    )
+  }
+
+  if (background.tightToSphereCount) {
+    warnings.push(
+      `${background.tightToSphereCount} ROI${background.tightToSphereCount === 1 ? '' : 's'} de fondo queda${background.tightToSphereCount === 1 ? '' : 'n'} a menos de ${options.sphereMarginMm} mm de una esfera `
+      + `(minimo ${background.minimumSphereClearanceMm.toFixed(1)} mm). Sin solapamiento, que es lo que exige la norma, pero se informa la holgura real.`
     )
   }
 
@@ -857,8 +1123,19 @@ export function analyzePetNema(series, userOptions = {}) {
     },
     backgroundRois,
     backgroundSlices,
-    minimumBackgroundRoiSeparationMm,
-    tightBackgroundRois,
+    // La superposicion del corte central valida el arrastre manual en vivo, y
+    // para eso necesita la misma geometria que uso el optimizador.
+    distanceToEdgePx,
+    backgroundRoiMetrics: {
+      minimumCenterSeparationMm: background.minimumCenterSeparationMm,
+      maximumLinearOverlapMm: background.maximumLinearOverlapMm,
+      overlappingPairCount: background.overlappingPairCount,
+      worstOverlapPair: background.worstOverlapPair,
+      minimumEdgeClearanceMm: background.minimumEdgeClearanceMm,
+      minimumSphereClearanceMm: background.minimumSphereClearanceMm,
+      tightToSphereCount: background.tightToSphereCount,
+      manual: Boolean(manualRois)
+    },
     lung,
     displayWindow: {
       minimum: displayMinimum,
