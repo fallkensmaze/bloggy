@@ -64,3 +64,4 @@ NEMA/
 *.rules
 *.md
 !SECURITY.md
+!COR_NEMA_ANALYSIS.md

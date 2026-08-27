@@ -42,6 +42,7 @@ Los archivos compilados se generan en `dist/`. La configuración de producción 
 | `/decay-calculator` | Decay Calculator | Actividad residual mediante `A(t) = A0 · exp(-ln(2) · t / T1/2)`. |
 | `/restricciones-lu177` | Restricciones Lu-177 | Estimación de restricciones dosimétricas para DOTA-TATE y PSMA-617. |
 | `/uniformidad-gamma` | Uniformidad NEMA | Análisis de uniformidad intrínseca de gammacámara y comparación NEMA / Pylinac-IAEA. |
+| `/centro-rotacion-spect` | Centro de rotación SPECT | NEMA NU 1-2007 §4.1, retroproyección 3D y validación ROC de límites locales. |
 | `/pet-nema-fraccionamiento` | PET NEMA IQ | Preparación guiada del maniquí de esferas con actividades F-18 actualizadas en tiempo real y cronómetros operativos. |
 | `/rtplan-compare` | Comparar RT Plans | Comparación de planes DICOM RT. |
 | `/tg43-calculator` | Calculador TG-43 | Verificación de dosis HDR para Ir-192. |
@@ -106,6 +107,7 @@ de Firestore por separado y revisar las limitaciones del hosting estático.
 ## Documentación
 
 - [PET_NEMA_FRACTIONATION.md](PET_NEMA_FRACTIONATION.md) - cálculo y cronómetros de la prueba PET NEMA de calidad de imagen.
+- [COR_NEMA_ANALYSIS.md](COR_NEMA_ANALYSIS.md) - método NEMA de centro de rotación, modelo 3D y validación de tolerancias.
 - [SECURITY.md](SECURITY.md) - auditoría del artefacto público y despliegue privado de reglas de Firestore.
 - [DICOM_MIGRATION.md](DICOM_MIGRATION.md) - migración de lectura DICOM.
 - [TG43_IMPROVEMENTS.md](TG43_IMPROVEMENTS.md) - mejoras del calculador TG-43.

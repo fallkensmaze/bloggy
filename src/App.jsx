@@ -5,6 +5,7 @@ import ConvertUnits from './pages/ConvertUnits'
 import DecayCalculator from './pages/DecayCalculator'
 import RestricionesLu177 from './pages/RestricionesLu177'
 import UniformidadGamma from './pages/UniformidadGamma'
+import CorAnalysis from './pages/CorAnalysis'
 import RTPlanCompare from './pages/RTPlanCompare'
 import Tg43Calculator from './pages/Tg43Calculator'
 import AcrQcPage from './pages/AcrQcPage'
@@ -37,6 +38,7 @@ function App() {
         <Route path="decay-calculator" element={<DecayCalculator />} />
         <Route path="restricciones-lu177" element={<RestricionesLu177 />} />
         <Route path="uniformidad-gamma" element={<UniformidadGamma />} />
+        <Route path="centro-rotacion-spect" element={<CorAnalysis />} />
         <Route path="rtplan-compare" element={<RTPlanCompare />} />
         <Route path="tg43-calculator" element={<Tg43Calculator />} />
         <Route path="acr-qc" element={<AcrQcPage />} />
