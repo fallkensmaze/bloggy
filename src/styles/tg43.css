@@ -79,6 +79,26 @@
   font-weight: 600;
 }
 
+.tg43-model-note,
+.tg43-inline-note {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(102, 126, 234, 0.08);
+  border: 1px solid rgba(102, 126, 234, 0.22);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.tg43-warning-list {
+  margin-top: 12px;
+  display: grid;
+  gap: 6px;
+  color: #ebcb8b;
+  font-size: 12px;
+}
+
 .tg43-section {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
@@ -170,8 +190,14 @@
 
 .tg43-point-coords {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 12px;
+}
+
+.tg43-prescription-source {
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .tg43-coord-input {
@@ -215,6 +241,37 @@
 
 .tg43-results-table {
   overflow-x: auto;
+  margin-bottom: 16px;
+}
+
+.tg43-scope-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tg43-scope-toggle button {
+  border: 0;
+  border-right: 1px solid var(--border-color);
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.tg43-scope-toggle button:last-child {
+  border-right: 0;
+}
+
+.tg43-scope-toggle button.active {
+  background: var(--accent-color);
+  color: white;
+}
+
+.tg43-dose-meaning {
+  margin-top: 0;
   margin-bottom: 16px;
 }
 
