@@ -11,6 +11,7 @@ const links = [
   { href: '/decay-calculator', icon: 'bi-clock-history', label: 'Decay Calculator', section: 'Aplicaciones' },
   { href: '/restricciones-lu177', icon: 'bi-activity', label: 'Lu-177 Restricciones', section: 'Aplicaciones' },
   { href: '/uniformidad-gamma', icon: 'bi-grid-1x2-fill', label: 'Uniformidad NEMA', section: 'Aplicaciones' },
+  { href: '/centro-rotacion-spect', icon: 'bi-crosshair', label: 'Centro rotación SPECT', section: 'Aplicaciones' },
   { href: '/rtplan-compare', icon: 'bi-file-earmark-diff', label: 'Comparar RT Plans', section: 'Aplicaciones' },
   { href: '/tg43-calculator', icon: 'bi-radioactive', label: 'Calculador TG-43', section: 'Aplicaciones' },
   { href: '/acr-qc', icon: 'bi-magnet', label: 'ACR MRI QC', section: 'Aplicaciones' },

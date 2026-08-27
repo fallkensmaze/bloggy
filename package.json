@@ -14,6 +14,7 @@
     "test:paste": "node scripts/test-paste.mjs",
     "test:cpt": "node scripts/test-cpt.mjs",
     "test:pet": "node scripts/test-pet-nema.mjs && node scripts/test-pet-rois.mjs",
+    "test:cor": "node scripts/test-cor-analysis.mjs",
     "check:security": "npm run test:anon && npm run test:paste && npm run build",
     "deploy": "npm run check:security && gh-pages -d dist"
   },

@@ -15,6 +15,7 @@ npm run test:nema      # NEMA NU 1 intrinsic uniformity (edge rule, CFOV, DICOM 
 npm run test:radio     # Radio-exam XML parsing and quiz building
 npm run test:paste     # Secure Paste crypto (the document id must not decrypt anything)
 npm run test:pet       # PET DICOM calibration and NEMA NU 2 background ROI placement
+npm run test:cor       # SPECT COR centroids, NEMA upper bounds, 3D geometry and ROC
 npm run check:security # Anonymizer and paste tests, then build and audit the GitHub Pages artifact
 npm run deploy         # Build, audit and deploy dist/ to GitHub Pages
 ```
@@ -103,6 +104,7 @@ Routes inside `<Layout />` use the shared sidebar and mobile topbar:
 - `/decay-calculator` - radioactive decay
 - `/restricciones-lu177` - Lu-177 restrictions
 - `/uniformidad-gamma` - intrinsic gamma-camera uniformity
+- `/centro-rotacion-spect` - SPECT center-of-rotation NEMA and 3D backprojection analysis
 - `/pet-nema-fraccionamiento` - PET NEMA image-quality phantom fill planning and timers
 - `/pet-nema-analisis` - PET NEMA NU 2-2018 image-quality analysis of the acquired series
 - `/rtplan-compare` - DICOM RT Plan comparison
@@ -165,6 +167,7 @@ Firestore collections:
   one place and no reader invents frames out of surplus bytes. Note that this build of dcmjs returns
   the file meta group as the dict itself: reading `dicomData.meta.dict` silently yields an empty
   transfer syntax, which then passes as native.
+- `src/pages/CorAnalysis.jsx`, `src/utils/corDicom.js` and `src/utils/corAnalysis.js` - in-browser NM multiframe center-of-rotation analysis. The classic branch implements NEMA NU 1-2007 §4.1 and reports all four upper bounds in millimetres. The experimental branch fits the common point of the central source backprojection lines and reports a containing sphere and covariance-oriented ellipsoid. NEMA defines the measurement, not a universal tolerance: keep local limits labelled as provisional until a labelled cohort supports sensitivity/specificity and independent validation.
 - `src/pages/PetNemaFractionation.jsx` - PET image-quality phantom fill planner, live countdowns and per-sample initial/residual syringe measurement workflow.
 - `src/utils/petNemaFractionation.js` - pure PET NEMA geometry, F-18 decay, theoretical ratios, per-sample recommendations and net activity-at-image projections.
 - `src/pages/PetNemaAnalysis.jsx` and `src/utils/petNemaAnalysis.js` - NEMA NU 2-2018 §7.4 image-quality analysis of the acquired series: contrast recovery, background variability and lung residual error. It takes the **measured** `a_H` and `a_B` concentrations and derives the real activity ratio; only their quotient enters the contrast normalisation, so the unit cancels as long as both are expressed alike and referred to the same instant. All six spheres are treated as hot, so it does not implement the NU 2-2007/2012 cold-sphere contrast used by tools such as jQC-PET.
