@@ -34,6 +34,13 @@ const close = (actual: number, expected: number, tolerance = 1e-9) => {
 
 assert.equal(SOURCE_MODEL.id, 'GMPir HDR (2012)')
 close(SOURCE_MODEL.doseRateConstant, 1.1165)
+close(SOURCE_MODEL.activeLength, 0.35)
+close(SOURCE_MODEL.activeDiameter, 0.06)
+close(SOURCE_MODEL.capsuleLength, 0.452)
+close(SOURCE_MODEL.capsuleDiameter, 0.09)
+close(SOURCE_MODEL.capsuleInnerDiameter, 0.07)
+assert.equal(SOURCE_MODEL.capsuleMaterial, 'Acero inoxidable AISI 316L')
+assert.equal(SOURCE_MODEL.cableMaterial, 'Acero inoxidable AISI 304')
 assert.equal(anisotropyRadii.length, 17)
 assert.equal(anisotropyAnglesDeg.length, 39)
 assert.ok(anisotropyMatrix.every(row => row.length === anisotropyRadii.length))

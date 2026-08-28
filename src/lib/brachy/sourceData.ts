@@ -10,10 +10,19 @@ export const SOURCE_MODEL = {
   doseRateConstant: 1.1165, // Λ [cGy h⁻¹ U⁻¹]; se muestra redondeada como 1.117
   activeLength: 0.35,      // L [cm]
   activeDiameter: 0.06,    // [cm]
+  activeMaterial: 'Iridio metálico',
+  capsuleLength: 0.452,    // [cm]
   capsuleDiameter: 0.09,   // [cm]
+  capsuleInnerDiameter: 0.07, // [cm]
+  capsuleMaterial: 'Acero inoxidable AISI 316L',
+  capsuleDensity: 7.8,     // [g/cm³]
+  cableDiameter: 0.09,     // [cm]
+  cableMaterial: 'Acero inoxidable AISI 304',
   halfLife: 73.83,         // [días]
   reference: 'Pérez-Calatayud et al., Medical Physics 39 (2012) 2904-2929',
-  doi: 'https://doi.org/10.1118/1.3703892'
+  doi: 'https://doi.org/10.1118/1.3703892',
+  geometryReference: 'CLRP / egs_brachy: Varian GammaMed Ir-192 HDR Plus',
+  geometryUrl: 'https://physics.carleton.ca/clrp/egs_brachy/seed_database/Ir192_HDR/GammaMed_HDR_Plus'
 } as const
 
 // La fila r=0 de la hoja es una extrapolación de orden cero desde r=0.2 cm.
