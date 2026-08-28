@@ -307,13 +307,16 @@ function FdtdSimulator() {
     : appliedConfig.antennaType === 'dipole' && Math.abs(appliedConfig.dipoleFraction - 0.47) < 0.08
       ? 'ideal 2,15'
       : ''
+  const broadbandAnalysis = analysis.spectrumMode === 'broadband'
+  const hasResonance = broadbandAnalysis && analysis.resonanceAvailable
+  const displayFrequencyIndex = hasResonance ? analysis.resonanceIndex : analysis.nominalIndex
+  const displayedImpedance = hasResonance ? analysis.resonanceImpedance : analysis.nominalImpedance
   const showHalfWaveReference = appliedConfig.antennaType === 'dipole' && Math.abs(appliedConfig.dipoleFraction - 0.47) < 0.08
   const impedanceReferenceLines = [
-    { axis: 'x', value: analysis.resonanceIndex, color: '#bf616a' },
+    ...(hasResonance ? [{ axis: 'x', value: analysis.resonancePlotIndex, color: '#bf616a' }] : []),
     ...(showHalfWaveReference ? [{ axis: 'y', value: 73, color: '#78849a', dash: [3, 4] }] : [])
   ]
   const currentReferenceLabel = appliedConfig.antennaType === 'monopole' ? 'cos(πz/2L)' : 'cos(πz/L)'
-  const resonanceIndex = analysis.resonanceIndex
   const polarData = {
     labels: ANGLES.map(angle => `${angle}°`),
     datasets: [{
@@ -336,13 +339,13 @@ function FdtdSimulator() {
   const impedanceData = {
     labels: analysis.frequencyMHz.map(value => value.toFixed(2)),
     datasets: [
-      { label: 'Rin [Ω]', data: analysis.resistance.map(value => Math.abs(value) <= 2000 ? value : null), borderColor: '#a3be8c', pointRadius: 0, borderWidth: 2 },
-      { label: 'Xin [Ω]', data: analysis.reactance.map(value => Math.abs(value) <= 2000 ? value : null), borderColor: '#ebcb8b', pointRadius: 0, borderWidth: 2 }
+      { label: 'Rin [Ω]', data: analysis.plottedResistance, borderColor: '#a3be8c', pointRadius: broadbandAnalysis ? 0 : 5, pointHoverRadius: 6, borderWidth: 2, showLine: broadbandAnalysis },
+      { label: 'Xin [Ω]', data: analysis.plottedReactance, borderColor: '#ebcb8b', pointRadius: broadbandAnalysis ? 0 : 5, pointHoverRadius: 6, borderWidth: 2, showLine: broadbandAnalysis }
     ]
   }
   const s11Data = {
     labels: analysis.frequencyMHz.map(value => value.toFixed(2)),
-    datasets: [{ label: '|S11| [dB] · 50 Ω', data: analysis.s11, borderColor: '#bf616a', backgroundColor: 'rgba(191,97,106,.12)', pointRadius: 0, borderWidth: 2, fill: true }]
+    datasets: [{ label: '|S11| [dB] · 50 Ω', data: analysis.plottedS11, borderColor: '#bf616a', backgroundColor: 'rgba(191,97,106,.12)', pointRadius: broadbandAnalysis ? 0 : 5, pointHoverRadius: 6, borderWidth: 2, fill: broadbandAnalysis, showLine: broadbandAnalysis }]
   }
   const currentData = {
     labels: analysis.currentPosition.map(value => value.toFixed(3)),
@@ -351,18 +354,19 @@ function FdtdSimulator() {
       { label: currentReferenceLabel, data: analysis.idealProfile, borderColor: '#78849a', borderDash: [5, 4], pointRadius: 0, borderWidth: 1.4 }
     ]
   }
+  const compactCharts = typeof window !== 'undefined' && window.innerWidth < 560
   const commonChartOptions = {
     responsive: true,
     maintainAspectRatio: false,
     animation: false,
     plugins: {
       legend: { labels: { color: '#c3ccda', boxWidth: 12, font: { size: 10 } } },
-      tooltip: { intersect: false }
+      tooltip: { enabled: !compactCharts, intersect: false, padding: 7, titleFont: { size: 10 }, bodyFont: { size: 10 }, boxWidth: 8, boxHeight: 8 }
     },
     interaction: { mode: 'index', intersect: false }
   }
   const cartesianScales = (xTitle, yTitle) => ({
-    x: { title: { display: true, text: xTitle, color: '#78849a' }, ticks: { color: '#78849a', maxTicksLimit: 7 }, grid: { color: 'rgba(120,132,154,.1)' } },
+    x: { title: { display: true, text: xTitle, color: '#78849a' }, ticks: { color: '#78849a', maxTicksLimit: compactCharts ? 5 : 7, maxRotation: 0, autoSkip: true }, grid: { color: 'rgba(120,132,154,.1)' } },
     y: { title: { display: true, text: yTitle, color: '#78849a' }, ticks: { color: '#78849a' }, grid: { color: 'rgba(120,132,154,.15)' } }
   })
 
@@ -457,14 +461,15 @@ function FdtdSimulator() {
       </div>
 
       <section className="fdtd-result-strip" aria-label="Resultados principales">
-        <div><span>Resonancia estimada</span><strong>{analysis.ready ? `${analysis.resonanceMHz.toFixed(2)} MHz` : 'Acumulando…'}</strong></div>
-        <div><span>L / λres</span><strong>{analysis.ready ? analysis.lengthOverLambda.toFixed(3) : '—'}</strong></div>
-        <div><span>Zin en resonancia</span><strong>{analysis.ready ? `${signedComplex(analysis.resonanceImpedance)} Ω` : '—'}</strong></div>
+        <div><span>Resonancia estimada</span><strong>{!analysis.ready ? 'Acumulando…' : hasResonance ? `${analysis.resonanceMHz.toFixed(2)} MHz` : broadbandAnalysis ? 'Sin cruce X = 0' : 'Requiere pulso'}</strong></div>
+        <div><span>L / λres</span><strong>{analysis.ready && hasResonance ? analysis.lengthOverLambda.toFixed(3) : '—'}</strong></div>
+        <div><span>Zin en resonancia</span><strong>{analysis.ready && hasResonance ? `${signedComplex(analysis.resonanceImpedance)} Ω` : '—'}</strong></div>
         <div><span>Zin en f₀</span><strong>{analysis.ready ? `${signedComplex(analysis.nominalImpedance)} Ω` : '—'}</strong></div>
         <div><span>Directividad</span><strong>{analysis.ready ? `${analysis.directivityDb.toFixed(2)} dBi` : '—'} {theoreticalDirectivity && <small>{theoreticalDirectivity}</small>}</strong></div>
       </section>
 
-      {appliedConfig.sourceType !== 'pulse' && <div className="fdtd-analysis-notice"><i className="bi bi-info-circle" /> Para obtener el espectro completo de impedancia y S11 utiliza la excitación por pulso. Con onda continua solo es fiable el entorno de f₀.</div>}
+      {appliedConfig.sourceType !== 'pulse' && <div className="fdtd-analysis-notice"><i className="bi bi-info-circle" /> Onda continua: Zin y S11 se muestran únicamente en f₀. La resonancia y el espectro completo requieren excitación por pulso.</div>}
+      {!analysis.ready && <div className="fdtd-analysis-notice"><i className="bi bi-hourglass-split" /> Acumulando señal: {analysis.elapsedCycles.toFixed(1)} de {analysis.requiredCycles} ciclos mínimos. Las curvas permanecen ocultas hasta alcanzar un registro estable.</div>}
       {cartesian && <div className="fdtd-analysis-notice"><i className="bi bi-info-circle" /> La Yagi usa el núcleo cartesiano 3D experimental. Refina la malla y aumenta el tiempo antes de utilizar Zin o la directividad como valores cuantitativos.</div>}
 
       <section className="fdtd-analysis-grid" aria-label="Caracterización de la antena">
@@ -475,19 +480,19 @@ function FdtdSimulator() {
         </article>
 
         <article className="fdtd-analysis-card">
-          <div className="fdtd-analysis-heading"><div><span>Puerto calibrado</span><h2>Impedancia de entrada</h2></div><strong>{analysis.ready ? `${signedComplex(analysis.resonanceImpedance)} Ω` : 'Acumulando…'}</strong></div>
+          <div className="fdtd-analysis-heading"><div><span>Puerto FDTD</span><h2>Impedancia de entrada</h2></div><strong>{analysis.ready ? `${signedComplex(displayedImpedance)} Ω${hasResonance ? '' : ' · f₀'}` : 'Acumulando…'}</strong></div>
           <div className="fdtd-chart"><Line data={impedanceData} options={{ ...commonChartOptions, plugins: { ...commonChartOptions.plugins, fdtdReferenceLines: { lines: impedanceReferenceLines } }, scales: cartesianScales('Frecuencia [MHz]', 'Impedancia [Ω]') }} /></div>
-          <p>Zin = Ṽ/Ĩ. La línea roja marca el mínimo de |X| con señal suficiente.{showHalfWaveReference ? ' La línea de 73 Ω es la referencia del dipolo ideal infinitamente fino de media onda.' : ''}</p>
+          <p>{broadbandAnalysis ? hasResonance ? 'Zin = Ṽ/Ĩ. La línea roja interpola el cruce de Xin por cero entre dos bins con señal suficiente.' : 'No se ha encontrado todavía un cruce válido de Xin por cero en la banda analizada.' : 'La excitación continua solo permite estimar Zin en la frecuencia nominal f₀; los demás bins se ocultan para no representar fuga espectral como impedancia.'}{showHalfWaveReference ? ' La línea de 73 Ω es solo la referencia teórica del dipolo ideal infinitamente fino.' : ''}</p>
         </article>
 
         <article className="fdtd-analysis-card">
-          <div className="fdtd-analysis-heading"><div><span>Referencia 50 Ω</span><h2>Coeficiente de reflexión</h2></div><strong>{analysis.ready ? `${analysis.s11[resonanceIndex]?.toFixed(1)} dB` : 'Acumulando…'}</strong></div>
-          <div className="fdtd-chart"><Line data={s11Data} options={{ ...commonChartOptions, plugins: { ...commonChartOptions.plugins, fdtdReferenceLines: { lines: [{ axis: 'x', value: resonanceIndex, color: '#bf616a' }, { axis: 'y', value: -10, color: '#ebcb8b' }] } }, scales: cartesianScales('Frecuencia [MHz]', '|S11| [dB]') }} /></div>
+          <div className="fdtd-analysis-heading"><div><span>Referencia 50 Ω</span><h2>Coeficiente de reflexión</h2></div><strong>{analysis.ready ? `${analysis.s11[displayFrequencyIndex]?.toFixed(1)} dB${hasResonance ? '' : ' · f₀'}` : 'Acumulando…'}</strong></div>
+          <div className="fdtd-chart"><Line data={s11Data} options={{ ...commonChartOptions, plugins: { ...commonChartOptions.plugins, fdtdReferenceLines: { lines: [...(hasResonance ? [{ axis: 'x', value: analysis.resonancePlotIndex, color: '#bf616a' }] : []), { axis: 'y', value: -10, color: '#ebcb8b' }] } }, scales: cartesianScales('Frecuencia [MHz]', '|S11| [dB]') }} /></div>
           <p>Se calcula directamente como 20 log₁₀ |(Zin − 50)/(Zin + 50)|. Resonancia y adaptación no son necesariamente la misma frecuencia.</p>
         </article>
 
         <article className="fdtd-analysis-card">
-          <div className="fdtd-analysis-heading"><div><span>Corriente superficial</span><h2>Distribución sobre el hilo</h2></div><strong>fres</strong></div>
+          <div className="fdtd-analysis-heading"><div><span>Corriente superficial</span><h2>Distribución sobre el hilo</h2></div><strong>{hasResonance ? 'fres' : 'f₀'}</strong></div>
           <div className="fdtd-chart"><Line data={currentData} options={{ ...commonChartOptions, scales: { ...cartesianScales('z / L', '|I| normalizada'), y: { ...cartesianScales('', '|I| normalizada').y, min: 0, max: 1.08 } } }} /></div>
           <p>La corriente procede de la circulación del campo magnético alrededor del conductor. La referencia cosenoidal se adapta al dipolo o al monopolo y no se impone al cálculo.</p>
         </article>
