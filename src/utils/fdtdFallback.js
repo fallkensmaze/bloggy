@@ -37,16 +37,18 @@ function makePmlAxis(length, thickness, stagger, targetReflection, kappaMax, alp
 const clampIndex = (value, length) => Math.max(0, Math.min(length - 1, Math.round(value)))
 
 export class FdtdSimulationFallback {
-  constructor(nx, ny, wavelengthCells, dipoleFraction, pmlCells, targetReflection, sourceKind, sourceAmplitude, dielectricEnabled, kappaMax = 5, alphaMax = 0.05, wireRadiusCells = 1) {
+  constructor(nx, ny, wavelengthCells, dipoleFraction, pmlCells, targetReflection, sourceKind, sourceAmplitude, dielectricEnabled, kappaMax = 5, alphaMax = 0.05, wireRadiusCells = 1, antennaKind = 0) {
     this.width = Math.max(120, Math.min(520, Math.round(nx)))
     this.height = Math.max(80, Math.min(360, Math.round(ny)))
     this.radialCells = Math.floor(this.width / 2) + 1
     this.wavelength = Math.max(18, Math.min(100, wavelengthCells))
     this.sourceKind = sourceKind ? 1 : 0
     this.sourceAmplitude = Math.max(0.01, Math.min(4, sourceAmplitude))
-    this.sourceZ = Math.floor(this.height / 2)
-    this.steps = 0
     this.pmlCells = Math.max(8, Math.min(Math.floor(Math.min(this.radialCells, this.height) / 3), Math.round(pmlCells)))
+    this.isMonopole = antennaKind === 1
+    this.groundZ = this.isMonopole ? Math.max(this.pmlCells + 5, Math.floor(this.height * 0.36)) : -1
+    this.sourceZ = this.isMonopole ? this.groundZ + 1 : Math.floor(this.height / 2)
+    this.steps = 0
     this.wireRadius = Math.max(1, Math.min(6, Math.round(wireRadiusCells)))
     const size = this.radialCells * this.height
     this.er = new Float32Array(size)
@@ -67,13 +69,16 @@ export class FdtdSimulationFallback {
     this.pmlRE = makePmlAxis(this.radialCells, this.pmlCells, 0, reflection, safeKappa, safeAlpha, false)
     this.pmlZE = makePmlAxis(this.height, this.pmlCells, 0, reflection, safeKappa, safeAlpha, true)
 
-    const total = Math.max(8, Math.round(this.wavelength * Math.max(0.1, Math.min(0.95, dipoleFraction))))
-    this.arm = Math.max(4, Math.floor((total - 1) / 2))
-    this.wireStart = Math.max(1, this.sourceZ - this.arm)
+    const total = Math.max(8, Math.round(this.wavelength * Math.max(0.1, Math.min(1.8, dipoleFraction))))
+    this.arm = this.isMonopole ? total : Math.max(4, Math.floor((total - 1) / 2))
+    this.wireStart = this.isMonopole ? this.sourceZ + 1 : Math.max(1, this.sourceZ - this.arm)
     this.wireEnd = Math.min(this.height - 2, this.sourceZ + this.arm)
     for (let z = this.wireStart; z <= this.wireEnd; z += 1) {
       if (z === this.sourceZ) continue
       for (let r = 0; r <= this.wireRadius; r += 1) this.metal[z * this.radialCells + r] = 1
+    }
+    if (this.isMonopole) {
+      for (let r = 0; r < this.radialCells; r += 1) this.metal[this.groundZ * this.radialCells + r] = 1
     }
 
     if (dielectricEnabled) {
@@ -188,6 +193,7 @@ export class FdtdSimulationFallback {
   }
 
   portCurrent() {
+    if (this.isMonopole) return this.wireCurrentAt(this.sourceZ + 1)
     return 0.5 * (this.wireCurrentAt(this.sourceZ - 1) + this.wireCurrentAt(this.sourceZ + 1))
   }
 
@@ -253,6 +259,7 @@ export class FdtdSimulationFallback {
   }
 
   radiationPower(bin, theta) {
+    if (this.isMonopole && theta > Math.PI / 2) return 0
     const index = clampIndex(bin, SPECTRUM_BINS)
     const offset = index * this.height
     const waveNumber = Math.PI * 2 * this.frequencyRatios[index] / this.wavelength
@@ -266,6 +273,13 @@ export class FdtdSimulationFallback {
       const profileImag = this.profileIm[offset + z]
       real += profileReal * cos - profileImag * sin
       imag += profileReal * sin + profileImag * cos
+      if (this.isMonopole) {
+        const imagePhase = waveNumber * (2 * this.groundZ - z - this.sourceZ) * Math.cos(theta)
+        const imageCos = Math.cos(imagePhase)
+        const imageSin = Math.sin(imagePhase)
+        real += profileReal * imageCos - profileImag * imageSin
+        imag += profileReal * imageSin + profileImag * imageCos
+      }
     }
     return (real * real + imag * imag) * Math.sin(theta) ** 2
   }
@@ -284,8 +298,9 @@ export class FdtdSimulationFallback {
   }
 
   directivity_3d_at(bin) {
-    const samples = 180
-    const delta = Math.PI / samples
+    const upperLimit = this.isMonopole ? Math.PI / 2 : Math.PI
+    const samples = this.isMonopole ? 90 : 180
+    const delta = upperLimit / samples
     let maximum = 0
     let integral = 0
     for (let sample = 0; sample <= samples; sample += 1) {
@@ -319,6 +334,21 @@ export class FdtdSimulationFallback {
   }
 
   field_snapshot() { return this.mirrorSnapshot(this.hphi, Float32Array) }
+  magnetic_field_snapshot() { return this.field_snapshot() }
+  electric_z_snapshot() { return this.mirrorSnapshot(this.ez, Float32Array) }
+  electric_r_snapshot() {
+    const snapshot = this.mirrorSnapshot(this.er, Float32Array)
+    const half = Math.floor(this.width / 2)
+    for (let z = 0; z < this.height; z += 1) {
+      for (let x = 0; x < half; x += 1) snapshot[z * this.width + x] *= -1
+    }
+    return snapshot
+  }
+  electric_magnitude_snapshot() {
+    const magnitude = new Float32Array(this.er.length)
+    for (let index = 0; index < magnitude.length; index += 1) magnitude[index] = Math.hypot(this.er[index], this.ez[index])
+    return this.mirrorSnapshot(magnitude, Float32Array)
+  }
   metal_snapshot() { return this.mirrorSnapshot(this.metal, Uint8Array) }
   material_snapshot() { return this.mirrorSnapshot(this.epsilon, Float32Array) }
   time_voltage_snapshot() { return Float32Array.from(this.voltageTrace) }
@@ -338,6 +368,7 @@ export class FdtdSimulationFallback {
   time_step() { return COURANT }
   wire_start() { return this.wireStart }
   wire_end() { return this.wireEnd }
+  feed_position() { return this.sourceZ }
 
   energy() {
     let total = 0

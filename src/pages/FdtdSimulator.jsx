@@ -20,6 +20,12 @@ import '../styles/fdtd.css'
 
 const C_METRES_PER_MICROSECOND = 299.792458
 const ANGLES = Array.from({ length: 72 }, (_, index) => index * 5)
+const FIELD_OPTIONS = {
+  magnetic: { label: 'Hφ', cartesianLabel: 'Hy', method: 'magnetic_field_snapshot', volumeKind: 0 },
+  ez: { label: 'Ez', cartesianLabel: 'Ez', method: 'electric_z_snapshot', volumeKind: 1 },
+  er: { label: 'Er', cartesianLabel: 'Ex', method: 'electric_r_snapshot', volumeKind: 2 },
+  emagnitude: { label: '|E|', cartesianLabel: '|E|', method: 'electric_magnitude_snapshot', volumeKind: 3 }
+}
 
 const referenceLinesPlugin = {
   id: 'fdtdReferenceLines',
@@ -60,6 +66,7 @@ function FdtdSimulator() {
   const [presetId, setPresetId] = useState('halfWave')
   const [running, setRunning] = useState(false)
   const [viewMode, setViewMode] = useState('slice')
+  const [fieldKind, setFieldKind] = useState('magnetic')
   const [backend, setBackend] = useState('Cargando…')
   const [backendReady, setBackendReady] = useState(false)
   const [error, setError] = useState('')
@@ -81,7 +88,9 @@ function FdtdSimulator() {
   const draw = useCallback(() => {
     const simulation = simulationRef.current
     if (!simulation) return
-    const field = simulation.field_snapshot()
+    const fieldOption = FIELD_OPTIONS[fieldKind]
+    const field = simulation[fieldOption.method]()
+    const cartesian = appliedConfig.antennaType === 'yagi'
     const frame = {
       field,
       metal: geometryRef.current.metal,
@@ -99,17 +108,28 @@ function FdtdSimulator() {
         frame.nx,
         frame.ny,
         frame.absorberCells,
-        scaleRef.current
+        scaleRef.current,
+        fieldKind
       )
     }
-    field3dRef.current?.render({ ...frame, scale: scaleRef.current })
-  }, [appliedConfig.absorberCells])
+    field3dRef.current?.render({
+      ...frame,
+      scale: scaleRef.current,
+      fieldKind,
+      symmetry: cartesian ? 'cartesian' : 'axisymmetric',
+      volume: cartesian && viewMode === 'volume' ? simulation.volume_snapshot(fieldOption.volumeKind) : null,
+      gridX: cartesian ? simulation.nx() : null,
+      gridY: cartesian ? simulation.depth() : null,
+      gridZ: cartesian ? simulation.ny() : null,
+      conductorPoints: cartesian ? geometryRef.current.conductorPoints : null
+    })
+  }, [appliedConfig.absorberCells, appliedConfig.antennaType, fieldKind, viewMode])
 
   const createSimulation = useCallback((nextConfig) => {
     if (!backendRef.current) return
     const safe = sanitizeFdtdConfig(nextConfig)
-    const { Simulation } = backendRef.current
-    simulationRef.current = new Simulation(
+    const SimulationClass = safe.antennaType === 'yagi' ? backendRef.current.Simulation3d : backendRef.current.Simulation
+    simulationRef.current = new SimulationClass(
       safe.nx,
       safe.ny,
       safe.wavelengthCells,
@@ -121,11 +141,13 @@ function FdtdSimulator() {
       safe.dielectric,
       safe.pmlKappaMax,
       safe.pmlAlphaMax,
-      safe.wireRadiusCells
+      safe.wireRadiusCells,
+      safe.antennaType === 'monopole' ? 1 : 0
     )
     geometryRef.current = {
       metal: simulationRef.current.metal_snapshot(),
-      material: simulationRef.current.material_snapshot()
+      material: simulationRef.current.material_snapshot(),
+      conductorPoints: safe.antennaType === 'yagi' ? simulationRef.current.conductor_points() : null
     }
     setAppliedConfig(safe)
     setConfig(safe)
@@ -212,7 +234,7 @@ function FdtdSimulator() {
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = 'fdtd-dipolo-3d.json'
+    anchor.download = `fdtd-${config.antennaType}-3d.json`
     anchor.click()
     URL.revokeObjectURL(url)
   }
@@ -236,7 +258,7 @@ function FdtdSimulator() {
     const canvas = activeCanvas()
     if (!canvas) return
     const anchor = document.createElement('a')
-    anchor.download = `fdtd-dipolo-${viewMode}-paso-${stats.steps}.png`
+    anchor.download = `fdtd-${appliedConfig.antennaType}-${fieldKind}-${viewMode}-paso-${stats.steps}.png`
     anchor.href = canvas.toDataURL('image/png')
     anchor.click()
   }
@@ -262,7 +284,7 @@ function FdtdSimulator() {
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = `fdtd-dipolo-${viewMode}.webm`
+      anchor.download = `fdtd-${appliedConfig.antennaType}-${fieldKind}-${viewMode}.webm`
       anchor.click()
       URL.revokeObjectURL(url)
       stream.getTracks().forEach(track => track.stop())
@@ -274,9 +296,23 @@ function FdtdSimulator() {
     setRunning(true)
   }
 
-  const timeNs = stats.steps * 0.5 * 1000 / (appliedConfig.wavelengthCells * appliedConfig.frequencyMHz)
+  const timeStep = simulationRef.current?.time_step?.() ?? 0.5
+  const timeNs = stats.steps * timeStep * 1000 / (appliedConfig.wavelengthCells * appliedConfig.frequencyMHz)
   const wavelengthMetres = C_METRES_PER_MICROSECOND / appliedConfig.frequencyMHz
   const dipoleLengthMetres = wavelengthMetres * appliedConfig.dipoleFraction
+  const cartesian = appliedConfig.antennaType === 'yagi'
+  const fieldLabel = cartesian ? FIELD_OPTIONS[fieldKind].cartesianLabel : FIELD_OPTIONS[fieldKind].label
+  const theoreticalDirectivity = appliedConfig.antennaType === 'monopole' && appliedConfig.dipoleFraction < 0.4
+    ? 'ideal 5,15'
+    : appliedConfig.antennaType === 'dipole' && Math.abs(appliedConfig.dipoleFraction - 0.47) < 0.08
+      ? 'ideal 2,15'
+      : ''
+  const showHalfWaveReference = appliedConfig.antennaType === 'dipole' && Math.abs(appliedConfig.dipoleFraction - 0.47) < 0.08
+  const impedanceReferenceLines = [
+    { axis: 'x', value: analysis.resonanceIndex, color: '#bf616a' },
+    ...(showHalfWaveReference ? [{ axis: 'y', value: 73, color: '#78849a', dash: [3, 4] }] : [])
+  ]
+  const currentReferenceLabel = appliedConfig.antennaType === 'monopole' ? 'cos(πz/2L)' : 'cos(πz/L)'
   const resonanceIndex = analysis.resonanceIndex
   const polarData = {
     labels: ANGLES.map(angle => `${angle}°`),
@@ -312,7 +348,7 @@ function FdtdSimulator() {
     labels: analysis.currentPosition.map(value => value.toFixed(3)),
     datasets: [
       { label: '|I(z)| FDTD', data: analysis.currentProfile, borderColor: '#88c0d0', pointRadius: 0, borderWidth: 2 },
-      { label: 'cos(πz/L)', data: analysis.idealProfile, borderColor: '#78849a', borderDash: [5, 4], pointRadius: 0, borderWidth: 1.4 }
+      { label: currentReferenceLabel, data: analysis.idealProfile, borderColor: '#78849a', borderDash: [5, 4], pointRadius: 0, borderWidth: 1.4 }
     ]
   }
   const commonChartOptions = {
@@ -335,8 +371,8 @@ function FdtdSimulator() {
       <div className="fdtd-heading">
         <div>
           <span className="fdtd-kicker">Laboratorio electromagnético</span>
-          <h1>Simulador FDTD · dipolo 3D</h1>
-          <p>FDTD axisimétrica en coordenadas cilíndricas, reconstrucción volumétrica y análisis de puerto en el navegador.</p>
+          <h1>Simulador FDTD · antenas 3D</h1>
+          <p>FDTD 3D cilíndrica o cartesiana según la antena, con campos navegables y análisis de puerto en el navegador.</p>
         </div>
         <div className={`fdtd-engine ${backend.includes('Rust') ? 'ready' : ''}`}>
           <span className="fdtd-engine-dot" />
@@ -360,7 +396,7 @@ function FdtdSimulator() {
           <div className="fdtd-control-section fdtd-grid-fields">
             <label><span>Frecuencia nominal</span><input type="number" value={config.frequencyMHz} min="0.1" max="100000" step="0.1" onChange={e => changeConfig('frequencyMHz', e.target.value)} /><small>MHz</small></label>
             <label><span>Resolución</span><input type="number" value={config.wavelengthCells} min="18" max="100" onChange={e => changeConfig('wavelengthCells', e.target.value)} /><small>celdas / λ</small></label>
-            <label><span>Longitud del dipolo</span><input type="number" value={config.dipoleFraction} min="0.1" max="0.95" step="0.01" onChange={e => changeConfig('dipoleFraction', e.target.value)} /><small>fracción de λ₀</small></label>
+            <label><span>Longitud del elemento</span><input type="number" value={config.dipoleFraction} min="0.1" max="1.8" step="0.01" disabled={config.antennaType === 'yagi'} onChange={e => changeConfig('dipoleFraction', e.target.value)} /><small>fracción de λ₀</small></label>
             <label><span>Radio del hilo</span><input type="number" value={config.wireRadiusCells} min="1" max="6" onChange={e => changeConfig('wireRadiusCells', e.target.value)} /><small>celdas</small></label>
             <label><span>Espesor CPML</span><input type="number" value={config.absorberCells} min="8" max="48" onChange={e => changeConfig('absorberCells', e.target.value)} /><small>celdas</small></label>
             <label><span>Pasos por fotograma</span><input type="number" value={config.stepsPerFrame} min="1" max="16" onChange={e => changeConfig('stepsPerFrame', e.target.value)} /><small>Δt / frame</small></label>
@@ -372,7 +408,7 @@ function FdtdSimulator() {
               <button className={config.sourceType === 'pulse' ? 'active' : ''} onClick={() => changeConfig('sourceType', 'pulse')}>Pulso</button>
               <button className={config.sourceType === 'continuous' ? 'active' : ''} onClick={() => changeConfig('sourceType', 'continuous')}>Continua</button>
             </div>
-            <label className="fdtd-check"><input type="checkbox" checked={config.dielectric} onChange={e => changeConfig('dielectric', e.target.checked)} /><span>Anillo dieléctrico εr = 4</span></label>
+            {config.antennaType !== 'yagi' && <label className="fdtd-check"><input type="checkbox" checked={config.dielectric} onChange={e => changeConfig('dielectric', e.target.checked)} /><span>Anillo dieléctrico εr = 4</span></label>}
           </div>
 
           <button className="fdtd-apply" onClick={() => createSimulation(config)} disabled={!backendReady}><i className="bi bi-arrow-repeat" /> Aplicar y reiniciar</button>
@@ -387,11 +423,14 @@ function FdtdSimulator() {
           <div className="fdtd-view-toolbar" role="group" aria-label="Vista del campo">
             <button className={viewMode === 'slice' ? 'active' : ''} onClick={() => setViewMode('slice')}><i className="bi bi-grid-3x3" /> Corte 2D</button>
             <button className={viewMode === 'volume' ? 'active' : ''} onClick={() => setViewMode('volume')}><i className="bi bi-box" /> Volumen 3D</button>
-            <span>{viewMode === 'slice' ? 'Plano meridional x–z' : 'Gira el campo alrededor del eje del dipolo'}</span>
+            <div className="fdtd-field-selector" role="group" aria-label="Componente del campo">
+              {Object.entries(FIELD_OPTIONS).map(([key, option]) => <button key={key} className={fieldKind === key ? 'active' : ''} onClick={() => setFieldKind(key)}>{cartesian ? option.cartesianLabel : option.label}</button>)}
+            </div>
+            <span>{viewMode === 'slice' ? 'Plano central x–z' : cartesian ? 'Malla cartesiana completa' : 'Revolución alrededor del eje'}</span>
           </div>
           <div className={`fdtd-canvas-wrap ${viewMode !== 'slice' ? 'fdtd-view-hidden' : ''}`}>
-            <canvas ref={canvasRef} width="960" height="600" aria-label="Corte meridional del campo magnético H phi" />
-            <div className="fdtd-overlay top-left"><strong>H<sub>φ</sub></strong><span>azul − / naranja +</span></div>
+            <canvas ref={canvasRef} width="960" height="600" aria-label={`Corte central del campo ${fieldLabel}`} />
+            <div className="fdtd-overlay top-left"><strong>{fieldLabel}</strong><span>{fieldKind === 'emagnitude' ? 'magnitud eléctrica' : 'azul − / naranja +'}</span></div>
             <div className="fdtd-overlay top-right"><span>línea discontinua</span><strong>interfaz CPML</strong></div>
           </div>
           <div className={`fdtd-canvas-wrap ${viewMode !== 'volume' ? 'fdtd-view-hidden' : ''}`}>
@@ -412,7 +451,7 @@ function FdtdSimulator() {
             <div><span>Tiempo simulado</span><strong>{timeNs.toFixed(2)} ns</strong></div>
             <div><span>Longitud física</span><strong>{dipoleLengthMetres >= 1 ? `${dipoleLengthMetres.toFixed(3)} m` : `${(dipoleLengthMetres * 100).toFixed(2)} cm`}</strong></div>
             <div><span>Energía relativa</span><strong>{stats.energy.toExponential(2)}</strong></div>
-            <div><span>Malla axisimétrica</span><strong>{Math.floor(appliedConfig.nx / 2) + 1} × {appliedConfig.ny}</strong></div>
+            <div><span>{cartesian ? 'Malla cartesiana' : 'Malla axisimétrica'}</span><strong>{cartesian ? `${appliedConfig.nx} × ${appliedConfig.nx} × ${appliedConfig.ny}` : `${Math.floor(appliedConfig.nx / 2) + 1} × ${appliedConfig.ny}`}</strong></div>
           </div>
         </section>
       </div>
@@ -422,10 +461,11 @@ function FdtdSimulator() {
         <div><span>L / λres</span><strong>{analysis.ready ? analysis.lengthOverLambda.toFixed(3) : '—'}</strong></div>
         <div><span>Zin en resonancia</span><strong>{analysis.ready ? `${signedComplex(analysis.resonanceImpedance)} Ω` : '—'}</strong></div>
         <div><span>Zin en f₀</span><strong>{analysis.ready ? `${signedComplex(analysis.nominalImpedance)} Ω` : '—'}</strong></div>
-        <div><span>Directividad</span><strong>{analysis.ready ? `${analysis.directivityDb.toFixed(2)} dBi` : '—'} <small>ideal 2,15</small></strong></div>
+        <div><span>Directividad</span><strong>{analysis.ready ? `${analysis.directivityDb.toFixed(2)} dBi` : '—'} {theoreticalDirectivity && <small>{theoreticalDirectivity}</small>}</strong></div>
       </section>
 
       {appliedConfig.sourceType !== 'pulse' && <div className="fdtd-analysis-notice"><i className="bi bi-info-circle" /> Para obtener el espectro completo de impedancia y S11 utiliza la excitación por pulso. Con onda continua solo es fiable el entorno de f₀.</div>}
+      {cartesian && <div className="fdtd-analysis-notice"><i className="bi bi-info-circle" /> La Yagi usa el núcleo cartesiano 3D experimental. Refina la malla y aumenta el tiempo antes de utilizar Zin o la directividad como valores cuantitativos.</div>}
 
       <section className="fdtd-analysis-grid" aria-label="Caracterización de la antena">
         <article className="fdtd-analysis-card">
@@ -436,8 +476,8 @@ function FdtdSimulator() {
 
         <article className="fdtd-analysis-card">
           <div className="fdtd-analysis-heading"><div><span>Puerto calibrado</span><h2>Impedancia de entrada</h2></div><strong>{analysis.ready ? `${signedComplex(analysis.resonanceImpedance)} Ω` : 'Acumulando…'}</strong></div>
-          <div className="fdtd-chart"><Line data={impedanceData} options={{ ...commonChartOptions, plugins: { ...commonChartOptions.plugins, fdtdReferenceLines: { lines: [{ axis: 'x', value: resonanceIndex, color: '#bf616a' }, { axis: 'y', value: 73, color: '#78849a', dash: [3, 4] }] } }, scales: cartesianScales('Frecuencia [MHz]', 'Impedancia [Ω]') }} /></div>
-          <p>Zin = Ṽ/Ĩ. La línea roja marca el mínimo de |X| con señal suficiente; 73 Ω es la referencia del dipolo ideal infinitamente fino de media onda.</p>
+          <div className="fdtd-chart"><Line data={impedanceData} options={{ ...commonChartOptions, plugins: { ...commonChartOptions.plugins, fdtdReferenceLines: { lines: impedanceReferenceLines } }, scales: cartesianScales('Frecuencia [MHz]', 'Impedancia [Ω]') }} /></div>
+          <p>Zin = Ṽ/Ĩ. La línea roja marca el mínimo de |X| con señal suficiente.{showHalfWaveReference ? ' La línea de 73 Ω es la referencia del dipolo ideal infinitamente fino de media onda.' : ''}</p>
         </article>
 
         <article className="fdtd-analysis-card">
@@ -449,20 +489,20 @@ function FdtdSimulator() {
         <article className="fdtd-analysis-card">
           <div className="fdtd-analysis-heading"><div><span>Corriente superficial</span><h2>Distribución sobre el hilo</h2></div><strong>fres</strong></div>
           <div className="fdtd-chart"><Line data={currentData} options={{ ...commonChartOptions, scales: { ...cartesianScales('z / L', '|I| normalizada'), y: { ...cartesianScales('', '|I| normalizada').y, min: 0, max: 1.08 } } }} /></div>
-          <p>La corriente procede de la circulación de Hφ alrededor del conductor. La curva punteada cos(πz/L) sirve como referencia de hilo fino, no como dato impuesto.</p>
+          <p>La corriente procede de la circulación del campo magnético alrededor del conductor. La referencia cosenoidal se adapta al dipolo o al monopolo y no se impone al cálculo.</p>
         </article>
 
         <article className="fdtd-analysis-card fdtd-analysis-wide">
           <div className="fdtd-analysis-heading"><div><span>Integral de radiación</span><h2>Diagrama polar del plano E</h2></div><strong>{analysis.ready ? `${analysis.directivity.toFixed(3)} · ${analysis.directivityDb.toFixed(2)} dBi` : 'Acumulando…'}</strong></div>
           <div className="fdtd-chart fdtd-polar-chart"><Radar data={polarData} options={{ ...commonChartOptions, scales: { r: { min: -40, max: 0, ticks: { color: '#78849a', stepSize: 10, backdropColor: 'transparent' }, grid: { color: 'rgba(120,132,154,.24)' }, angleLines: { color: 'rgba(120,132,154,.18)' }, pointLabels: { color: '#78849a', font: { size: 9 }, callback: (_, index) => index % 9 === 0 ? `${ANGLES[index]}°` : '' } } } }} /></div>
-          <p>Escala de potencia de −40 a 0 dB. El campo lejano se obtiene integrando la distribución compleja de corriente y la directividad mediante D = 4πUmax/Prad sobre el volumen axisimétrico.</p>
+          <p>Escala de potencia de −40 a 0 dB. El campo lejano integra la corriente compleja de todos los elementos; la Yagi utiliza la distribución inducida calculada por la malla cartesiana 3D.</p>
         </article>
       </section>
 
       <section className="fdtd-notes">
-        <div><span>01</span><h2>Qué significa 3D</h2><p>Se resuelven Er, Ez y Hφ en el semiplano r–z y se gira la solución alrededor del eje. Para un dipolo recto y un entorno axisimétrico es el problema tridimensional completo, no una extrusión 2D.</p></div>
+        <div><span>01</span><h2>Dos núcleos 3D</h2><p>Dipolos, verticales e hilos rectos usan Er, Ez y Hφ en r–z. La Yagi cambia a Ex, Ey, Ez, Hx, Hy y Hz sobre una malla cartesiana para conservar reflector y directores como varillas.</p></div>
         <div><span>02</span><h2>Frontera abierta</h2><p>La CPML absorbe en ambos extremos de z y en el radio exterior. r = 0 es el eje de simetría y utiliza la actualización especial del operador cilíndrico.</p></div>
-        <div><span>03</span><h2>Alcance del modelo</h2><p>Los resultados dependen de la resolución, el radio discretizado, el gap y el tiempo de simulación. Estructuras sin simetría de revolución —coaxial lateral, balun o suelo irregular— exigirán una malla cartesiana 3D general.</p></div>
+        <div><span>03</span><h2>Alcance del modelo</h2><p>Los resultados dependen de la resolución, el radio discretizado, el gap y el tiempo. La Yagi es más lenta; el modelo incluye cuatro elementos libres, sin boom conductor, balun, mástil ni suelo real.</p></div>
       </section>
     </div>
   )

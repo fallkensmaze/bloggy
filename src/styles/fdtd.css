@@ -176,6 +176,14 @@
 }
 .fdtd-view-toolbar button.active { color: #fff; background: rgba(136, 192, 208, .16); border-color: rgba(136, 192, 208, .4); }
 .fdtd-view-toolbar > span { margin-left: auto; padding-right: 7px; color: var(--text-dim); font: 9px var(--font-mono); }
+.fdtd-field-selector {
+  display: flex;
+  gap: 2px;
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: 1px solid rgba(120, 132, 154, .3);
+}
+.fdtd-field-selector button { min-width: 37px; padding-right: 6px; padding-left: 6px; font-family: var(--font-mono); }
 .fdtd-canvas-wrap {
   position: relative;
   overflow: hidden;
@@ -392,6 +400,8 @@
   .fdtd-control-section + .fdtd-control-section { border-left: 0; border-top: 1px solid var(--border-sub); margin-top: 18px; padding: 18px 0 0; }
   .fdtd-overlay.top-right { display: none; }
   .fdtd-view-toolbar > span { display: none; }
+  .fdtd-view-toolbar { flex-wrap: wrap; }
+  .fdtd-field-selector { margin-left: auto; }
   .fdtd-transport { flex-wrap: wrap; }
   .fdtd-transport-spacer { display: none; }
   .fdtd-metrics { grid-template-columns: 1fr 1fr; }

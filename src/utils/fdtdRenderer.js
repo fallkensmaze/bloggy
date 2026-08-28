@@ -1,9 +1,13 @@
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 const scratchCanvases = new WeakMap()
 
-function fieldColour(value) {
+function fieldColour(value, magnitudeOnly = false) {
   const v = clamp(value, -1, 1)
   const base = [15, 23, 35]
+  if (magnitudeOnly) {
+    const t = Math.max(0, v)
+    return [Math.round(base[0] + 225 * t), Math.round(base[1] + 180 * t), Math.round(base[2] + 95 * t)]
+  }
   if (v < 0) {
     const t = -v
     return [Math.round(base[0] + 47 * t), Math.round(base[1] + 119 * t), Math.round(base[2] + 220 * t)]
@@ -11,7 +15,7 @@ function fieldColour(value) {
   return [Math.round(base[0] + 240 * v), Math.round(base[1] + 78 * v), Math.round(base[2] + 23 * v)]
 }
 
-export function renderFdtdFrame(canvas, field, metal, material, nx, ny, absorberCells, previousScale = 0.08) {
+export function renderFdtdFrame(canvas, field, metal, material, nx, ny, absorberCells, previousScale = 0.08, fieldKind = 'magnetic') {
   const context = canvas.getContext('2d', { alpha: false })
   let scratch = scratchCanvases.get(canvas)
   if (!scratch) {
@@ -29,7 +33,7 @@ export function renderFdtdFrame(canvas, field, metal, material, nx, ny, absorber
   const scale = previousScale * 0.88 + targetScale * 0.12
 
   for (let i = 0; i < field.length; i += 1) {
-    const [r, g, b] = fieldColour(field[i] / scale)
+    const [r, g, b] = fieldColour(field[i] / scale, fieldKind === 'emagnitude')
     const offset = i * 4
     const dielectric = material[i] > 1
     image.data[offset] = dielectric ? Math.round(r * 0.72 + 30) : r
@@ -60,9 +64,14 @@ export function renderFdtdFrame(canvas, field, metal, material, nx, ny, absorber
   context.setLineDash([])
 
   const gradient = context.createLinearGradient(18, 0, 142, 0)
-  gradient.addColorStop(0, '#3e8efa')
-  gradient.addColorStop(0.5, '#0f1723')
-  gradient.addColorStop(1, '#ff653a')
+  if (fieldKind === 'emagnitude') {
+    gradient.addColorStop(0, '#0f1723')
+    gradient.addColorStop(1, '#f0d58a')
+  } else {
+    gradient.addColorStop(0, '#3e8efa')
+    gradient.addColorStop(0.5, '#0f1723')
+    gradient.addColorStop(1, '#ff653a')
+  }
   context.fillStyle = 'rgba(26, 30, 38, 0.82)'
   context.fillRect(12, canvas.height - 36, 146, 24)
   context.fillStyle = gradient

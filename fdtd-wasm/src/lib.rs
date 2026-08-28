@@ -1,5 +1,8 @@
 use wasm_bindgen::prelude::*;
 
+mod cartesian3d;
+pub use cartesian3d::FdtdSimulation3d;
+
 const COURANT: f32 = 0.5;
 const ETA0: f64 = 376.730_313_668;
 const SPECTRUM_BINS: usize = 41;
@@ -87,6 +90,8 @@ pub struct FdtdSimulation {
     source_kind: u8,
     source_amplitude: f32,
     source_z: usize,
+    is_monopole: bool,
+    ground_z: usize,
     wire_radius: usize,
     wire_start: usize,
     wire_end: usize,
@@ -118,6 +123,7 @@ impl FdtdSimulation {
         kappa_max: f32,
         alpha_max: f32,
         wire_radius_cells: usize,
+        antenna_kind: u8,
     ) -> FdtdSimulation {
         let nx = nx.clamp(120, 520);
         let nz = nz.clamp(80, 360);
@@ -129,13 +135,15 @@ impl FdtdSimulation {
         let alpha_max = alpha_max.clamp(0.0, 0.25);
         let wire_radius = wire_radius_cells.clamp(1, 6);
         let len = nr * nz;
-        let source_z = nz / 2;
+        let is_monopole = antenna_kind == 1;
+        let ground_z = if is_monopole { (nz * 36 / 100).max(pml_cells + 5) } else { 0 };
+        let source_z = if is_monopole { ground_z + 1 } else { nz / 2 };
 
-        let total_dipole = (wavelength_cells * dipole_fraction.clamp(0.1, 0.95))
+        let total_dipole = (wavelength_cells * dipole_fraction.clamp(0.1, 1.8))
             .round()
             .max(8.0) as usize;
-        let arm = (total_dipole.saturating_sub(1) / 2).max(4);
-        let wire_start = source_z.saturating_sub(arm).max(1);
+        let arm = if is_monopole { total_dipole } else { (total_dipole.saturating_sub(1) / 2).max(4) };
+        let wire_start = if is_monopole { source_z + 1 } else { source_z.saturating_sub(arm).max(1) };
         let wire_end = (source_z + arm).min(nz - 2);
         let mut metal = vec![0; len];
         for z in wire_start..=wire_end {
@@ -144,6 +152,11 @@ impl FdtdSimulation {
             }
             for r in 0..=wire_radius {
                 metal[z * nr + r] = 1;
+            }
+        }
+        if is_monopole {
+            for r in 0..nr {
+                metal[ground_z * nr + r] = 1;
             }
         }
 
@@ -188,6 +201,8 @@ impl FdtdSimulation {
             source_kind: source_kind.min(1),
             source_amplitude: source_amplitude.clamp(0.01, 4.0),
             source_z,
+            is_monopole,
+            ground_z,
             wire_radius,
             wire_start,
             wire_end,
@@ -231,6 +246,24 @@ impl FdtdSimulation {
     }
 
     pub fn field_snapshot(&self) -> Vec<f32> { self.mirror_f32(&self.hphi) }
+    pub fn magnetic_field_snapshot(&self) -> Vec<f32> { self.field_snapshot() }
+    pub fn electric_z_snapshot(&self) -> Vec<f32> { self.mirror_f32(&self.ez) }
+    pub fn electric_r_snapshot(&self) -> Vec<f32> {
+        let mut snapshot = self.mirror_f32(&self.er);
+        let half = self.nx / 2;
+        for z in 0..self.nz {
+            for x in 0..half {
+                snapshot[z * self.nx + x] *= -1.0;
+            }
+        }
+        snapshot
+    }
+    pub fn electric_magnitude_snapshot(&self) -> Vec<f32> {
+        let magnitude = self.er.iter().zip(&self.ez)
+            .map(|(er, ez)| (er * er + ez * ez).sqrt())
+            .collect::<Vec<_>>();
+        self.mirror_f32(&magnitude)
+    }
     pub fn metal_snapshot(&self) -> Vec<u8> { self.mirror_u8(&self.metal) }
     pub fn material_snapshot(&self) -> Vec<f32> { self.mirror_f32(&self.epsilon_r) }
     pub fn time_voltage_snapshot(&self) -> Vec<f32> { self.voltage_trace.clone() }
@@ -245,6 +278,7 @@ impl FdtdSimulation {
     pub fn time_step(&self) -> f32 { COURANT }
     pub fn wire_start(&self) -> usize { self.wire_start }
     pub fn wire_end(&self) -> usize { self.wire_end }
+    pub fn feed_position(&self) -> usize { self.source_z }
 
     pub fn energy(&self) -> f32 {
         let mut total = 0.0_f64;
@@ -320,8 +354,9 @@ impl FdtdSimulation {
 
     pub fn directivity_3d_at(&self, bin: usize) -> f32 {
         let bin = bin.min(SPECTRUM_BINS - 1);
-        let samples = 180_usize;
-        let delta = std::f64::consts::PI / samples as f64;
+        let upper_limit = if self.is_monopole { std::f64::consts::FRAC_PI_2 } else { std::f64::consts::PI };
+        let samples = if self.is_monopole { 90_usize } else { 180_usize };
+        let delta = upper_limit / samples as f64;
         let mut maximum = 0.0_f64;
         let mut integral = 0.0_f64;
         for sample in 0..=samples {
@@ -443,6 +478,9 @@ impl FdtdSimulation {
     }
 
     fn port_current(&self) -> f32 {
+        if self.is_monopole {
+            return self.wire_current_at(self.source_z + 1);
+        }
         0.5 * (self.wire_current_at(self.source_z - 1) + self.wire_current_at(self.source_z + 1))
     }
 
@@ -479,6 +517,9 @@ impl FdtdSimulation {
     }
 
     fn radiation_power(&self, bin: usize, theta: f64) -> f64 {
+        if self.is_monopole && theta > std::f64::consts::FRAC_PI_2 {
+            return 0.0;
+        }
         let bin = bin.min(SPECTRUM_BINS - 1);
         let offset = bin * self.nz;
         let wave_number = std::f64::consts::TAU * self.frequency_ratios[bin] / self.wavelength_cells as f64;
@@ -492,6 +533,13 @@ impl FdtdSimulation {
             let profile_imag = self.profile_im[offset + z];
             real += profile_real * cos - profile_imag * sin;
             imag += profile_real * sin + profile_imag * cos;
+            if self.is_monopole {
+                let image_phase = wave_number * (2.0 * self.ground_z as f64 - z as f64 - self.source_z as f64) * theta.cos();
+                let image_cos = image_phase.cos();
+                let image_sin = image_phase.sin();
+                real += profile_real * image_cos - profile_imag * image_sin;
+                imag += profile_real * image_sin + profile_imag * image_cos;
+            }
         }
         (real * real + imag * imag) * theta.sin().powi(2)
     }
@@ -526,7 +574,7 @@ mod tests {
     use super::*;
 
     fn simulation(source_kind: u8) -> FdtdSimulation {
-        FdtdSimulation::new(240, 150, 40.0, 0.47, 18, 1e-8, source_kind, 0.8, false, 5.0, 0.05, 1)
+        FdtdSimulation::new(240, 150, 40.0, 0.47, 18, 1e-8, source_kind, 0.8, false, 5.0, 0.05, 1, 0)
     }
 
     #[test]
