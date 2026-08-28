@@ -17,6 +17,7 @@ import RtAnonymizer from './pages/RtAnonymizer'
 import QCodes from './pages/QCodes'
 import MorseTrainer from './pages/MorseTrainer'
 import RadioExam from './pages/RadioExam'
+import FdtdSimulator from './pages/FdtdSimulator'
 import Admin from './pages/Admin'
 import QuizCreator from './pages/QuizCreator'
 import QuizList from './pages/QuizList'
@@ -50,6 +51,7 @@ function App() {
         <Route path="q-codes" element={<QCodes />} />
         <Route path="morse" element={<MorseTrainer />} />
         <Route path="radioaficionado" element={<RadioExam />} />
+        <Route path="fdtd-simulator" element={<FdtdSimulator />} />
       </Route>
       <Route path="/admin" element={<Admin />} />
       <Route path="/quiz-creator" element={<QuizCreator />} />

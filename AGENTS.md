@@ -16,6 +16,7 @@ npm run test:radio     # Radio-exam XML parsing and quiz building
 npm run test:paste     # Secure Paste crypto (the document id must not decrypt anything)
 npm run test:pet       # PET DICOM calibration and NEMA NU 2 background ROI placement
 npm run test:cor       # SPECT COR centroids, NEMA upper bounds, 3D geometry and ROC
+npm run test:fdtd      # FDTD fallback, PEC geometry and JSON configuration
 npm run check:security # Anonymizer and paste tests, then build and audit the GitHub Pages artifact
 npm run deploy         # Build, audit and deploy dist/ to GitHub Pages
 ```
@@ -115,6 +116,7 @@ Routes inside `<Layout />` use the shared sidebar and mobile topbar:
 - `/rt-anonymizer` - in-browser anonymizer for complete radiotherapy DICOM studies
 - `/q-codes` - amateur radio Q-code study quiz
 - `/morse` - Morse code (CW) trainer
+- `/fdtd-simulator` - 2D TEz FDTD dipole simulator powered by Rust/WebAssembly
 
 Standalone routes:
 
@@ -181,6 +183,7 @@ Firestore collections:
 - `src/pages/MorseTrainer.jsx`, `src/components/morse/`, `src/utils/morse.js` and `src/utils/morseTrainer.js` - Morse trainer. Four panels: copying by ear (Koch progression, Farnsworth timing), a straight key with sidetone that decodes what you send, a multiple-choice quiz over the table, and the full reference plus a two-way translator. `morse.js` owns the table, encoding, timing and Web Audio, and is shared with `/q-codes`; `morseTrainer.js` owns the Koch order, decks, drill generation and quiz building. Keep the timing in `morse.js` and the pedagogy in `morseTrainer.js`.
 - `src/utils/leitner.js` - Leitner spaced repetition shared by both trainers. `progress` is `{ [key]: { box, correct, wrong, seen } }`, keyed by Q-code in `/q-codes` and by character in `/morse`; `qcodes.js` re-exports it so the page API did not change.
 - `src/utils/localSettings.js` - tolerant localStorage reads for page preferences.
+- `fdtd-wasm/src/lib.rs`, `src/pages/FdtdSimulator.jsx` and `src/utils/fdtd*.js` - the 2D TEz Yee-grid simulator. Rust/WebAssembly is the production backend; the numerically equivalent JavaScript implementation is a compatibility fallback and supplies Node regression tests. The outer graded-loss layer is deliberately labelled as an absorbing sponge, not CPML/PML. Keep this first model described as qualitative 2D: it does not claim a 3D dipole impedance or radiation pattern.
 - `src/pages/RtAnonymizer.jsx`, `src/utils/dicomAnonymizer.js`, `src/utils/zipDownload.js` - client-side DICOM RT study anonymizer. It remaps all non-standard UIDs consistently across CT/RTSTRUCT/RTPLAN/RTDOSE, preserves RT references and PixelData, writes de-identification markers, and downloads a STORE-only ZIP.
 - `src/pages/QuizHost.jsx`, `QuizJoin.jsx`, `QuizPlay.jsx`, `QuizList.jsx`, `QuizCreator.jsx` - quiz system.
 - `src/pages/PasteCreate.jsx`, `PasteView.jsx` and `src/utils/pasteCrypto.js` - AES-GCM
