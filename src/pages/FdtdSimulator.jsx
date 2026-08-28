@@ -1,10 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Chart as ChartJS,
+  RadialLinearScale,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Filler,
+  Tooltip,
+  Legend
+} from 'chart.js'
+import { Line, Radar } from 'react-chartjs-2'
 import { FDTD_PRESETS, parseFdtdConfig, sanitizeFdtdConfig, serializeFdtdConfig } from '../utils/fdtdConfig'
 import { loadFdtdBackend } from '../utils/fdtdBackend'
 import { renderFdtdFrame } from '../utils/fdtdRenderer'
 import '../styles/fdtd.css'
 
 const COURANT = 0.99 / Math.SQRT2
+const ANGLES = Array.from({ length: 72 }, (_, index) => index * 5)
+const EMPTY_ANALYSIS = { pattern: Array(72).fill(0), directivity: 0, zReal: 0, zImag: 0, samples: 0 }
+
+ChartJS.register(RadialLinearScale, CategoryScale, LinearScale, PointElement, LineElement, Filler, Tooltip, Legend)
 
 function FdtdSimulator() {
   const initial = useMemo(() => sanitizeFdtdConfig(FDTD_PRESETS.halfWave), [])
@@ -16,6 +32,8 @@ function FdtdSimulator() {
   const [backendReady, setBackendReady] = useState(false)
   const [error, setError] = useState('')
   const [stats, setStats] = useState({ steps: 0, energy: 0 })
+  const [analysis, setAnalysis] = useState(EMPTY_ANALYSIS)
+  const [impedanceHistory, setImpedanceHistory] = useState([])
   const [recording, setRecording] = useState(false)
   const canvasRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -54,10 +72,12 @@ function FdtdSimulator() {
       safe.wavelengthCells,
       safe.dipoleFraction,
       safe.absorberCells,
-      safe.absorberStrength,
+      safe.pmlTargetReflection,
       safe.sourceType === 'pulse' ? 1 : 0,
       safe.sourceAmplitude,
-      safe.dielectric
+      safe.dielectric,
+      safe.pmlKappaMax,
+      safe.pmlAlphaMax
     )
     geometryRef.current = {
       metal: simulationRef.current.metal_snapshot(),
@@ -66,6 +86,8 @@ function FdtdSimulator() {
     setAppliedConfig(safe)
     setConfig(safe)
     setStats({ steps: 0, energy: 0 })
+    setAnalysis(EMPTY_ANALYSIS)
+    setImpedanceHistory([])
     setRunning(false)
     setError('')
     scaleRef.current = 0.08
@@ -85,6 +107,27 @@ function FdtdSimulator() {
       )
     })
   }, [])
+
+  const updateAnalysis = useCallback(() => {
+    const simulation = simulationRef.current
+    if (!simulation) return
+    const samples = simulation.measurement_count()
+    const next = {
+      pattern: Array.from(simulation.radiation_pattern()),
+      directivity: simulation.directivity_2d(),
+      zReal: simulation.impedance_real(),
+      zImag: simulation.impedance_imag(),
+      samples
+    }
+    setAnalysis(next)
+    if (samples > 0 && Number.isFinite(next.zReal) && Number.isFinite(next.zImag)) {
+      const periodsNow = simulation.step_count() * COURANT / appliedConfig.wavelengthCells
+      setImpedanceHistory(previous => {
+        if (previous.at(-1)?.samples === samples) return previous
+        return [...previous, { periods: periodsNow, r: next.zReal, x: next.zImag, samples }].slice(-140)
+      })
+    }
+  }, [appliedConfig.wavelengthCells])
 
   useEffect(() => {
     let active = true
@@ -115,11 +158,12 @@ function FdtdSimulator() {
       if (frameRef.current % 5 === 0) {
         setStats({ steps: simulation.step_count(), energy: simulation.energy() })
       }
+      if (frameRef.current % 30 === 0) updateAnalysis()
       animationRef.current = requestAnimationFrame(tick)
     }
     animationRef.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(animationRef.current)
-  }, [appliedConfig.stepsPerFrame, draw, running])
+  }, [appliedConfig.stepsPerFrame, draw, running, updateAnalysis])
 
   useEffect(() => () => {
     cancelAnimationFrame(animationRef.current)
@@ -148,6 +192,7 @@ function FdtdSimulator() {
     simulation.step(appliedConfig.stepsPerFrame)
     draw()
     setStats({ steps: simulation.step_count(), energy: simulation.energy() })
+    updateAnalysis()
   }
 
   const downloadConfig = () => {
@@ -218,6 +263,36 @@ function FdtdSimulator() {
 
   const periods = stats.steps * COURANT / appliedConfig.wavelengthCells
   const dipoleCells = Math.round(appliedConfig.wavelengthCells * appliedConfig.dipoleFraction)
+  const analysisReady = analysis.samples >= Math.ceil(appliedConfig.wavelengthCells / COURANT)
+  const directivityDb = analysis.directivity > 0 ? 10 * Math.log10(analysis.directivity) : 0
+  const patternData = {
+    labels: ANGLES.map(angle => `${angle}°`),
+    datasets: [{
+      label: 'Potencia radial normalizada',
+      data: analysis.pattern,
+      borderColor: '#88c0d0',
+      backgroundColor: 'rgba(136, 192, 208, 0.16)',
+      pointRadius: 0,
+      borderWidth: 2,
+      fill: true
+    }]
+  }
+  const impedanceData = {
+    labels: impedanceHistory.map(point => point.periods.toFixed(1)),
+    datasets: [
+      { label: 'R / η₀', data: impedanceHistory.map(point => point.r), borderColor: '#a3be8c', pointRadius: 0, borderWidth: 2, tension: 0.15 },
+      { label: 'X / η₀', data: impedanceHistory.map(point => point.x), borderColor: '#ebcb8b', pointRadius: 0, borderWidth: 2, tension: 0.15 }
+    ]
+  }
+  const commonChartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: {
+      legend: { labels: { color: '#c3ccda', boxWidth: 12, font: { size: 10 } } },
+      tooltip: { intersect: false }
+    }
+  }
 
   return (
     <div className="page-body fdtd-page">
@@ -249,7 +324,7 @@ function FdtdSimulator() {
           <div className="fdtd-control-section fdtd-grid-fields">
             <label><span>Longitud de onda</span><input type="number" value={config.wavelengthCells} min="16" max="100" onChange={e => changeConfig('wavelengthCells', e.target.value)} /><small>celdas / λ</small></label>
             <label><span>Longitud del dipolo</span><input type="number" value={config.dipoleFraction} min="0.1" max="0.95" step="0.01" onChange={e => changeConfig('dipoleFraction', e.target.value)} /><small>fracción de λ</small></label>
-            <label><span>Capa absorbente</span><input type="number" value={config.absorberCells} min="6" max="48" onChange={e => changeConfig('absorberCells', e.target.value)} /><small>celdas</small></label>
+            <label><span>Espesor CPML</span><input type="number" value={config.absorberCells} min="8" max="48" onChange={e => changeConfig('absorberCells', e.target.value)} /><small>celdas</small></label>
             <label><span>Pasos por fotograma</span><input type="number" value={config.stepsPerFrame} min="1" max="16" onChange={e => changeConfig('stepsPerFrame', e.target.value)} /><small>Δt / frame</small></label>
           </div>
 
@@ -275,7 +350,7 @@ function FdtdSimulator() {
           <div className="fdtd-canvas-wrap">
             <canvas ref={canvasRef} width="960" height="600" aria-label="Campo magnético Hz propagado por el dipolo" />
             <div className="fdtd-overlay top-left"><strong>H<sub>z</sub></strong><span>azul − / naranja +</span></div>
-            <div className="fdtd-overlay top-right"><span>línea discontinua</span><strong>fin de absorbente</strong></div>
+            <div className="fdtd-overlay top-right"><span>línea discontinua</span><strong>interfaz CPML</strong></div>
             {recording && <div className="fdtd-recording"><span /> REC</div>}
           </div>
 
@@ -299,10 +374,63 @@ function FdtdSimulator() {
         </section>
       </div>
 
+      <section className="fdtd-analysis-grid" aria-label="Análisis de antena">
+        <article className="fdtd-analysis-card">
+          <div className="fdtd-analysis-heading">
+            <div><span>Monitor angular</span><h2>Directividad en el plano</h2></div>
+            <strong>{analysisReady ? `${analysis.directivity.toFixed(2)} · ${directivityDb.toFixed(2)} dB` : 'Acumulando…'}</strong>
+          </div>
+          <div className="fdtd-chart fdtd-polar-chart">
+            <Radar
+              data={patternData}
+              options={{
+                ...commonChartOptions,
+                scales: {
+                  r: {
+                    min: 0,
+                    max: 1,
+                    ticks: { display: false, stepSize: 0.25 },
+                    grid: { color: 'rgba(120,132,154,.24)' },
+                    angleLines: { color: 'rgba(120,132,154,.18)' },
+                    pointLabels: {
+                      color: '#78849a',
+                      font: { size: 9 },
+                      callback: (_, index) => index % 9 === 0 ? `${ANGLES[index]}°` : ''
+                    }
+                  }
+                }
+              }}
+            />
+          </div>
+          <p>Se integra el flujo de Poynting complejo sobre un círculo interior a la CPML. D<sub>2D</sub> = P<sub>máx</sub>/⟨P⟩; es un corte angular, no la directividad 3D total.</p>
+        </article>
+
+        <article className="fdtd-analysis-card">
+          <div className="fdtd-analysis-heading">
+            <div><span>Puerto de alimentación</span><h2>Convergencia de impedancia</h2></div>
+            <strong>{analysisReady ? `${analysis.zReal.toFixed(3)} ${analysis.zImag < 0 ? '−' : '+'} j${Math.abs(analysis.zImag).toFixed(3)} η₀` : 'Acumulando…'}</strong>
+          </div>
+          <div className="fdtd-chart">
+            <Line
+              data={impedanceData}
+              options={{
+                ...commonChartOptions,
+                interaction: { mode: 'index', intersect: false },
+                scales: {
+                  x: { title: { display: true, text: 'Tiempo [T]', color: '#78849a' }, ticks: { color: '#78849a', maxTicksLimit: 7 }, grid: { color: 'rgba(120,132,154,.12)' } },
+                  y: { title: { display: true, text: 'Z / η₀', color: '#78849a' }, ticks: { color: '#78849a' }, grid: { color: 'rgba(120,132,154,.16)' } }
+                }
+              }}
+            />
+          </div>
+          <p>Z = Ṽ/Ĩ se obtiene mediante DFT a la frecuencia de excitación: tensión en el gap y corriente por una envolvente de H<sub>z</sub>. En 2D es una impedancia normalizada por unidad de profundidad.</p>
+        </article>
+      </section>
+
       <section className="fdtd-notes">
         <div><span>01</span><h2>Qué se está calculando</h2><p>La malla TEz evoluciona E<sub>x</sub>, E<sub>y</sub> y H<sub>z</sub> mediante diferencias centrales escalonadas. Los brazos amarillos se tratan como conductor perfecto y la separación central recibe la excitación.</p></div>
-        <div><span>02</span><h2>Frontera absorbente</h2><p>La franja exterior aplica una pérdida gradual polinómica para reducir las reflexiones. Es una “esponja” absorbente, no una CPML formal; por eso esta primera versión es cualitativa.</p></div>
-        <div><span>03</span><h2>Límite del modelo</h2><p>Es una sección bidimensional: permite estudiar propagación, polarización, interferencia y materiales, pero no calcula todavía la impedancia ni el diagrama 3D real de un dipolo finito.</p></div>
+        <div><span>02</span><h2>Frontera CPML</h2><p>La franja exterior usa estiramiento complejo y cuatro memorias de convolución. La conductividad se introduce gradualmente para reducir la reflexión numérica en la interfaz.</p></div>
+        <div><span>03</span><h2>Límite del modelo</h2><p>Es una sección bidimensional extruida. La directividad y Z sirven para comparar configuraciones dentro del modelo; obtener ohmios y el diagrama 3D de un dipolo finito requiere una malla FDTD tridimensional y un puerto calibrado.</p></div>
       </section>
     </div>
   )

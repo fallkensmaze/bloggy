@@ -218,6 +218,64 @@
 .fdtd-metrics span { color: var(--text-dim); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
 .fdtd-metrics strong { margin-top: 3px; color: var(--text-secondary); font: 12px var(--font-mono); }
 
+.fdtd-analysis-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-top: 28px;
+}
+
+.fdtd-analysis-card {
+  min-width: 0;
+  padding: 18px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+}
+
+.fdtd-analysis-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-sub);
+}
+
+.fdtd-analysis-heading span {
+  color: var(--accent-blue);
+  font: 9px var(--font-mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.fdtd-analysis-heading h2 {
+  margin-top: 3px;
+  font-family: var(--font-serif);
+  font-size: 18px;
+}
+
+.fdtd-analysis-heading > strong {
+  color: var(--text-primary);
+  font: 12px var(--font-mono);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.fdtd-chart {
+  position: relative;
+  height: 300px;
+  margin-top: 14px;
+}
+
+.fdtd-polar-chart { height: 330px; }
+
+.fdtd-analysis-card > p {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+  margin-top: 12px;
+}
+
 .fdtd-notes {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -237,6 +295,7 @@
   .fdtd-control-section + .fdtd-control-section { border-top: 0; border-left: 1px solid var(--border-sub); margin: 0; padding: 0 0 0 18px; }
   .fdtd-apply { align-self: end; }
   .fdtd-file-actions { align-self: end; }
+  .fdtd-analysis-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {
@@ -252,5 +311,7 @@
   .fdtd-metrics > div:nth-child(3) { border-left: 0; border-top: 1px solid var(--border); }
   .fdtd-metrics > div:nth-child(4) { border-top: 1px solid var(--border); }
   .fdtd-notes { grid-template-columns: 1fr; }
+  .fdtd-analysis-heading { flex-direction: column; }
+  .fdtd-analysis-heading > strong { text-align: left; }
+  .fdtd-chart, .fdtd-polar-chart { height: 280px; }
 }
-

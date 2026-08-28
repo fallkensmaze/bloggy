@@ -1,4 +1,4 @@
-export const FDTD_CONFIG_VERSION = 1
+export const FDTD_CONFIG_VERSION = 2
 
 export const FDTD_PRESETS = {
   halfWave: {
@@ -10,7 +10,9 @@ export const FDTD_PRESETS = {
     wavelengthCells: 40,
     dipoleFraction: 0.47,
     absorberCells: 18,
-    absorberStrength: 0.08,
+    pmlTargetReflection: 1e-8,
+    pmlKappaMax: 5,
+    pmlAlphaMax: 0.05,
     sourceType: 'continuous',
     sourceAmplitude: 0.8,
     stepsPerFrame: 4,
@@ -25,7 +27,9 @@ export const FDTD_PRESETS = {
     wavelengthCells: 40,
     dipoleFraction: 0.25,
     absorberCells: 18,
-    absorberStrength: 0.08,
+    pmlTargetReflection: 1e-8,
+    pmlKappaMax: 5,
+    pmlAlphaMax: 0.05,
     sourceType: 'pulse',
     sourceAmplitude: 1.0,
     stepsPerFrame: 4,
@@ -40,7 +44,9 @@ export const FDTD_PRESETS = {
     wavelengthCells: 40,
     dipoleFraction: 0.47,
     absorberCells: 18,
-    absorberStrength: 0.08,
+    pmlTargetReflection: 1e-8,
+    pmlKappaMax: 5,
+    pmlAlphaMax: 0.05,
     sourceType: 'continuous',
     sourceAmplitude: 0.8,
     stepsPerFrame: 4,
@@ -57,7 +63,7 @@ export function sanitizeFdtdConfig(input = {}) {
   const base = FDTD_PRESETS.halfWave
   const nx = Math.round(within(input.nx, 80, 520, base.nx))
   const ny = Math.round(within(input.ny, 60, 360, base.ny))
-  const maxAbsorber = Math.max(6, Math.floor(Math.min(nx, ny) / 3))
+  const maxAbsorber = Math.max(8, Math.floor(Math.min(nx, ny) / 3))
 
   return {
     version: FDTD_CONFIG_VERSION,
@@ -68,8 +74,10 @@ export function sanitizeFdtdConfig(input = {}) {
     ny,
     wavelengthCells: within(input.wavelengthCells, 16, 100, base.wavelengthCells),
     dipoleFraction: within(input.dipoleFraction, 0.1, 0.95, base.dipoleFraction),
-    absorberCells: Math.round(within(input.absorberCells, 6, maxAbsorber, base.absorberCells)),
-    absorberStrength: within(input.absorberStrength, 0.005, 0.35, base.absorberStrength),
+    absorberCells: Math.round(within(input.absorberCells, 8, maxAbsorber, base.absorberCells)),
+    pmlTargetReflection: within(input.pmlTargetReflection, 1e-12, 1e-2, base.pmlTargetReflection),
+    pmlKappaMax: within(input.pmlKappaMax, 1, 12, base.pmlKappaMax),
+    pmlAlphaMax: within(input.pmlAlphaMax, 0, 0.25, base.pmlAlphaMax),
     sourceType: input.sourceType === 'pulse' ? 'pulse' : 'continuous',
     sourceAmplitude: within(input.sourceAmplitude, 0.01, 4, base.sourceAmplitude),
     stepsPerFrame: Math.round(within(input.stepsPerFrame, 1, 16, base.stepsPerFrame)),
@@ -89,9 +97,13 @@ export function parseFdtdConfig(text) {
   if (!parsed || parsed.schema !== 'falkens-maze/fdtd') {
     throw new Error('El archivo no es una configuración FDTD de Falken\'s Maze.')
   }
-  if (parsed.version !== FDTD_CONFIG_VERSION) {
+  if (![1, FDTD_CONFIG_VERSION].includes(parsed.version)) {
     throw new Error(`Versión de configuración no compatible: ${parsed.version ?? 'sin versión'}.`)
+  }
+  if (parsed.version === 1) {
+    parsed.pmlTargetReflection = FDTD_PRESETS.halfWave.pmlTargetReflection
+    parsed.pmlKappaMax = FDTD_PRESETS.halfWave.pmlKappaMax
+    parsed.pmlAlphaMax = FDTD_PRESETS.halfWave.pmlAlphaMax
   }
   return sanitizeFdtdConfig(parsed)
 }
-
