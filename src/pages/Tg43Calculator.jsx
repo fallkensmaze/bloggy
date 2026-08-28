@@ -7,6 +7,7 @@ import {
   getSetupFractionMultiplier
 } from '../lib/brachy/tg43'
 import { IR192_CONSTANTS, SOURCE_MODEL } from '../lib/brachy/sourceData'
+import Tg43Plan3D from '../components/brachy/Tg43Plan3D'
 import '../styles/tg43.css'
 
 function Tg43Calculator() {
@@ -331,6 +332,41 @@ function Tg43Calculator() {
             )}
           </div>
 
+          {/* Physical source model */}
+          <div className="tg43-section tg43-source-section">
+            <h3><i className="bi bi-capsule"></i> Fuente y cápsula</h3>
+            <div className="tg43-source-layout">
+              <div>
+                <div className="tg43-source-schematic" role="img" aria-label="Esquema longitudinal de la fuente GammaMed Plus HDR">
+                  <div className="tg43-source-cable"><span>Cable AISI 304</span></div>
+                  <div className="tg43-source-capsule">
+                    <div className="tg43-source-core"><span>¹⁹²Ir</span></div>
+                  </div>
+                </div>
+                <div className="tg43-source-dimensions">
+                  <span>Cápsula: {(SOURCE_MODEL.capsuleLength * 10).toFixed(2)} × {(SOURCE_MODEL.capsuleDiameter * 10).toFixed(2)} mm</span>
+                  <span>Núcleo: {(SOURCE_MODEL.activeLength * 10).toFixed(2)} × {(SOURCE_MODEL.activeDiameter * 10).toFixed(2)} mm</span>
+                </div>
+                <p className="tg43-source-caption">Esquema longitudinal orientativo; diámetros no representados a escala.</p>
+              </div>
+              <div className="tg43-source-specs">
+                <div><span>Núcleo activo</span><strong>{SOURCE_MODEL.activeMaterial}</strong></div>
+                <div><span>Encapsulado</span><strong>{SOURCE_MODEL.capsuleMaterial}</strong></div>
+                <div><span>Diámetro interior</span><strong>{(SOURCE_MODEL.capsuleInnerDiameter * 10).toFixed(2)} mm</strong></div>
+                <div><span>Densidad cápsula</span><strong>{SOURCE_MODEL.capsuleDensity.toFixed(1)} g/cm³</strong></div>
+                <div><span>Cable</span><strong>{SOURCE_MODEL.cableMaterial}</strong></div>
+                <div><span>Diámetro cable</span><strong>{(SOURCE_MODEL.cableDiameter * 10).toFixed(2)} mm</strong></div>
+              </div>
+            </div>
+            <div className="tg43-source-references">
+              <i className="bi bi-journal-medical"></i>
+              <span>Geometría: </span>
+              <a href={SOURCE_MODEL.geometryUrl} target="_blank" rel="noreferrer">{SOURCE_MODEL.geometryReference}</a>
+              <span> · Dosimetría: </span>
+              <a href={SOURCE_MODEL.doi} target="_blank" rel="noreferrer">AAPM/ESTRO 2012</a>
+            </div>
+          </div>
+
           {/* Decay Information */}
           {decayInfo && (
             <div className="tg43-decay-info">
@@ -586,6 +622,13 @@ function Tg43Calculator() {
                   “por sesión” procede de los tiempos DICOM; la dosis total usa Number of Fractions Planned.
                   Las coordenadas se conservan en el sistema paciente DICOM.
                 </div>
+              </div>
+
+              <div className="tg43-3d-result-block">
+                <div className="tg43-section-header">
+                  <h3><i className="bi bi-box"></i> Geometría 3D del plan</h3>
+                </div>
+                <Tg43Plan3D plan={plan} results={results} doseScope={doseScope} />
               </div>
             </div>
           )}
