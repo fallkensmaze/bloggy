@@ -196,6 +196,9 @@ impl FdtdSimulation3d {
     pub fn spectrum_frequencies(&self) -> Vec<f32> { self.ratios.iter().map(|value| *value as f32).collect() }
     pub fn spectrum_impedance_real(&self) -> Vec<f64> { (0..BINS).map(|bin| self.impedance_at(bin).0).collect() }
     pub fn spectrum_impedance_imag(&self) -> Vec<f64> { (0..BINS).map(|bin| self.impedance_at(bin).1).collect() }
+    pub fn spectrum_current_magnitude(&self) -> Vec<f64> {
+        (0..BINS).map(|bin| self.i_re[bin].hypot(self.i_im[bin])).collect()
+    }
     pub fn step_count(&self) -> u32 { self.steps }
     pub fn measurement_count(&self) -> u32 { self.measurements }
     pub fn nx(&self) -> usize { self.gx }
@@ -440,6 +443,7 @@ mod tests {
         assert!(sim.energy().is_finite() && sim.energy() > 0.0);
         assert!(sim.electric_magnitude_snapshot().iter().all(|value| value.is_finite()));
         assert!(sim.measurement_count() > 0);
+        assert_eq!(sim.spectrum_current_magnitude().len(), BINS);
         let resonance = sim.resonance_index();
         assert!(sim.directivity_3d_at(resonance).is_finite());
         assert_eq!(sim.radiation_pattern_at(resonance).len(), PATTERN_SAMPLES);

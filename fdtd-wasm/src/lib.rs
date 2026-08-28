@@ -271,6 +271,9 @@ impl FdtdSimulation {
     pub fn spectrum_frequencies(&self) -> Vec<f32> { self.frequency_ratios.iter().map(|value| *value as f32).collect() }
     pub fn spectrum_impedance_real(&self) -> Vec<f64> { (0..SPECTRUM_BINS).map(|bin| self.impedance_at(bin).0).collect() }
     pub fn spectrum_impedance_imag(&self) -> Vec<f64> { (0..SPECTRUM_BINS).map(|bin| self.impedance_at(bin).1).collect() }
+    pub fn spectrum_current_magnitude(&self) -> Vec<f64> {
+        (0..SPECTRUM_BINS).map(|bin| self.i_re[bin].hypot(self.i_im[bin])).collect()
+    }
     pub fn step_count(&self) -> u32 { self.step_count }
     pub fn measurement_count(&self) -> u32 { self.measurements }
     pub fn nx(&self) -> usize { self.nx }
@@ -598,6 +601,7 @@ mod tests {
         assert!(sim.directivity_3d_at(resonance).is_finite());
         assert!(sim.impedance_real().is_finite());
         assert!(sim.impedance_imag().is_finite());
+        assert_eq!(sim.spectrum_current_magnitude().len(), SPECTRUM_BINS);
         assert_eq!(sim.current_profile(resonance).len(), sim.ny());
     }
 

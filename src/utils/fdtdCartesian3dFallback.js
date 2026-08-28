@@ -382,6 +382,7 @@ export class FdtdSimulation3dFallback {
   spectrum_frequencies() { return Float32Array.from(this.frequencyRatios) }
   spectrum_impedance_real() { return Float64Array.from(this.frequencyRatios, (_, index) => this.impedanceAt(index).real) }
   spectrum_impedance_imag() { return Float64Array.from(this.frequencyRatios, (_, index) => this.impedanceAt(index).imag) }
+  spectrum_current_magnitude() { return Float64Array.from(this.frequencyRatios, (_, index) => Math.hypot(this.iRe[index], this.iIm[index])) }
   radiation_pattern() { return this.radiation_pattern_at(this.resonance_index()) }
   directivity_3d() { return this.directivity_3d_at(this.resonance_index()) }
   impedance_real() { return this.impedanceAt(Math.floor(SPECTRUM_BINS / 2)).real }
