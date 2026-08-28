@@ -10,7 +10,7 @@ export function loadFdtdBackend() {
 async function loadBackend() {
   try {
     const base = import.meta.env.BASE_URL || '/'
-    const moduleUrl = `${base}wasm/fdtd_wasm.js`
+    const moduleUrl = `${base}wasm/fdtd_wasm.js?v=3`
     const wasm = await import(/* @vite-ignore */ moduleUrl)
     await wasm.default()
     return {
@@ -27,4 +27,3 @@ async function loadBackend() {
     }
   }
 }
-

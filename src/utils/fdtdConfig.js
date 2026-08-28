@@ -1,19 +1,21 @@
-export const FDTD_CONFIG_VERSION = 2
+export const FDTD_CONFIG_VERSION = 3
 
 export const FDTD_PRESETS = {
   halfWave: {
     id: 'halfWave',
-    name: 'Dipolo λ/2 · onda continua',
-    description: 'Dipolo resonante aproximado de 0,47 λ, alimentado de forma continua.',
+    name: 'Dipolo λ/2 · análisis 3D',
+    description: 'Dipolo de 0,47 λ con pulso de banda ancha para obtener campo, impedancia y radiación 3D.',
     nx: 240,
     ny: 150,
     wavelengthCells: 40,
+    frequencyMHz: 300,
     dipoleFraction: 0.47,
+    wireRadiusCells: 1,
     absorberCells: 18,
     pmlTargetReflection: 1e-8,
     pmlKappaMax: 5,
     pmlAlphaMax: 0.05,
-    sourceType: 'continuous',
+    sourceType: 'pulse',
     sourceAmplitude: 0.8,
     stepsPerFrame: 4,
     dielectric: false
@@ -25,7 +27,9 @@ export const FDTD_PRESETS = {
     nx: 240,
     ny: 150,
     wavelengthCells: 40,
+    frequencyMHz: 300,
     dipoleFraction: 0.25,
+    wireRadiusCells: 1,
     absorberCells: 18,
     pmlTargetReflection: 1e-8,
     pmlKappaMax: 5,
@@ -37,12 +41,14 @@ export const FDTD_PRESETS = {
   },
   dielectric: {
     id: 'dielectric',
-    name: 'Dipolo λ/2 · bloque dieléctrico',
-    description: 'Añade a la derecha un bloque con εr = 4 para visualizar refracción y reflexión.',
+    name: 'Dipolo λ/2 · anillo dieléctrico',
+    description: 'Añade un volumen anular con εr = 4 alrededor del dipolo axisimétrico.',
     nx: 240,
     ny: 150,
     wavelengthCells: 40,
+    frequencyMHz: 300,
     dipoleFraction: 0.47,
+    wireRadiusCells: 1,
     absorberCells: 18,
     pmlTargetReflection: 1e-8,
     pmlKappaMax: 5,
@@ -61,9 +67,9 @@ const within = (value, min, max, fallback) => {
 
 export function sanitizeFdtdConfig(input = {}) {
   const base = FDTD_PRESETS.halfWave
-  const nx = Math.round(within(input.nx, 80, 520, base.nx))
-  const ny = Math.round(within(input.ny, 60, 360, base.ny))
-  const maxAbsorber = Math.max(8, Math.floor(Math.min(nx, ny) / 3))
+  const nx = Math.round(within(input.nx, 120, 520, base.nx))
+  const ny = Math.round(within(input.ny, 80, 360, base.ny))
+  const maxAbsorber = Math.max(8, Math.floor(Math.min(Math.floor(nx / 2) + 1, ny) / 3))
 
   return {
     version: FDTD_CONFIG_VERSION,
@@ -73,7 +79,9 @@ export function sanitizeFdtdConfig(input = {}) {
     nx,
     ny,
     wavelengthCells: within(input.wavelengthCells, 16, 100, base.wavelengthCells),
+    frequencyMHz: within(input.frequencyMHz, 0.1, 100000, base.frequencyMHz),
     dipoleFraction: within(input.dipoleFraction, 0.1, 0.95, base.dipoleFraction),
+    wireRadiusCells: Math.round(within(input.wireRadiusCells, 1, 6, base.wireRadiusCells)),
     absorberCells: Math.round(within(input.absorberCells, 8, maxAbsorber, base.absorberCells)),
     pmlTargetReflection: within(input.pmlTargetReflection, 1e-12, 1e-2, base.pmlTargetReflection),
     pmlKappaMax: within(input.pmlKappaMax, 1, 12, base.pmlKappaMax),
@@ -97,13 +105,17 @@ export function parseFdtdConfig(text) {
   if (!parsed || parsed.schema !== 'falkens-maze/fdtd') {
     throw new Error('El archivo no es una configuración FDTD de Falken\'s Maze.')
   }
-  if (![1, FDTD_CONFIG_VERSION].includes(parsed.version)) {
+  if (![1, 2, FDTD_CONFIG_VERSION].includes(parsed.version)) {
     throw new Error(`Versión de configuración no compatible: ${parsed.version ?? 'sin versión'}.`)
   }
   if (parsed.version === 1) {
     parsed.pmlTargetReflection = FDTD_PRESETS.halfWave.pmlTargetReflection
     parsed.pmlKappaMax = FDTD_PRESETS.halfWave.pmlKappaMax
     parsed.pmlAlphaMax = FDTD_PRESETS.halfWave.pmlAlphaMax
+  }
+  if (parsed.version < 3) {
+    parsed.frequencyMHz = FDTD_PRESETS.halfWave.frequencyMHz
+    parsed.wireRadiusCells = FDTD_PRESETS.halfWave.wireRadiusCells
   }
   return sanitizeFdtdConfig(parsed)
 }

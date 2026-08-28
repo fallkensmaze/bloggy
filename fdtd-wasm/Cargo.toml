@@ -2,7 +2,7 @@
 name = "fdtd-wasm"
 version = "0.1.0"
 edition = "2021"
-description = "2D TEz FDTD kernel for Falken's Maze"
+description = "Axisymmetric 3D FDTD dipole kernel for Falken's Maze"
 license = "MIT"
 
 [lib]
@@ -16,4 +16,3 @@ opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
-
