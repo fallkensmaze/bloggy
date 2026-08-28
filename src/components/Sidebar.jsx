@@ -22,6 +22,7 @@ const links = [
   { href: '/rt-anonymizer', icon: 'bi-shield-lock', label: 'Anonimizar RT', section: 'Aplicaciones' },
   { href: '/q-codes', icon: 'bi-broadcast', label: 'Códigos Q', section: 'Aplicaciones' },
   { href: '/morse', icon: 'bi-soundwave', label: 'Código Morse', section: 'Aplicaciones' },
+  { href: '/fdtd-simulator', icon: 'bi-wifi', label: 'Simulador FDTD', section: 'Aplicaciones' },
   // El temario del examen es privado: solo aparece con la sesión del dueño abierta.
   { href: '/radioaficionado', icon: 'bi-mortarboard', label: 'Examen radio', section: 'Aplicaciones', admin: true },
   { href: '/quizzes', icon: 'bi-trophy', label: 'Quizzes', section: 'Juegos' }

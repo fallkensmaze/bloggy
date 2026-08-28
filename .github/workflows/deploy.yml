@@ -3,6 +3,8 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -28,6 +30,17 @@ jobs:
       
       - name: Install dependencies
         run: npm ci
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
+
+      - name: Test FDTD core
+        run: cargo test --manifest-path fdtd-wasm/Cargo.toml && npm run test:fdtd
       
       - name: Build
         run: npm run build
@@ -41,6 +54,7 @@ jobs:
           path: './dist'
   
   deploy:
+    if: github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

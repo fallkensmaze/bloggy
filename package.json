@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && npm run audit:public",
+    "build": "npm run build:wasm && npm run build:web",
+    "build:web": "vite build && npm run audit:public",
+    "build:wasm": "wasm-pack build fdtd-wasm --target web --release --out-dir ../public/wasm",
     "preview": "vite preview",
     "audit:public": "node scripts/audit-public-build.mjs",
     "test:anon": "node scripts/test-dicom-anonymizer.mjs",
@@ -16,6 +18,7 @@
     "test:pet": "node scripts/test-pet-nema.mjs && node scripts/test-pet-rois.mjs",
     "test:cor": "node scripts/test-cor-analysis.mjs",
     "test:tg43": "node scripts/test-tg43.mjs",
+    "test:fdtd": "node scripts/test-fdtd.mjs",
     "check:security": "npm run test:anon && npm run test:paste && npm run build",
     "deploy": "npm run check:security && gh-pages -d dist"
   },
