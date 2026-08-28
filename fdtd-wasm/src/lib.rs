@@ -1,7 +1,13 @@
 use wasm_bindgen::prelude::*;
 
-const COURANT: f32 = 0.99 / std::f32::consts::SQRT_2;
-const ANGLE_SAMPLES: usize = 72;
+const COURANT: f32 = 0.5;
+const ETA0: f64 = 376.730_313_668;
+const SPECTRUM_BINS: usize = 41;
+const SPECTRUM_MIN: f64 = 0.7;
+const SPECTRUM_MAX: f64 = 1.3;
+const SPECTRAL_STRIDE: u32 = 2;
+const TRACE_LIMIT: usize = 4096;
+const PATTERN_SAMPLES: usize = 72;
 
 struct PmlAxis {
     kappa: Vec<f32>,
@@ -16,6 +22,7 @@ fn make_pml_axis(
     target_reflection: f32,
     kappa_max: f32,
     alpha_max: f32,
+    absorb_left: bool,
 ) -> PmlAxis {
     let mut kappa = vec![1.0; length];
     let mut b = vec![1.0; length];
@@ -25,7 +32,7 @@ fn make_pml_axis(
 
     for index in 0..length {
         let position = index as f32 + stagger;
-        let left_depth = if position < thickness as f32 {
+        let left_depth = if absorb_left && position < thickness as f32 {
             (thickness as f32 - position) / thickness as f32
         } else {
             0.0
@@ -60,40 +67,38 @@ fn make_pml_axis(
 #[wasm_bindgen]
 pub struct FdtdSimulation {
     nx: usize,
-    ny: usize,
-    ex: Vec<f32>,
-    ey: Vec<f32>,
-    hz: Vec<f32>,
+    nz: usize,
+    nr: usize,
+    er: Vec<f32>,
+    ez: Vec<f32>,
+    hphi: Vec<f32>,
     epsilon_r: Vec<f32>,
     metal: Vec<u8>,
-    psi_hz_x: Vec<f32>,
-    psi_hz_y: Vec<f32>,
-    psi_ex_y: Vec<f32>,
-    psi_ey_x: Vec<f32>,
-    pml_x_h: PmlAxis,
-    pml_y_h: PmlAxis,
-    pml_x_e: PmlAxis,
-    pml_y_e: PmlAxis,
+    psi_hphi_r: Vec<f32>,
+    psi_hphi_z: Vec<f32>,
+    psi_er_z: Vec<f32>,
+    psi_ez_r: Vec<f32>,
+    pml_r_h: PmlAxis,
+    pml_z_h: PmlAxis,
+    pml_r_e: PmlAxis,
+    pml_z_e: PmlAxis,
     step_count: u32,
     wavelength_cells: f32,
     source_kind: u8,
     source_amplitude: f32,
-    source_x: usize,
-    source_y: usize,
-    monitor_start: u32,
-    monitor_indices: Vec<usize>,
-    monitor_cos: Vec<f32>,
-    monitor_sin: Vec<f32>,
-    ex_re: Vec<f64>,
-    ex_im: Vec<f64>,
-    ey_re: Vec<f64>,
-    ey_im: Vec<f64>,
-    hz_re: Vec<f64>,
-    hz_im: Vec<f64>,
-    v_re: f64,
-    v_im: f64,
-    i_re: f64,
-    i_im: f64,
+    source_z: usize,
+    wire_radius: usize,
+    wire_start: usize,
+    wire_end: usize,
+    frequency_ratios: Vec<f64>,
+    v_re: Vec<f64>,
+    v_im: Vec<f64>,
+    i_re: Vec<f64>,
+    i_im: Vec<f64>,
+    profile_re: Vec<f64>,
+    profile_im: Vec<f64>,
+    voltage_trace: Vec<f32>,
+    current_trace: Vec<f32>,
     measurements: u32,
 }
 
@@ -102,7 +107,7 @@ impl FdtdSimulation {
     #[wasm_bindgen(constructor)]
     pub fn new(
         nx: usize,
-        ny: usize,
+        nz: usize,
         wavelength_cells: f32,
         dipole_fraction: f32,
         pml_cells: usize,
@@ -112,105 +117,89 @@ impl FdtdSimulation {
         dielectric_enabled: bool,
         kappa_max: f32,
         alpha_max: f32,
+        wire_radius_cells: usize,
     ) -> FdtdSimulation {
-        let nx = nx.clamp(80, 520);
-        let ny = ny.clamp(60, 360);
-        let wavelength_cells = wavelength_cells.clamp(16.0, 100.0);
-        let pml_cells = pml_cells.clamp(8, nx.min(ny) / 3);
+        let nx = nx.clamp(120, 520);
+        let nz = nz.clamp(80, 360);
+        let nr = nx / 2 + 1;
+        let wavelength_cells = wavelength_cells.clamp(18.0, 100.0);
+        let pml_cells = pml_cells.clamp(8, nr.min(nz) / 3);
         let target_reflection = target_reflection.clamp(1e-12, 1e-2);
         let kappa_max = kappa_max.clamp(1.0, 12.0);
         let alpha_max = alpha_max.clamp(0.0, 0.25);
-        let len = nx * ny;
-        let source_x = nx / 2;
-        let source_y = ny / 2;
+        let wire_radius = wire_radius_cells.clamp(1, 6);
+        let len = nr * nz;
+        let source_z = nz / 2;
 
-        let mut metal = vec![0; len];
         let total_dipole = (wavelength_cells * dipole_fraction.clamp(0.1, 0.95))
             .round()
-            .max(6.0) as usize;
-        let arm = (total_dipole.saturating_sub(1) / 2).max(3);
-        for x in source_x.saturating_sub(1)..=(source_x + 1).min(nx - 1) {
-            for offset in 1..=arm {
-                if source_y >= offset {
-                    metal[(source_y - offset) * nx + x] = 1;
-                }
-                if source_y + offset < ny {
-                    metal[(source_y + offset) * nx + x] = 1;
-                }
+            .max(8.0) as usize;
+        let arm = (total_dipole.saturating_sub(1) / 2).max(4);
+        let wire_start = source_z.saturating_sub(arm).max(1);
+        let wire_end = (source_z + arm).min(nz - 2);
+        let mut metal = vec![0; len];
+        for z in wire_start..=wire_end {
+            if z == source_z {
+                continue;
+            }
+            for r in 0..=wire_radius {
+                metal[z * nr + r] = 1;
             }
         }
 
         let mut epsilon_r = vec![1.0; len];
         if dielectric_enabled {
-            let x0 = source_x + (wavelength_cells * 0.65) as usize;
-            let x1 = (x0 + (wavelength_cells * 0.55) as usize).min(nx - pml_cells - 2);
-            let y0 = source_y.saturating_sub((wavelength_cells * 0.75) as usize);
-            let y1 = (source_y + (wavelength_cells * 0.75) as usize).min(ny - 1);
-            if x0 < x1 {
-                for y in y0..=y1 {
-                    for x in x0..=x1 {
-                        epsilon_r[y * nx + x] = 4.0;
+            let r0 = (wavelength_cells * 0.62).round() as usize;
+            let r1 = (r0 + (wavelength_cells * 0.5).round() as usize).min(nr - pml_cells - 2);
+            let z0 = source_z.saturating_sub((wavelength_cells * 0.7).round() as usize).max(1);
+            let z1 = (source_z + (wavelength_cells * 0.7).round() as usize).min(nz - 2);
+            if r0 <= r1 {
+                for z in z0..=z1 {
+                    for r in r0..=r1 {
+                        epsilon_r[z * nr + r] = 4.0;
                     }
                 }
             }
         }
 
-        let monitor_radius = (nx.min(ny) / 2).saturating_sub(pml_cells + 5).max(8);
-        let mut monitor_indices = Vec::with_capacity(ANGLE_SAMPLES);
-        let mut monitor_cos = Vec::with_capacity(ANGLE_SAMPLES);
-        let mut monitor_sin = Vec::with_capacity(ANGLE_SAMPLES);
-        for angle_index in 0..ANGLE_SAMPLES {
-            let angle = angle_index as f32 * std::f32::consts::TAU / ANGLE_SAMPLES as f32;
-            let cos = angle.cos();
-            let sin = angle.sin();
-            let x = (source_x as f32 + monitor_radius as f32 * cos)
-                .round()
-                .clamp(1.0, (nx - 2) as f32) as usize;
-            let y = (source_y as f32 - monitor_radius as f32 * sin)
-                .round()
-                .clamp(1.0, (ny - 2) as f32) as usize;
-            monitor_indices.push(y * nx + x);
-            monitor_cos.push(cos);
-            monitor_sin.push(sin);
-        }
-        let monitor_start = (monitor_radius as f32 / COURANT + wavelength_cells / COURANT).ceil() as u32;
+        let frequency_ratios = (0..SPECTRUM_BINS)
+            .map(|index| SPECTRUM_MIN + index as f64 * (SPECTRUM_MAX - SPECTRUM_MIN) / (SPECTRUM_BINS - 1) as f64)
+            .collect::<Vec<_>>();
 
         FdtdSimulation {
             nx,
-            ny,
-            ex: vec![0.0; len],
-            ey: vec![0.0; len],
-            hz: vec![0.0; len],
+            nz,
+            nr,
+            er: vec![0.0; len],
+            ez: vec![0.0; len],
+            hphi: vec![0.0; len],
             epsilon_r,
             metal,
-            psi_hz_x: vec![0.0; len],
-            psi_hz_y: vec![0.0; len],
-            psi_ex_y: vec![0.0; len],
-            psi_ey_x: vec![0.0; len],
-            pml_x_h: make_pml_axis(nx, pml_cells, 0.5, target_reflection, kappa_max, alpha_max),
-            pml_y_h: make_pml_axis(ny, pml_cells, 0.5, target_reflection, kappa_max, alpha_max),
-            pml_x_e: make_pml_axis(nx, pml_cells, 0.0, target_reflection, kappa_max, alpha_max),
-            pml_y_e: make_pml_axis(ny, pml_cells, 0.0, target_reflection, kappa_max, alpha_max),
+            psi_hphi_r: vec![0.0; len],
+            psi_hphi_z: vec![0.0; len],
+            psi_er_z: vec![0.0; len],
+            psi_ez_r: vec![0.0; len],
+            pml_r_h: make_pml_axis(nr, pml_cells, 0.5, target_reflection, kappa_max, alpha_max, false),
+            pml_z_h: make_pml_axis(nz, pml_cells, 0.5, target_reflection, kappa_max, alpha_max, true),
+            pml_r_e: make_pml_axis(nr, pml_cells, 0.0, target_reflection, kappa_max, alpha_max, false),
+            pml_z_e: make_pml_axis(nz, pml_cells, 0.0, target_reflection, kappa_max, alpha_max, true),
             step_count: 0,
             wavelength_cells,
             source_kind: source_kind.min(1),
             source_amplitude: source_amplitude.clamp(0.01, 4.0),
-            source_x,
-            source_y,
-            monitor_start,
-            monitor_indices,
-            monitor_cos,
-            monitor_sin,
-            ex_re: vec![0.0; ANGLE_SAMPLES],
-            ex_im: vec![0.0; ANGLE_SAMPLES],
-            ey_re: vec![0.0; ANGLE_SAMPLES],
-            ey_im: vec![0.0; ANGLE_SAMPLES],
-            hz_re: vec![0.0; ANGLE_SAMPLES],
-            hz_im: vec![0.0; ANGLE_SAMPLES],
-            v_re: 0.0,
-            v_im: 0.0,
-            i_re: 0.0,
-            i_im: 0.0,
+            source_z,
+            wire_radius,
+            wire_start,
+            wire_end,
+            frequency_ratios,
+            v_re: vec![0.0; SPECTRUM_BINS],
+            v_im: vec![0.0; SPECTRUM_BINS],
+            i_re: vec![0.0; SPECTRUM_BINS],
+            i_im: vec![0.0; SPECTRUM_BINS],
+            profile_re: vec![0.0; SPECTRUM_BINS * nz],
+            profile_im: vec![0.0; SPECTRUM_BINS * nz],
+            voltage_trace: Vec::with_capacity(TRACE_LIMIT),
+            current_trace: Vec::with_capacity(TRACE_LIMIT),
             measurements: 0,
         }
     }
@@ -222,137 +211,206 @@ impl FdtdSimulation {
     }
 
     pub fn reset(&mut self) {
-        self.ex.fill(0.0);
-        self.ey.fill(0.0);
-        self.hz.fill(0.0);
-        self.psi_hz_x.fill(0.0);
-        self.psi_hz_y.fill(0.0);
-        self.psi_ex_y.fill(0.0);
-        self.psi_ey_x.fill(0.0);
-        self.ex_re.fill(0.0);
-        self.ex_im.fill(0.0);
-        self.ey_re.fill(0.0);
-        self.ey_im.fill(0.0);
-        self.hz_re.fill(0.0);
-        self.hz_im.fill(0.0);
-        self.v_re = 0.0;
-        self.v_im = 0.0;
-        self.i_re = 0.0;
-        self.i_im = 0.0;
+        self.er.fill(0.0);
+        self.ez.fill(0.0);
+        self.hphi.fill(0.0);
+        self.psi_hphi_r.fill(0.0);
+        self.psi_hphi_z.fill(0.0);
+        self.psi_er_z.fill(0.0);
+        self.psi_ez_r.fill(0.0);
+        self.v_re.fill(0.0);
+        self.v_im.fill(0.0);
+        self.i_re.fill(0.0);
+        self.i_im.fill(0.0);
+        self.profile_re.fill(0.0);
+        self.profile_im.fill(0.0);
+        self.voltage_trace.clear();
+        self.current_trace.clear();
         self.measurements = 0;
         self.step_count = 0;
     }
 
-    pub fn field_snapshot(&self) -> Vec<f32> { self.hz.clone() }
-    pub fn metal_snapshot(&self) -> Vec<u8> { self.metal.clone() }
-    pub fn material_snapshot(&self) -> Vec<f32> { self.epsilon_r.clone() }
+    pub fn field_snapshot(&self) -> Vec<f32> { self.mirror_f32(&self.hphi) }
+    pub fn metal_snapshot(&self) -> Vec<u8> { self.mirror_u8(&self.metal) }
+    pub fn material_snapshot(&self) -> Vec<f32> { self.mirror_f32(&self.epsilon_r) }
+    pub fn time_voltage_snapshot(&self) -> Vec<f32> { self.voltage_trace.clone() }
+    pub fn time_current_snapshot(&self) -> Vec<f32> { self.current_trace.clone() }
+    pub fn spectrum_frequencies(&self) -> Vec<f32> { self.frequency_ratios.iter().map(|value| *value as f32).collect() }
+    pub fn spectrum_impedance_real(&self) -> Vec<f64> { (0..SPECTRUM_BINS).map(|bin| self.impedance_at(bin).0).collect() }
+    pub fn spectrum_impedance_imag(&self) -> Vec<f64> { (0..SPECTRUM_BINS).map(|bin| self.impedance_at(bin).1).collect() }
     pub fn step_count(&self) -> u32 { self.step_count }
     pub fn measurement_count(&self) -> u32 { self.measurements }
     pub fn nx(&self) -> usize { self.nx }
-    pub fn ny(&self) -> usize { self.ny }
+    pub fn ny(&self) -> usize { self.nz }
+    pub fn time_step(&self) -> f32 { COURANT }
+    pub fn wire_start(&self) -> usize { self.wire_start }
+    pub fn wire_end(&self) -> usize { self.wire_end }
 
     pub fn energy(&self) -> f32 {
-        self.ex.iter().zip(&self.ey).zip(&self.hz)
-            .map(|((ex, ey), hz)| ex * ex + ey * ey + hz * hz)
-            .sum::<f32>() / (self.nx * self.ny) as f32
+        let mut total = 0.0_f64;
+        let mut weights = 0.0_f64;
+        for z in 0..self.nz {
+            for r in 0..self.nr {
+                let i = z * self.nr + r;
+                let weight = r as f64 + 0.5;
+                total += weight * (self.er[i] as f64 * self.er[i] as f64
+                    + self.ez[i] as f64 * self.ez[i] as f64
+                    + self.hphi[i] as f64 * self.hphi[i] as f64);
+                weights += weight;
+            }
+        }
+        (total / weights) as f32
     }
 
-    pub fn radiation_pattern(&self) -> Vec<f32> {
-        let mut pattern = vec![0.0; ANGLE_SAMPLES];
+    pub fn resonance_index(&self) -> usize {
+        let maximum_current = (0..SPECTRUM_BINS)
+            .map(|bin| self.i_re[bin].hypot(self.i_im[bin]))
+            .fold(0.0_f64, f64::max);
+        let mut best = SPECTRUM_BINS / 2;
+        let mut score = f64::INFINITY;
+        for bin in 1..SPECTRUM_BINS - 1 {
+            let current = self.i_re[bin].hypot(self.i_im[bin]);
+            let impedance = self.impedance_at(bin);
+            if current < maximum_current * 0.06 || !impedance.0.is_finite() || impedance.0 <= 0.0 || impedance.0 > 2000.0 {
+                continue;
+            }
+            let local_score = impedance.1.abs() + (self.frequency_ratios[bin] - 1.0).abs() * 2.0;
+            if local_score < score {
+                score = local_score;
+                best = bin;
+            }
+        }
+        best
+    }
+
+    pub fn current_profile(&self, bin: usize) -> Vec<f32> {
+        let bin = bin.min(SPECTRUM_BINS - 1);
+        let offset = bin * self.nz;
+        let mut profile = vec![0.0_f32; self.nz];
         let mut maximum = 0.0_f32;
-        for angle_index in 0..ANGLE_SAMPLES {
-            let radial_e_re = self.ey_re[angle_index] * self.monitor_cos[angle_index] as f64
-                - self.ex_re[angle_index] * self.monitor_sin[angle_index] as f64;
-            let radial_e_im = self.ey_im[angle_index] * self.monitor_cos[angle_index] as f64
-                - self.ex_im[angle_index] * self.monitor_sin[angle_index] as f64;
-            let flux = (0.5 * (radial_e_re * self.hz_re[angle_index]
-                + radial_e_im * self.hz_im[angle_index])).max(0.0) as f32;
-            pattern[angle_index] = flux;
-            maximum = maximum.max(flux);
+        for z in self.wire_start..=self.wire_end {
+            profile[z] = self.profile_re[offset + z].hypot(self.profile_im[offset + z]) as f32;
+            maximum = maximum.max(profile[z]);
         }
         if maximum > 0.0 {
-            for value in &mut pattern { *value /= maximum; }
+            for value in &mut profile {
+                *value /= maximum;
+            }
+        }
+        profile
+    }
+
+    pub fn radiation_pattern_at(&self, bin: usize) -> Vec<f32> {
+        let bin = bin.min(SPECTRUM_BINS - 1);
+        let mut pattern = vec![0.0_f32; PATTERN_SAMPLES];
+        let mut maximum = 0.0_f32;
+        for (sample, value) in pattern.iter_mut().enumerate() {
+            let angle = sample as f64 * std::f64::consts::TAU / PATTERN_SAMPLES as f64;
+            let theta = if angle <= std::f64::consts::PI { angle } else { std::f64::consts::TAU - angle };
+            *value = self.radiation_power(bin, theta) as f32;
+            maximum = maximum.max(*value);
+        }
+        if maximum > 0.0 {
+            for value in &mut pattern {
+                *value /= maximum;
+            }
         }
         pattern
     }
 
-    pub fn directivity_2d(&self) -> f32 {
-        let pattern = self.radiation_pattern();
-        let mean = pattern.iter().sum::<f32>() / pattern.len() as f32;
-        let maximum = pattern.iter().copied().fold(0.0_f32, f32::max);
-        if mean > 1e-12 { maximum / mean } else { 0.0 }
+    pub fn directivity_3d_at(&self, bin: usize) -> f32 {
+        let bin = bin.min(SPECTRUM_BINS - 1);
+        let samples = 180_usize;
+        let delta = std::f64::consts::PI / samples as f64;
+        let mut maximum = 0.0_f64;
+        let mut integral = 0.0_f64;
+        for sample in 0..=samples {
+            let theta = sample as f64 * delta;
+            let power = self.radiation_power(bin, theta);
+            maximum = maximum.max(power);
+            let weight = if sample == 0 || sample == samples { 0.5 } else { 1.0 };
+            integral += weight * power * theta.sin() * delta;
+        }
+        if integral > 1e-18 { (2.0 * maximum / integral) as f32 } else { 0.0 }
     }
 
-    pub fn impedance_real(&self) -> f64 {
-        let denominator = self.i_re * self.i_re + self.i_im * self.i_im;
-        if denominator > 1e-18 {
-            (self.v_re * self.i_re + self.v_im * self.i_im) / denominator
-        } else { 0.0 }
-    }
-
-    pub fn impedance_imag(&self) -> f64 {
-        let denominator = self.i_re * self.i_re + self.i_im * self.i_im;
-        if denominator > 1e-18 {
-            (self.v_im * self.i_re - self.v_re * self.i_im) / denominator
-        } else { 0.0 }
-    }
+    pub fn radiation_pattern(&self) -> Vec<f32> { self.radiation_pattern_at(self.resonance_index()) }
+    pub fn directivity_2d(&self) -> f32 { self.directivity_3d_at(self.resonance_index()) }
+    pub fn directivity_3d(&self) -> f32 { self.directivity_3d_at(self.resonance_index()) }
+    pub fn impedance_real(&self) -> f64 { self.impedance_at(SPECTRUM_BINS / 2).0 }
+    pub fn impedance_imag(&self) -> f64 { self.impedance_at(SPECTRUM_BINS / 2).1 }
 }
 
 impl FdtdSimulation {
     fn single_step(&mut self) {
-        for y in 0..self.ny - 1 {
-            for x in 0..self.nx - 1 {
-                let i = y * self.nx + x;
-                let d_ex_dy = self.ex[i + self.nx] - self.ex[i];
-                let d_ey_dx = self.ey[i + 1] - self.ey[i];
-                self.psi_hz_y[i] = self.pml_y_h.b[y] * self.psi_hz_y[i] + self.pml_y_h.c[y] * d_ex_dy;
-                self.psi_hz_x[i] = self.pml_x_h.b[x] * self.psi_hz_x[i] + self.pml_x_h.c[x] * d_ey_dx;
-                let corrected_y = d_ex_dy / self.pml_y_h.kappa[y] + self.psi_hz_y[i];
-                let corrected_x = d_ey_dx / self.pml_x_h.kappa[x] + self.psi_hz_x[i];
-                self.hz[i] += COURANT * (corrected_y - corrected_x);
+        for z in 0..self.nz - 1 {
+            for r in 0..self.nr - 1 {
+                let i = z * self.nr + r;
+                let d_er_dz = self.er[i + self.nr] - self.er[i];
+                let d_ez_dr = self.ez[i + 1] - self.ez[i];
+                self.psi_hphi_z[i] = self.pml_z_h.b[z] * self.psi_hphi_z[i] + self.pml_z_h.c[z] * d_er_dz;
+                self.psi_hphi_r[i] = self.pml_r_h.b[r] * self.psi_hphi_r[i] + self.pml_r_h.c[r] * d_ez_dr;
+                let corrected_z = d_er_dz / self.pml_z_h.kappa[z] + self.psi_hphi_z[i];
+                let corrected_r = d_ez_dr / self.pml_r_h.kappa[r] + self.psi_hphi_r[i];
+                self.hphi[i] += COURANT * (corrected_r - corrected_z);
             }
         }
 
-        for y in 1..self.ny - 1 {
-            for x in 1..self.nx - 1 {
-                let i = y * self.nx + x;
+        for z in 1..self.nz - 1 {
+            for r in 0..self.nr - 1 {
+                let i = z * self.nr + r;
                 let inv_eps = 1.0 / self.epsilon_r[i];
-                let d_hz_dy = self.hz[i] - self.hz[i - self.nx];
-                let d_hz_dx = self.hz[i] - self.hz[i - 1];
-                self.psi_ex_y[i] = self.pml_y_e.b[y] * self.psi_ex_y[i] + self.pml_y_e.c[y] * d_hz_dy;
-                self.psi_ey_x[i] = self.pml_x_e.b[x] * self.psi_ey_x[i] + self.pml_x_e.c[x] * d_hz_dx;
-                self.ex[i] += COURANT * inv_eps * (d_hz_dy / self.pml_y_e.kappa[y] + self.psi_ex_y[i]);
-                self.ey[i] -= COURANT * inv_eps * (d_hz_dx / self.pml_x_e.kappa[x] + self.psi_ey_x[i]);
+                let d_h_dz = self.hphi[i] - self.hphi[i - self.nr];
+                self.psi_er_z[i] = self.pml_z_e.b[z] * self.psi_er_z[i] + self.pml_z_e.c[z] * d_h_dz;
+                self.er[i] -= COURANT * inv_eps * (d_h_dz / self.pml_z_e.kappa[z] + self.psi_er_z[i]);
+
+                let radial_curl = if r == 0 {
+                    4.0 * self.hphi[i]
+                } else {
+                    let d_h_dr = self.hphi[i] - self.hphi[i - 1];
+                    self.psi_ez_r[i] = self.pml_r_e.b[r] * self.psi_ez_r[i] + self.pml_r_e.c[r] * d_h_dr;
+                    d_h_dr / self.pml_r_e.kappa[r] + self.psi_ez_r[i]
+                        + (self.hphi[i] + self.hphi[i - 1]) / (2.0 * r as f32)
+                };
+                self.ez[i] += COURANT * inv_eps * radial_curl;
             }
         }
 
-        let source_index = self.source_y * self.nx + self.source_x;
-        self.ey[source_index] += self.source_value();
+        let drive = self.source_value();
+        for r in 0..=self.wire_radius {
+            self.ez[self.source_z * self.nr + r] += drive;
+        }
         for i in 0..self.metal.len() {
             if self.metal[i] != 0 {
-                self.ex[i] = 0.0;
-                self.ey[i] = 0.0;
+                self.er[i] = 0.0;
+                self.ez[i] = 0.0;
             }
         }
-        for x in 0..self.nx {
-            self.ex[x] = 0.0;
-            self.ey[x] = 0.0;
-            let bottom = (self.ny - 1) * self.nx + x;
-            self.ex[bottom] = 0.0;
-            self.ey[bottom] = 0.0;
+        for z in 0..self.nz {
+            self.er[z * self.nr] = 0.0;
         }
-        for y in 0..self.ny {
-            let left = y * self.nx;
-            let right = left + self.nx - 1;
-            self.ex[left] = 0.0;
-            self.ey[left] = 0.0;
-            self.ex[right] = 0.0;
-            self.ey[right] = 0.0;
+        for r in 0..self.nr {
+            self.er[r] = 0.0;
+            self.ez[r] = 0.0;
+            let far_z = (self.nz - 1) * self.nr + r;
+            self.er[far_z] = 0.0;
+            self.ez[far_z] = 0.0;
+        }
+        for z in 0..self.nz {
+            let outer = z * self.nr + self.nr - 1;
+            self.er[outer] = 0.0;
+            self.ez[outer] = 0.0;
         }
 
         self.step_count = self.step_count.wrapping_add(1);
-        if self.step_count >= self.monitor_start {
-            self.accumulate_monitors();
+        let voltage = self.port_voltage();
+        let current = self.port_current();
+        if self.voltage_trace.len() < TRACE_LIMIT {
+            self.voltage_trace.push(voltage);
+            self.current_trace.push(current);
+        }
+        if self.step_count % SPECTRAL_STRIDE == 0 {
+            self.accumulate_spectra(voltage, current);
         }
     }
 
@@ -362,39 +420,104 @@ impl FdtdSimulation {
         if self.source_kind == 0 {
             self.source_amplitude * (1.0 - (-(self.step_count as f32) / 45.0).exp()) * phase.sin()
         } else {
-            let centre = 2.8 * self.wavelength_cells;
-            let width = 0.72 * self.wavelength_cells;
+            let centre = 3.0 * self.wavelength_cells;
+            let width = 0.48 * self.wavelength_cells;
             self.source_amplitude * (-((t - centre) / width).powi(2)).exp() * phase.sin()
         }
     }
 
-    fn accumulate_monitors(&mut self) {
-        let phase = std::f64::consts::TAU * self.step_count as f64 * COURANT as f64 / self.wavelength_cells as f64;
-        let cos = phase.cos();
-        let sin = -phase.sin();
-        for angle_index in 0..ANGLE_SAMPLES {
-            let i = self.monitor_indices[angle_index];
-            self.ex_re[angle_index] += self.ex[i] as f64 * cos;
-            self.ex_im[angle_index] += self.ex[i] as f64 * sin;
-            self.ey_re[angle_index] += self.ey[i] as f64 * cos;
-            self.ey_im[angle_index] += self.ey[i] as f64 * sin;
-            self.hz_re[angle_index] += self.hz[i] as f64 * cos;
-            self.hz_im[angle_index] += self.hz[i] as f64 * sin;
+    fn port_voltage(&self) -> f32 {
+        let mut voltage = 0.0;
+        for r in 0..=self.wire_radius {
+            voltage += self.ez[self.source_z * self.nr + r];
         }
-        let source_index = self.source_y * self.nx + self.source_x;
-        let current = (self.port_current_at(self.source_y - 1) + self.port_current_at(self.source_y + 1)) * 0.5;
-        let voltage = self.ey[source_index];
-        self.v_re += voltage as f64 * cos;
-        self.v_im += voltage as f64 * sin;
-        self.i_re += current as f64 * cos;
-        self.i_im += current as f64 * sin;
+        voltage / (self.wire_radius + 1) as f32
+    }
+
+    fn wire_current_at(&self, z: usize) -> f32 {
+        if z < self.wire_start || z > self.wire_end || z == self.source_z {
+            return 0.0;
+        }
+        let radius_index = (self.wire_radius + 1).min(self.nr - 2);
+        -std::f32::consts::TAU * (radius_index as f32 + 0.5) * self.hphi[z * self.nr + radius_index]
+    }
+
+    fn port_current(&self) -> f32 {
+        0.5 * (self.wire_current_at(self.source_z - 1) + self.wire_current_at(self.source_z + 1))
+    }
+
+    fn accumulate_spectra(&mut self, voltage: f32, current: f32) {
+        let t = self.step_count as f64 * COURANT as f64;
+        for bin in 0..SPECTRUM_BINS {
+            let phase = std::f64::consts::TAU * t * self.frequency_ratios[bin] / self.wavelength_cells as f64;
+            let cos = phase.cos();
+            let sin = -phase.sin();
+            self.v_re[bin] += voltage as f64 * cos;
+            self.v_im[bin] += voltage as f64 * sin;
+            self.i_re[bin] += current as f64 * cos;
+            self.i_im[bin] += current as f64 * sin;
+            let offset = bin * self.nz;
+            for z in self.wire_start..=self.wire_end {
+                let wire_current = self.wire_current_at(z) as f64;
+                self.profile_re[offset + z] += wire_current * cos;
+                self.profile_im[offset + z] += wire_current * sin;
+            }
+        }
         self.measurements += 1;
     }
 
-    fn port_current_at(&self, y: usize) -> f32 {
-        let left = y * self.nx + self.source_x.saturating_sub(2);
-        let right = y * self.nx + (self.source_x + 2).min(self.nx - 1);
-        self.hz[right] - self.hz[left]
+    fn impedance_at(&self, bin: usize) -> (f64, f64) {
+        let bin = bin.min(SPECTRUM_BINS - 1);
+        let denominator = self.i_re[bin] * self.i_re[bin] + self.i_im[bin] * self.i_im[bin];
+        if denominator <= 1e-18 {
+            return (0.0, 0.0);
+        }
+        (
+            ETA0 * (self.v_re[bin] * self.i_re[bin] + self.v_im[bin] * self.i_im[bin]) / denominator,
+            ETA0 * (self.v_im[bin] * self.i_re[bin] - self.v_re[bin] * self.i_im[bin]) / denominator,
+        )
+    }
+
+    fn radiation_power(&self, bin: usize, theta: f64) -> f64 {
+        let bin = bin.min(SPECTRUM_BINS - 1);
+        let offset = bin * self.nz;
+        let wave_number = std::f64::consts::TAU * self.frequency_ratios[bin] / self.wavelength_cells as f64;
+        let mut real = 0.0;
+        let mut imag = 0.0;
+        for z in self.wire_start..=self.wire_end {
+            let phase = wave_number * (z as f64 - self.source_z as f64) * theta.cos();
+            let cos = phase.cos();
+            let sin = phase.sin();
+            let profile_real = self.profile_re[offset + z];
+            let profile_imag = self.profile_im[offset + z];
+            real += profile_real * cos - profile_imag * sin;
+            imag += profile_real * sin + profile_imag * cos;
+        }
+        (real * real + imag * imag) * theta.sin().powi(2)
+    }
+
+    fn mirror_f32(&self, source: &[f32]) -> Vec<f32> {
+        let mut result = vec![0.0; self.nx * self.nz];
+        let half = self.nx / 2;
+        for z in 0..self.nz {
+            for x in 0..self.nx {
+                let r = (if x < half { half - 1 - x } else { x - half }).min(self.nr - 1);
+                result[z * self.nx + x] = source[z * self.nr + r];
+            }
+        }
+        result
+    }
+
+    fn mirror_u8(&self, source: &[u8]) -> Vec<u8> {
+        let mut result = vec![0; self.nx * self.nz];
+        let half = self.nx / 2;
+        for z in 0..self.nz {
+            for x in 0..self.nx {
+                let r = (if x < half { half - 1 - x } else { x - half }).min(self.nr - 1);
+                result[z * self.nx + x] = source[z * self.nr + r];
+            }
+        }
+        result
     }
 }
 
@@ -403,35 +526,38 @@ mod tests {
     use super::*;
 
     fn simulation(source_kind: u8) -> FdtdSimulation {
-        FdtdSimulation::new(140, 100, 28.0, 0.47, 14, 1e-8, source_kind, 0.8, false, 5.0, 0.05)
+        FdtdSimulation::new(240, 150, 40.0, 0.47, 18, 1e-8, source_kind, 0.8, false, 5.0, 0.05, 1)
     }
 
     #[test]
-    fn builds_cpml_grid_and_dipole() {
+    fn builds_axisymmetric_cpml_grid_and_dipole() {
         let sim = simulation(0);
-        assert_eq!(sim.field_snapshot().len(), 14_000);
-        assert!(sim.metal_snapshot().iter().filter(|&&value| value == 1).count() >= 18);
-        assert!(sim.pml_x_e.kappa[0] > 1.0);
+        assert_eq!(sim.field_snapshot().len(), 36_000);
+        assert!(sim.metal_snapshot().iter().filter(|&&value| value == 1).count() >= 30);
+        assert_eq!(sim.pml_r_e.kappa[0], 1.0);
+        assert!(sim.pml_r_e.kappa[sim.nr - 1] > 1.0);
         assert_eq!(sim.step_count(), 0);
     }
 
     #[test]
-    fn propagation_and_port_observables_remain_finite() {
-        let mut sim = simulation(0);
-        for _ in 0..10 { sim.step(64); }
+    fn propagation_and_three_dimensional_observables_remain_finite() {
+        let mut sim = simulation(1);
+        for _ in 0..12 { sim.step(64); }
         assert!(sim.energy().is_finite() && sim.energy() > 0.0);
         assert!(sim.field_snapshot().iter().all(|value| value.is_finite()));
         assert!(sim.measurement_count() > 0);
-        assert!(sim.directivity_2d().is_finite());
+        let resonance = sim.resonance_index();
+        assert!(sim.directivity_3d_at(resonance).is_finite());
         assert!(sim.impedance_real().is_finite());
         assert!(sim.impedance_imag().is_finite());
+        assert_eq!(sim.current_profile(resonance).len(), sim.ny());
     }
 
     #[test]
     fn cpml_removes_most_pulse_energy() {
         let mut sim = simulation(1);
         let mut peak = 0.0_f32;
-        for _ in 0..16 {
+        for _ in 0..32 {
             sim.step(64);
             peak = peak.max(sim.energy());
         }
@@ -440,12 +566,13 @@ mod tests {
     }
 
     #[test]
-    fn reset_clears_dynamic_and_measurement_state() {
+    fn reset_clears_dynamic_and_spectral_state() {
         let mut sim = simulation(0);
-        sim.step(256);
+        sim.step(64);
         sim.reset();
         assert_eq!(sim.step_count(), 0);
         assert_eq!(sim.measurement_count(), 0);
         assert_eq!(sim.energy(), 0.0);
+        assert!(sim.time_voltage_snapshot().is_empty());
     }
 }

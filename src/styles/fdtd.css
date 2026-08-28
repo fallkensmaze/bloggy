@@ -154,7 +154,28 @@
 .fdtd-file-actions button:hover,
 .fdtd-transport button:hover { color: var(--text-primary); border-color: var(--text-muted); }
 
-.fdtd-stage { min-width: 0; }
+.fdtd-stage { position: relative; min-width: 0; }
+.fdtd-view-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 39px;
+  padding: 5px;
+  border: 1px solid #465164;
+  border-bottom: 0;
+  background: #101722;
+}
+.fdtd-view-toolbar button {
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.fdtd-view-toolbar button.active { color: #fff; background: rgba(136, 192, 208, .16); border-color: rgba(136, 192, 208, .4); }
+.fdtd-view-toolbar > span { margin-left: auto; padding-right: 7px; color: var(--text-dim); font: 9px var(--font-mono); }
 .fdtd-canvas-wrap {
   position: relative;
   overflow: hidden;
@@ -163,6 +184,40 @@
   box-shadow: 0 18px 55px rgba(10, 13, 18, .28);
 }
 .fdtd-canvas-wrap canvas { display: block; width: 100%; height: auto; aspect-ratio: 8 / 5; }
+.fdtd-view-hidden { display: none; }
+
+.fdtd-3d-viewer { position: relative; width: 100%; min-height: 360px; touch-action: none; }
+.fdtd-3d-viewer canvas { cursor: grab; }
+.fdtd-3d-viewer canvas:active { cursor: grabbing; }
+.fdtd-3d-controls {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  display: flex;
+  gap: 5px;
+  padding: 4px;
+  background: rgba(20, 24, 31, .72);
+  backdrop-filter: blur(4px);
+}
+.fdtd-3d-controls button {
+  color: var(--text-secondary);
+  background: rgba(18, 24, 34, .8);
+  border: 1px solid rgba(120, 132, 154, .45);
+  border-radius: 3px;
+  padding: 5px 8px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.fdtd-3d-help {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  color: rgba(236, 239, 244, .7);
+  background: rgba(20, 24, 31, .68);
+  padding: 6px 8px;
+  font: 9px var(--font-mono);
+  pointer-events: none;
+}
 
 .fdtd-overlay {
   position: absolute;
@@ -192,6 +247,7 @@
   letter-spacing: .08em;
 }
 .fdtd-recording span { width: 8px; height: 8px; border-radius: 50%; background: #e33e4d; animation: fdtd-rec 1s infinite; }
+.fdtd-recording-stage { top: 54px; z-index: 5; pointer-events: none; }
 @keyframes fdtd-rec { 50% { opacity: .3; } }
 
 .fdtd-transport {
@@ -223,6 +279,30 @@
   grid-template-columns: 1fr 1fr;
   gap: 18px;
   margin-top: 28px;
+}
+
+.fdtd-result-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-top: 28px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+}
+.fdtd-result-strip > div { min-width: 0; padding: 13px 15px; }
+.fdtd-result-strip > div + div { border-left: 1px solid var(--border); }
+.fdtd-result-strip span,
+.fdtd-result-strip strong { display: block; }
+.fdtd-result-strip span { color: var(--text-dim); font-size: 9px; letter-spacing: .07em; text-transform: uppercase; }
+.fdtd-result-strip strong { overflow: hidden; margin-top: 4px; color: var(--text-primary); font: 12px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.fdtd-result-strip small { color: var(--text-dim); font-size: 9px; }
+
+.fdtd-analysis-notice {
+  margin-top: 14px;
+  padding: 10px 13px;
+  color: var(--text-muted);
+  background: rgba(94, 129, 172, .1);
+  border-left: 3px solid var(--accent-blue);
+  font-size: 11px;
 }
 
 .fdtd-analysis-card {
@@ -268,6 +348,8 @@
 }
 
 .fdtd-polar-chart { height: 330px; }
+.fdtd-analysis-wide { grid-column: 1 / -1; }
+.fdtd-analysis-wide .fdtd-polar-chart { max-width: 720px; height: 420px; margin-right: auto; margin-left: auto; }
 
 .fdtd-analysis-card > p {
   color: var(--text-muted);
@@ -296,6 +378,10 @@
   .fdtd-apply { align-self: end; }
   .fdtd-file-actions { align-self: end; }
   .fdtd-analysis-grid { grid-template-columns: 1fr; }
+  .fdtd-analysis-wide { grid-column: auto; }
+  .fdtd-result-strip { grid-template-columns: repeat(3, 1fr); }
+  .fdtd-result-strip > div:nth-child(4) { border-left: 0; border-top: 1px solid var(--border); }
+  .fdtd-result-strip > div:nth-child(5) { border-top: 1px solid var(--border); }
 }
 
 @media (max-width: 720px) {
@@ -305,12 +391,17 @@
   .fdtd-controls { display: block; }
   .fdtd-control-section + .fdtd-control-section { border-left: 0; border-top: 1px solid var(--border-sub); margin-top: 18px; padding: 18px 0 0; }
   .fdtd-overlay.top-right { display: none; }
+  .fdtd-view-toolbar > span { display: none; }
   .fdtd-transport { flex-wrap: wrap; }
   .fdtd-transport-spacer { display: none; }
   .fdtd-metrics { grid-template-columns: 1fr 1fr; }
   .fdtd-metrics > div:nth-child(3) { border-left: 0; border-top: 1px solid var(--border); }
   .fdtd-metrics > div:nth-child(4) { border-top: 1px solid var(--border); }
   .fdtd-notes { grid-template-columns: 1fr; }
+  .fdtd-result-strip { grid-template-columns: 1fr 1fr; }
+  .fdtd-result-strip > div { border-top: 1px solid var(--border); }
+  .fdtd-result-strip > div:nth-child(-n+2) { border-top: 0; }
+  .fdtd-result-strip > div:nth-child(odd) { border-left: 0; }
   .fdtd-analysis-heading { flex-direction: column; }
   .fdtd-analysis-heading > strong { text-align: left; }
   .fdtd-chart, .fdtd-polar-chart { height: 280px; }
