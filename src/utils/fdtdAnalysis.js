@@ -44,12 +44,16 @@ export function readFdtdAnalysis(simulation, config) {
 
   const wireStart = simulation.wire_start()
   const wireEnd = simulation.wire_end()
-  const sourceZ = Math.floor(simulation.ny() / 2)
+  const sourceZ = typeof simulation.feed_position === 'function' ? simulation.feed_position() : Math.floor(simulation.ny() / 2)
   const wireLength = Math.max(1, wireEnd - wireStart)
   const profile = Array.from(simulation.current_profile(resonanceIndex))
   const profileIndices = Array.from({ length: wireEnd - wireStart + 1 }, (_, index) => wireStart + index)
-  const position = profileIndices.map(index => (index - sourceZ) / wireLength)
-  const idealProfile = position.map(value => Math.max(0, Math.cos(Math.PI * value)))
+  const position = config.antennaType === 'monopole'
+    ? profileIndices.map(index => (index - sourceZ) / Math.max(1, wireEnd - sourceZ))
+    : profileIndices.map(index => (index - sourceZ) / wireLength)
+  const idealProfile = config.antennaType === 'monopole'
+    ? position.map(value => Math.max(0, Math.cos(Math.PI * value / 2)))
+    : position.map(value => Math.max(0, Math.cos(Math.PI * value)))
 
   const linearPattern = Array.from(simulation.radiation_pattern_at(resonanceIndex))
   const patternDb = linearPattern.map(value => Math.max(PATTERN_FLOOR_DB, 10 * Math.log10(Math.max(1e-4, value))))
