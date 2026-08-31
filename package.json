@@ -19,6 +19,7 @@
     "test:cor": "node scripts/test-cor-analysis.mjs",
     "test:tg43": "node scripts/test-tg43.mjs",
     "test:fdtd": "node scripts/test-fdtd.mjs",
+    "test:film": "node scripts/test-film-dosimetry.mjs",
     "check:security": "npm run test:anon && npm run test:paste && npm run build",
     "deploy": "npm run check:security && gh-pages -d dist"
   },
@@ -36,7 +37,8 @@
     "react": "^18.3.1",
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.22.0"
+    "react-router-dom": "^6.22.0",
+    "tiff": "^7.1.3"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.0.2",
