@@ -46,6 +46,7 @@ Los archivos compilados se generan en `dist/`. La configuración de producción 
 | `/pet-nema-fraccionamiento` | PET NEMA IQ | Preparación guiada del maniquí de esferas con actividades F-18 actualizadas en tiempo real y cronómetros operativos. |
 | `/rtplan-compare` | Comparar RT Plans | Comparación de planes DICOM RT. |
 | `/tg43-calculator` | Calculador TG-43 | Verificación de dosis HDR para Ir-192. |
+| `/dosimetria-pelicula` | Dosimetría de película | Calibración EBT3, análisis multicanal de TIFF RGB de 48 bits y exportación DICOM RT Dose. |
 | `/acr-qc` | ACR MRI QC | Análisis DICOM del maniquí ACR Medium. |
 | `/lector` | Lector rápido | Lectura RSVP con persistencia local del progreso. |
 | `/informe-tanques` | Tanques Lu-177 | Informe interactivo para residuos líquidos. |
@@ -111,6 +112,7 @@ de Firestore por separado y revisar las limitaciones del hosting estático.
 - [SECURITY.md](SECURITY.md) - auditoría del artefacto público y despliegue privado de reglas de Firestore.
 - [DICOM_MIGRATION.md](DICOM_MIGRATION.md) - migración de lectura DICOM.
 - [TG43_IMPROVEMENTS.md](TG43_IMPROVEMENTS.md) - mejoras del calculador TG-43.
+- [FILM_DOSIMETRY.md](FILM_DOSIMETRY.md) - protocolo de calibración, análisis multicanal y exportación RT Dose.
 
 ## Licencia
 

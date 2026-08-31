@@ -29,6 +29,7 @@ import ExamAdminList from './pages/ExamAdminList'
 import ExamHost from './pages/ExamHost'
 import ExamPrintTickets from './pages/ExamPrintTickets'
 import ExamJoin from './pages/ExamJoin'
+import FilmDosimetry from './pages/FilmDosimetry'
 
 function App() {
   return (
@@ -52,6 +53,7 @@ function App() {
         <Route path="morse" element={<MorseTrainer />} />
         <Route path="radioaficionado" element={<RadioExam />} />
         <Route path="fdtd-simulator" element={<FdtdSimulator />} />
+        <Route path="dosimetria-pelicula" element={<FilmDosimetry />} />
       </Route>
       <Route path="/admin" element={<Admin />} />
       <Route path="/quiz-creator" element={<QuizCreator />} />
