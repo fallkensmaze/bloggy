@@ -37,6 +37,15 @@
     border-color: var(--accent-orange);
 }
 .mr-btn--danger { color: var(--accent-red); border-color: var(--accent-red); }
+.mr-btn:focus-visible,
+.mr-tab:focus-visible,
+.mr-step:focus-visible,
+.mr-option:focus-visible,
+.mr-key-pad:focus-visible,
+.mr-play-btn:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+}
 
 .mr-chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .mr-card { margin-bottom: 16px; }
@@ -131,6 +140,41 @@
     cursor: pointer;
 }
 .mr-slider-note { font-size: 11.5px; color: var(--text-muted); margin-top: 5px; }
+
+.mr-course-settings summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 13.5px;
+    font-weight: 600;
+    list-style: none;
+}
+.mr-course-settings summary::-webkit-details-marker { display: none; }
+.mr-course-settings summary::after {
+    content: '+';
+    color: var(--accent-blue);
+    font-family: var(--font-mono);
+    font-size: 1.1rem;
+}
+.mr-course-settings[open] summary::after { content: '−'; }
+.mr-course-settings summary:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 4px;
+    border-radius: 4px;
+}
+.mr-course-settings-value {
+    margin-left: auto;
+    color: var(--accent-blue);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+}
+.mr-course-settings .mr-sliders {
+    padding-top: 18px;
+    border-top: 1px solid var(--border-sub);
+}
 
 .mr-lesson {
     display: flex;
@@ -389,6 +433,10 @@
     flex-wrap: wrap;
     margin-bottom: 10px;
 }
+.mr-key-help {
+    color: var(--text-muted);
+    font-size: 11.5px;
+}
 .mr-mastery-tag {
     display: inline-flex;
     align-items: center;
@@ -563,6 +611,8 @@
     .mr-options { grid-template-columns: 1fr; }
     .mr-answer { font-size: 1.1rem; letter-spacing: 4px; }
     .mr-key-target { font-size: 1.3rem; letter-spacing: 5px; }
+    .mr-course-settings summary { flex-wrap: wrap; }
+    .mr-course-settings-value { margin-left: 0; }
 }
 
 /* ── Curso guiado ── */
@@ -607,7 +657,8 @@
     cursor: pointer;
     transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
-.mr-step:hover { color: var(--text-secondary); }
+.mr-step:hover:not(:disabled) { color: var(--text-secondary); }
+.mr-step:disabled { cursor: not-allowed; opacity: 0.52; }
 .mr-step--done { color: var(--accent-green); border-color: rgba(163, 190, 140, 0.4); }
 .mr-step--active {
     border-color: var(--accent-blue);

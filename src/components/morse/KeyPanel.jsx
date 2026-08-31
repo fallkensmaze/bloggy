@@ -184,6 +184,7 @@ function KeyPanel({ pool, progressRef, charWpm, freq, recordChars, canPlay }) {
             className={`mr-btn mr-btn--sm${mode === m.id ? ' mr-btn--active' : ''}`}
             onClick={() => handleModeChange(m.id)}
             title={m.hint}
+            aria-pressed={mode === m.id}
           >
             {m.label}
           </button>
@@ -206,7 +207,12 @@ function KeyPanel({ pool, progressRef, charWpm, freq, recordChars, canPlay }) {
               {target.text.split('').map(c => prettyMorse(symbolsFor(c) || '')).join('   ')}
             </p>
           )}
-          <button className="mr-btn mr-btn--sm" style={{ marginTop: '12px' }} onClick={() => setCheat(v => !v)}>
+          <button
+            className="mr-btn mr-btn--sm"
+            style={{ marginTop: '12px' }}
+            onClick={() => setCheat(v => !v)}
+            aria-pressed={cheat}
+          >
             <i className={`bi bi-eye${cheat ? '-slash' : ''}`} style={{ marginRight: '6px' }} />
             {cheat ? 'Ocultar la chuleta' : 'Ver la chuleta'}
           </button>
@@ -267,7 +273,7 @@ function KeyPanel({ pool, progressRef, charWpm, freq, recordChars, canPlay }) {
               </div>
             ))}
           </div>
-          <div className={`mr-feedback ${grade.perfect ? 'mr-feedback--correct' : 'mr-feedback--wrong'}`}>
+          <div className={`mr-feedback ${grade.perfect ? 'mr-feedback--correct' : 'mr-feedback--wrong'}`} role="status" aria-live="polite">
             <i className={`bi ${grade.perfect ? 'bi-check-circle' : 'bi-x-circle'}`} style={{ marginRight: '8px' }} />
             {grade.perfect
               ? '¡Manipulado limpio!'

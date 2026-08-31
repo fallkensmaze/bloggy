@@ -69,6 +69,7 @@ function ReferencePanel({ progress, play, canPlay }) {
         value={search}
         onChange={e => setSearch(e.target.value)}
         placeholder="Buscar un carácter, un patrón (.-) o un prosigno…"
+        aria-label="Buscar en la tabla Morse"
       />
 
       {vacio && (
@@ -109,6 +110,7 @@ function ReferencePanel({ progress, play, canPlay }) {
             onChange={e => onTexto(e.target.value)}
             spellCheck="false"
             placeholder="Escribe aquí y sale el Morse debajo"
+            aria-label="Texto para convertir a Morse"
           />
         </div>
         <div>
@@ -118,6 +120,7 @@ function ReferencePanel({ progress, play, canPlay }) {
             onChange={e => onCodigo(e.target.value)}
             spellCheck="false"
             placeholder="-.-. --.- / -.. ."
+            aria-label="Código Morse para convertir a texto"
           />
         </div>
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>

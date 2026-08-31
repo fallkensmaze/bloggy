@@ -153,6 +153,7 @@ function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recor
             onClick={() => handleModeChange(m.id)}
             title={m.hint}
             disabled={m.id === 'palabra' && words.length === 0}
+            aria-pressed={mode === m.id}
           >
             {m.label}
             {m.id === 'palabra' && ` (${words.length})`}
@@ -164,6 +165,7 @@ function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recor
             className={`mr-btn mr-btn--sm${size === s ? ' mr-btn--active' : ''}`}
             onClick={() => handleSizeChange(s)}
             title={`Grupos de ${s} caracteres`}
+            aria-pressed={size === s}
           >
             {s} caracteres
           </button>
@@ -236,7 +238,7 @@ function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recor
             ))}
           </div>
 
-          <div className={`mr-feedback ${grade.perfect ? 'mr-feedback--correct' : 'mr-feedback--wrong'}`}>
+          <div className={`mr-feedback ${grade.perfect ? 'mr-feedback--correct' : 'mr-feedback--wrong'}`} role="status" aria-live="polite">
             <i className={`bi ${grade.perfect ? 'bi-check-circle' : 'bi-x-circle'}`} style={{ marginRight: '8px' }} />
             {grade.perfect
               ? `¡Copiado entero! (${drill.text})`
@@ -262,7 +264,7 @@ function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recor
       )}
 
       {puedeSubir && (
-        <div className="mr-advance">
+        <div className="mr-advance" role="status">
           <i className="bi bi-mortarboard" style={{ color: 'var(--accent-green)', fontSize: '1.2rem' }} />
           <span style={{ flex: 1 }}>
             Llevas más del {KOCH_TARGET}% en los últimos ejercicios: toca estrenar carácter.
