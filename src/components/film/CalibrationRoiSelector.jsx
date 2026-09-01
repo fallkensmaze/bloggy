@@ -48,14 +48,17 @@ export default function CalibrationRoiSelector({ file, enabled, roi, previewRole
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || !preview) return
+    if (!canvas || !preview || !enabled || busy) return
     canvas.width = preview.width
     canvas.height = preview.height
     const context = canvas.getContext('2d')
     const imageData = context.createImageData(preview.width, preview.height)
     imageData.data.set(preview.rgba)
     context.putImageData(imageData, 0, 0)
-  }, [preview])
+  // El canvas no está montado mientras la ROI está desactivada o la vista
+  // previa sigue cargando. Debe repintarse cuando cualquiera de esos estados
+  // cambia, aunque los píxeles de `preview` ya se hubieran calculado antes.
+  }, [preview, enabled, busy])
 
   const pointFromEvent = (event) => {
     const bounds = event.currentTarget.getBoundingClientRect()
