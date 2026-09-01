@@ -270,6 +270,13 @@
 .film-qc-table td small { display: block; margin-top: 2px; color: var(--text-muted); font-size: 8px; }
 .film-qc-table tfoot th, .film-qc-table tfoot td { border-top: 1px solid var(--border); color: var(--text-muted); font-size: 9px; }
 .film-qc-dose { color: var(--text-primary); font-size: 10px; }
+.film-calibration-fit { border-color: rgba(136, 192, 208, .35); }
+.film-fit-chart-panel { display: grid; gap: 12px; min-width: 0; }
+.film-fit-chart-panel.compact { margin: 12px 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(31, 35, 43, .34); }
+.film-fit-chart { position: relative; width: 100%; height: 360px; min-width: 0; }
+.film-fit-chart-panel.compact .film-fit-chart { height: 250px; }
+.film-fit-chart-metrics { display: flex; flex-wrap: wrap; gap: 7px; }
+.film-fit-chart-metrics span { padding: 4px 7px; border-left: 3px solid var(--film-channel-color); border-radius: 4px; background: rgba(46, 52, 64, .5); color: var(--text-muted); font-size: 9px; }
 
 .film-points-table-wrap { overflow-x: auto; }
 .film-points-table { width: 100%; min-width: 890px; border-collapse: collapse; }

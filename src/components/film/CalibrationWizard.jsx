@@ -3,6 +3,7 @@ import { buildFilmCalibration, RESPONSE_BASIS_INTENSITY, RESPONSE_BASIS_NET_OD }
 import { verifyCalibrationPoints } from '../../utils/filmAnalysis.js'
 import { pairedNetOdRoi, readRgb16TiffFiles, singleExposureRoi } from '../../utils/filmTiff.js'
 import CalibrationImageRois from './CalibrationImageRois.jsx'
+import CalibrationFitChart from './CalibrationFitChart.jsx'
 import CalibrationQualityControl from './CalibrationQualityControl.jsx'
 
 const DEFAULT_DOSES_CGY = [50, 100, 200, 300, 400, 500, 600, 700]
@@ -252,6 +253,12 @@ export default function CalibrationWizard({ onCancel, onSave }) {
           </table>
         </div>
       </div>
+
+      {candidateCalibration && (
+        <div className="film-subsection film-calibration-fit">
+          <CalibrationFitChart calibration={candidateCalibration} />
+        </div>
+      )}
 
       <CalibrationQualityControl calibration={candidateCalibration} />
 

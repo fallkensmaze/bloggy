@@ -3,6 +3,7 @@ import {
   downloadFilmCalibration,
   parseFilmCalibration
 } from '../../utils/filmStorage.js'
+import CalibrationFitChart from './CalibrationFitChart.jsx'
 
 function dateLabel(value) {
   if (!value) return '—'
@@ -12,6 +13,7 @@ function dateLabel(value) {
 export default function CalibrationLibrary({ calibrations, activeId, onUse, onDelete, onDuplicate, onImport, onCreate }) {
   const inputRef = useRef(null)
   const [error, setError] = useState('')
+  const [expandedFitId, setExpandedFitId] = useState('')
 
   const importFile = async (file) => {
     if (!file) return
@@ -89,11 +91,13 @@ export default function CalibrationLibrary({ calibrations, activeId, onUse, onDe
                     </span>
                   ))}
                 </div>
+                {expandedFitId === calibration.id && <CalibrationFitChart calibration={calibration} compact />}
                 <div className="film-card-actions">
                   <button type="button" className="film-button" onClick={() => onUse(calibration.id)} disabled={active}>
                     <i className={`bi ${active ? 'bi-check-circle' : 'bi-play-circle'}`} /> {active ? 'En uso' : 'Usar'}
                   </button>
                   <button type="button" className="film-icon-button" title="Exportar" onClick={() => downloadFilmCalibration(calibration)}><i className="bi bi-download" /></button>
+                  <button type="button" className="film-icon-button" title={expandedFitId === calibration.id ? 'Ocultar ajuste' : 'Ver ajuste'} onClick={() => setExpandedFitId((current) => current === calibration.id ? '' : calibration.id)}><i className={`bi ${expandedFitId === calibration.id ? 'bi-graph-down' : 'bi-graph-up'}`} /></button>
                   <button type="button" className="film-icon-button" title="Duplicar" onClick={() => onDuplicate(calibration)}><i className="bi bi-copy" /></button>
                   <button type="button" className="film-icon-button danger" title="Eliminar" onClick={() => onDelete(calibration)}><i className="bi bi-trash" /></button>
                 </div>
