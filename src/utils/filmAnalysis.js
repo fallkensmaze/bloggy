@@ -253,3 +253,55 @@ export function analyzeFilmImage({ measurement, reference = null, calibration, m
     createdAt: new Date().toISOString()
   }
 }
+
+function qcEstimate(response, calibration, method) {
+  if (method === 'multichannel') return multichannelDose(response, calibration).dose
+  if (method === 'weighted-rgb') return weightedDose(response, calibration).dose
+  return channelDose(response, ['red', 'green', 'blue'].indexOf(method), calibration)
+}
+
+/**
+ * Reconstruye los puntos que originaron la curva a partir de la respuesta media
+ * medida en sus TIFF. Es una autoverificación del ajuste, no una validación con
+ * datos independientes.
+ */
+export function verifyCalibrationPoints(calibration) {
+  validateCalibrationRecord(calibration)
+  const responseKey = calibration.responseBasis === RESPONSE_BASIS_INTENSITY ? 'response' : 'netOd'
+  const methods = ['multichannel', 'weighted-rgb', 'red', 'green', 'blue']
+  const points = (calibration.points || []).map((point) => {
+    const expectedGy = Number(point.doseGy)
+    const response = point.summary?.[responseKey]?.mean
+    if (!Array.isArray(response) || response.length !== 3) {
+      throw new Error(`El punto de ${expectedGy} Gy no conserva una respuesta RGB válida.`)
+    }
+    const estimatesGy = Object.fromEntries(methods.map((method) => [method, qcEstimate(response, calibration, method)]))
+    const deviationsGy = Object.fromEntries(methods.map((method) => [method, estimatesGy[method] - expectedGy]))
+    const deviationsPercent = Object.fromEntries(methods.map((method) => [
+      method,
+      expectedGy > 0 ? deviationsGy[method] / expectedGy * 100 : NaN
+    ]))
+    return { pointId: point.id, expectedGy, estimatesGy, deviationsGy, deviationsPercent }
+  })
+
+  const summary = Object.fromEntries(methods.map((method) => {
+    const errors = points.map((point) => point.deviationsGy[method]).filter(Number.isFinite)
+    const percentErrors = points.map((point) => point.deviationsPercent[method]).filter(Number.isFinite)
+    return [method, {
+      biasGy: errors.length ? errors.reduce((sum, value) => sum + value, 0) / errors.length : NaN,
+      rmseGy: errors.length ? Math.sqrt(errors.reduce((sum, value) => sum + value * value, 0) / errors.length) : NaN,
+      maximumAbsoluteGy: errors.length ? Math.max(...errors.map(Math.abs)) : NaN,
+      maximumAbsolutePercent: percentErrors.length ? Math.max(...percentErrors.map(Math.abs)) : NaN
+    }]
+  }))
+
+  return {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    source: 'calibration-images',
+    independent: false,
+    methods,
+    points,
+    summary
+  }
+}

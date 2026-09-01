@@ -6,7 +6,7 @@ import {
   invertCalibrationNetOd,
   RESPONSE_BASIS_INTENSITY
 } from '../src/utils/filmCalibration.js'
-import { analyzeFilmImage } from '../src/utils/filmAnalysis.js'
+import { analyzeFilmImage, verifyCalibrationPoints } from '../src/utils/filmAnalysis.js'
 import { parseFilmCalibration, serializeFilmCalibration } from '../src/utils/filmStorage.js'
 import { createFilmRtDose, RT_DOSE_STORAGE_UID } from '../src/utils/rtDoseWriter.js'
 
@@ -263,6 +263,16 @@ console.log('\nReconstrucción multicanal')
   check('no marca píxeles inválidos', result.invalid.every((value) => value === 0))
 }
 
+console.log('\nControl interno con las imágenes de calibración')
+{
+  const quality = verifyCalibrationPoints(calibration)
+  check('reconstruye todos los puntos originales', quality.points.length === calibration.points.length)
+  check('queda identificado como control no independiente', quality.source === 'calibration-images' && quality.independent === false)
+  check('incluye los cinco métodos de dosis', quality.methods.join() === 'multichannel,weighted-rgb,red,green,blue')
+  check('la reconstrucción por canales reproduce las dosis nominales', quality.points.every((point) => ['red', 'green', 'blue'].every((method) => Math.abs(point.deviationsGy[method]) < 0.03)))
+  check('calcula RMSE y desviaciones porcentuales', quality.methods.every((method) => Number.isFinite(quality.summary[method].rmseGy)) && quality.points.every((point) => Number.isFinite(point.deviationsPercent.multichannel)))
+}
+
 console.log('\nCalibración solo post por intensidad')
 {
   const { calibration: intensityCalibration } = makeIntensityCalibration()
@@ -289,6 +299,8 @@ console.log('\nCalibración solo post por intensidad')
 
   const restored = parseFilmCalibration(serializeFilmCalibration(intensityCalibration))
   check('exporta e importa la calibración solo post', restored.responseBasis === RESPONSE_BASIS_INTENSITY && restored.referenceRgb === null)
+  const quality = verifyCalibrationPoints(intensityCalibration)
+  check('el control interno funciona también sin TIFF pre', quality.points.length === intensityCalibration.points.length && quality.points.every((point) => Number.isFinite(point.estimatesGy.multichannel)))
 }
 
 function makeReferenceCt() {
