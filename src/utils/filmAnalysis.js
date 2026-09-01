@@ -2,6 +2,7 @@ import {
   calibrationNetOd,
   calibrationSlope,
   invertCalibrationNetOd,
+  RESPONSE_BASIS_INTENSITY,
   validateCalibrationRecord
 } from './filmCalibration.js'
 
@@ -82,11 +83,12 @@ function channelDose(netOd, channel, calibration) {
 function weightedDose(netOd, calibration) {
   let numerator = 0
   let denominator = 0
+  const sigmaResponse = calibration.sigmaResponse || calibration.sigmaNetOd
   for (let channel = 0; channel < 3; channel++) {
     const dose = channelDose(netOd, channel, calibration)
     if (!Number.isFinite(dose)) continue
     const slope = Math.abs(calibrationSlope(dose, calibration.fits[channel].params))
-    const sigma = Math.max(1e-8, calibration.sigmaNetOd[channel])
+    const sigma = Math.max(1e-8, sigmaResponse[channel])
     const weight = (slope * slope) / (sigma * sigma)
     if (!Number.isFinite(weight) || weight <= 0) continue
     numerator += dose * weight
@@ -162,7 +164,8 @@ function summarize(values, invalid) {
 export function analyzeFilmImage({ measurement, reference = null, calibration, method = 'multichannel', onProgress }) {
   validateCalibrationRecord(calibration)
   if (!measurement?.data || !measurement.width || !measurement.height) throw new Error('Imagen de medida no válida.')
-  if (reference?.data && (reference.width !== measurement.width || reference.height !== measurement.height)) {
+  const intensityBasis = calibration.responseBasis === RESPONSE_BASIS_INTENSITY
+  if (!intensityBasis && reference?.data && (reference.width !== measurement.width || reference.height !== measurement.height)) {
     throw new Error('La referencia sin irradiar no tiene las mismas dimensiones que la medida.')
   }
   if (!FILM_ANALYSIS_METHODS.some((entry) => entry.id === method)) throw new Error(`Método desconocido: ${method}.`)
@@ -175,38 +178,45 @@ export function analyzeFilmImage({ measurement, reference = null, calibration, m
   const saturated = new Uint8Array(pixels)
   const invalid = new Uint8Array(pixels)
   const range = calibration.doseRangeGy
-  const maximumNetOd = calibration.fits.map((fit) => calibrationNetOd(range[1], fit.params))
+  const sigmaResponse = calibration.sigmaResponse || calibration.sigmaNetOd
+  const responseBounds = calibration.fits.map((fit) => {
+    const first = calibrationNetOd(range[0], fit.params)
+    const last = calibrationNetOd(range[1], fit.params)
+    return [Math.min(first, last), Math.max(first, last)]
+  })
   const progressStep = Math.max(1, Math.floor(pixels / 100))
 
   for (let pixel = 0; pixel < pixels; pixel++) {
     const start = pixel * 3
     const measured = [measurement.data[start], measurement.data[start + 1], measurement.data[start + 2]]
-    const i0 = pixelReference(reference, calibration.referenceRgb, pixel)
-    if (measured.some((value) => value <= 1 || value >= 65534) || i0.some((value) => value <= 1 || value >= 65534)) {
+    const i0 = intensityBasis ? null : pixelReference(reference, calibration.referenceRgb, pixel)
+    if (measured.some((value) => value <= 1 || value >= 65534) || i0?.some((value) => value <= 1 || value >= 65534)) {
       saturated[pixel] = 1
     }
-    const netOd = measured.map((value, channel) => Math.log10(Math.max(1, i0[channel]) / Math.max(1, value)))
-    if (netOd.some((value) => !Number.isFinite(value))) {
+    const response = intensityBasis
+      ? measured.map((value) => value / 65535)
+      : measured.map((value, channel) => Math.log10(Math.max(1, i0[channel]) / Math.max(1, value)))
+    if (response.some((value) => !Number.isFinite(value))) {
       invalid[pixel] = 1
       dose[pixel] = NaN
       sigma[pixel] = NaN
       continue
     }
-    outOfRange[pixel] = netOd.some((value, channel) =>
-      value < -3 * calibration.sigmaNetOd[channel] ||
-      value > maximumNetOd[channel] + 3 * calibration.sigmaNetOd[channel]
+    outOfRange[pixel] = response.some((value, channel) =>
+      value < responseBounds[channel][0] - 3 * sigmaResponse[channel] ||
+      value > responseBounds[channel][1] + 3 * sigmaResponse[channel]
     ) ? 1 : 0
 
     let result
-    if (method === 'multichannel') result = multichannelDose(netOd, calibration)
-    else if (method === 'weighted-rgb') result = weightedDose(netOd, calibration)
+    if (method === 'multichannel') result = multichannelDose(response, calibration)
+    else if (method === 'weighted-rgb') result = weightedDose(response, calibration)
     else {
       const channel = method === 'red' ? 0 : method === 'green' ? 1 : 2
-      const value = channelDose(netOd, channel, calibration)
+      const value = channelDose(response, channel, calibration)
       const slope = Math.abs(calibrationSlope(value, calibration.fits[channel].params))
       result = {
         dose: value,
-        sigma: slope > 0 ? calibration.sigmaNetOd[channel] / slope : NaN,
+        sigma: slope > 0 ? sigmaResponse[channel] / slope : NaN,
         delta: 0
       }
     }
@@ -239,6 +249,7 @@ export function analyzeFilmImage({ measurement, reference = null, calibration, m
     calibrationId: calibration.id,
     calibrationName: calibration.name,
     calibrationVersion: calibration.algorithmVersion,
+    responseBasis: calibration.responseBasis || 'netod',
     createdAt: new Date().toISOString()
   }
 }

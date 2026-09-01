@@ -11,6 +11,7 @@ import {
 import { Line } from 'react-chartjs-2'
 import DoseCanvas from './DoseCanvas.jsx'
 import { FILM_ANALYSIS_METHODS } from '../../utils/filmAnalysis.js'
+import { RESPONSE_BASIS_INTENSITY } from '../../utils/filmCalibration.js'
 import { averageImages, readRgb16TiffFiles } from '../../utils/filmTiff.js'
 import { createFilmRtDose, inspectDoseReference, triggerDicomDownload } from '../../utils/rtDoseWriter.js'
 
@@ -99,11 +100,13 @@ export default function FilmAnalysis({ calibration }) {
   const [positionText, setPositionText] = useState('')
   const [orientationText, setOrientationText] = useState('')
   const [dicomError, setDicomError] = useState('')
+  const intensityBasis = calibration?.responseBasis === RESPONSE_BASIS_INTENSITY
 
   useEffect(() => () => workerRef.current?.terminate(), [])
   useEffect(() => {
     setResult(null)
     setError('')
+    setReferenceFiles([])
     setDicomName('')
     setDicomBuffer(null)
     setDicomSummary(null)
@@ -128,7 +131,7 @@ export default function FilmAnalysis({ calibration }) {
     workerRef.current?.terminate()
     try {
       const measurement = averageImages(await readRgb16TiffFiles(measurementFiles))
-      const reference = referenceFiles.length ? averageImages(await readRgb16TiffFiles(referenceFiles)) : null
+      const reference = !intensityBasis && referenceFiles.length ? averageImages(await readRgb16TiffFiles(referenceFiles)) : null
       const fallbackDpi = Number(calibration.metadata?.dpi)
       if (!measurement.pixelSpacingMm?.every(Number.isFinite) && fallbackDpi > 0) {
         measurement.pixelSpacingMm = [25.4 / fallbackDpi, 25.4 / fallbackDpi]
@@ -243,7 +246,7 @@ export default function FilmAnalysis({ calibration }) {
   return (
     <section className="film-section">
       <div className="film-section-heading">
-        <div><h2>Analizar película</h2><p>Calibración activa: <strong>{calibration.name}</strong> · rango 0–{calibration.doseRangeGy[1].toFixed(2)} Gy.</p></div>
+        <div><h2>Analizar película</h2><p>Calibración activa: <strong>{calibration.name}</strong> · rango {calibration.doseRangeGy[0].toFixed(2)}–{calibration.doseRangeGy[1].toFixed(2)} Gy · {intensityBasis ? 'intensidad RGB' : 'netOD'}.</p></div>
         <span className={`film-status ${calibration.validation?.valid ? 'ok' : 'warn'}`}>{calibration.validation?.valid ? 'Calibración verificada internamente' : 'Calibración con advertencias'}</span>
       </div>
 
@@ -254,12 +257,20 @@ export default function FilmAnalysis({ calibration }) {
           <span>{measurementFiles.length ? `${measurementFiles.length} escaneo(s): ${measurementFiles.map((file) => file.name).join(', ')}` : 'Carga una o varias repeticiones con idéntica posición; no se aplica registro automático.'}</span>
           <label className="film-button"><i className="bi bi-folder2-open" /> Seleccionar TIFF<input type="file" multiple accept=".tif,.tiff,image/tiff" onChange={(event) => { setMeasurementFiles(Array.from(event.target.files || [])); setResult(null) }} /></label>
         </div>
-        <div className="film-upload-card secondary">
-          <i className="bi bi-circle-half" />
-          <strong>Referencia sin irradiar</strong>
-          <span>{referenceFiles.length ? `${referenceFiles.length} escaneo(s): ${referenceFiles.map((file) => file.name).join(', ')}` : 'Opcional. Si se omite, se usa el I₀ medio guardado en la calibración.'}</span>
-          <label className="film-button secondary"><i className="bi bi-folder2-open" /> Seleccionar I₀<input type="file" multiple accept=".tif,.tiff,image/tiff" onChange={(event) => { setReferenceFiles(Array.from(event.target.files || [])); setResult(null) }} /></label>
-        </div>
+        {intensityBasis ? (
+          <div className="film-upload-card secondary">
+            <i className="bi bi-brightness-high" />
+            <strong>Análisis sin TIFF pre</strong>
+            <span>Esta calibración utiliza directamente I/65535. No necesita ni admite una referencia sin irradiar.</span>
+          </div>
+        ) : (
+          <div className="film-upload-card secondary">
+            <i className="bi bi-circle-half" />
+            <strong>Referencia sin irradiar</strong>
+            <span>{referenceFiles.length ? `${referenceFiles.length} escaneo(s): ${referenceFiles.map((file) => file.name).join(', ')}` : 'Opcional. Si se omite, se usa el I₀ medio guardado en la calibración.'}</span>
+            <label className="film-button secondary"><i className="bi bi-folder2-open" /> Seleccionar I₀<input type="file" multiple accept=".tif,.tiff,image/tiff" onChange={(event) => { setReferenceFiles(Array.from(event.target.files || [])); setResult(null) }} /></label>
+          </div>
+        )}
       </div>
 
       <div className="film-run-bar">

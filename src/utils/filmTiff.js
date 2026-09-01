@@ -227,47 +227,88 @@ export function rgbStats(interleaved) {
   return { mean, covariance, std: covariance.map((row, index) => Math.sqrt(Math.max(0, row[index]))), count }
 }
 
+function createRgbAccumulator() {
+  return {
+    count: 0,
+    mean: [0, 0, 0],
+    sumProducts: Array.from({ length: 3 }, () => [0, 0, 0])
+  }
+}
+
+function addRgbSample(accumulator, value0, value1, value2) {
+  accumulator.count++
+  const delta0 = value0 - accumulator.mean[0]
+  const delta1 = value1 - accumulator.mean[1]
+  const delta2 = value2 - accumulator.mean[2]
+  accumulator.mean[0] += delta0 / accumulator.count
+  accumulator.mean[1] += delta1 / accumulator.count
+  accumulator.mean[2] += delta2 / accumulator.count
+  const adjusted0 = value0 - accumulator.mean[0]
+  const adjusted1 = value1 - accumulator.mean[1]
+  const adjusted2 = value2 - accumulator.mean[2]
+  accumulator.sumProducts[0][0] += delta0 * adjusted0
+  accumulator.sumProducts[0][1] += delta0 * adjusted1
+  accumulator.sumProducts[0][2] += delta0 * adjusted2
+  accumulator.sumProducts[1][0] += delta1 * adjusted0
+  accumulator.sumProducts[1][1] += delta1 * adjusted1
+  accumulator.sumProducts[1][2] += delta1 * adjusted2
+  accumulator.sumProducts[2][0] += delta2 * adjusted0
+  accumulator.sumProducts[2][1] += delta2 * adjusted1
+  accumulator.sumProducts[2][2] += delta2 * adjusted2
+}
+
+function finishRgbAccumulator(accumulator) {
+  const divisor = Math.max(1, accumulator.count - 1)
+  const covariance = accumulator.sumProducts.map((row) => row.map((value) => value / divisor))
+  return {
+    mean: accumulator.mean,
+    covariance,
+    std: covariance.map((row, index) => Math.sqrt(Math.max(0, row[index]))),
+    count: accumulator.count
+  }
+}
+
+function normalizedRgbStats(stats) {
+  const scale = 65535
+  return {
+    mean: stats.mean.map((value) => value / scale),
+    covariance: stats.covariance.map((row) => row.map((value) => value / (scale * scale))),
+    std: stats.std.map((value) => value / scale),
+    count: stats.count
+  }
+}
+
+export function singleExposureRoi(images, roi) {
+  assertSameImageGeometry(images, 'escaneos de calibración')
+  const area = resolveRoi(images[0], roi)
+  const exposed = createRgbAccumulator()
+  const imageWeight = 1 / images.length
+
+  for (let row = 0; row < area.height; row++) {
+    for (let column = 0; column < area.width; column++) {
+      const index = ((area.y + row) * images[0].width + area.x + column) * 3
+      let value0 = 0
+      let value1 = 0
+      let value2 = 0
+      for (const image of images) {
+        value0 += image.data[index] * imageWeight
+        value1 += image.data[index + 1] * imageWeight
+        value2 += image.data[index + 2] * imageWeight
+      }
+      addRgbSample(exposed, value0, value1, value2)
+    }
+  }
+
+  const exposedStats = finishRgbAccumulator(exposed)
+  return { roi: area, exposed: exposedStats, response: normalizedRgbStats(exposedStats) }
+}
+
 export function pairedNetOdRoi(baselineImages, exposedImages, roi) {
   assertSameImageGeometry(baselineImages, 'escaneos pre')
   assertSameImageGeometry(exposedImages, 'escaneos post')
   assertSameImageGeometry([baselineImages[0], exposedImages[0]], 'imágenes pre/post')
   const area = resolveRoi(baselineImages[0], roi)
-  const accumulators = Array.from({ length: 3 }, () => ({
-    count: 0,
-    mean: [0, 0, 0],
-    sumProducts: Array.from({ length: 3 }, () => [0, 0, 0])
-  }))
-  const addSample = (accumulator, value0, value1, value2) => {
-    accumulator.count++
-    const delta0 = value0 - accumulator.mean[0]
-    const delta1 = value1 - accumulator.mean[1]
-    const delta2 = value2 - accumulator.mean[2]
-    accumulator.mean[0] += delta0 / accumulator.count
-    accumulator.mean[1] += delta1 / accumulator.count
-    accumulator.mean[2] += delta2 / accumulator.count
-    const adjusted0 = value0 - accumulator.mean[0]
-    const adjusted1 = value1 - accumulator.mean[1]
-    const adjusted2 = value2 - accumulator.mean[2]
-    accumulator.sumProducts[0][0] += delta0 * adjusted0
-    accumulator.sumProducts[0][1] += delta0 * adjusted1
-    accumulator.sumProducts[0][2] += delta0 * adjusted2
-    accumulator.sumProducts[1][0] += delta1 * adjusted0
-    accumulator.sumProducts[1][1] += delta1 * adjusted1
-    accumulator.sumProducts[1][2] += delta1 * adjusted2
-    accumulator.sumProducts[2][0] += delta2 * adjusted0
-    accumulator.sumProducts[2][1] += delta2 * adjusted1
-    accumulator.sumProducts[2][2] += delta2 * adjusted2
-  }
-  const finish = (accumulator) => {
-    const divisor = Math.max(1, accumulator.count - 1)
-    const covariance = accumulator.sumProducts.map((row) => row.map((value) => value / divisor))
-    return {
-      mean: accumulator.mean,
-      covariance,
-      std: covariance.map((row, index) => Math.sqrt(Math.max(0, row[index]))),
-      count: accumulator.count
-    }
-  }
+  const accumulators = Array.from({ length: 3 }, createRgbAccumulator)
 
   for (let row = 0; row < area.height; row++) {
     for (let column = 0; column < area.width; column++) {
@@ -288,9 +329,9 @@ export function pairedNetOdRoi(baselineImages, exposedImages, roi) {
         exposed1 += image.data[index + 1] / exposedImages.length
         exposed2 += image.data[index + 2] / exposedImages.length
       }
-      addSample(accumulators[0], baseline0, baseline1, baseline2)
-      addSample(accumulators[1], exposed0, exposed1, exposed2)
-      addSample(
+      addRgbSample(accumulators[0], baseline0, baseline1, baseline2)
+      addRgbSample(accumulators[1], exposed0, exposed1, exposed2)
+      addRgbSample(
         accumulators[2],
         Math.log10(Math.max(1, baseline0) / Math.max(1, exposed0)),
         Math.log10(Math.max(1, baseline1) / Math.max(1, exposed1)),
@@ -301,9 +342,9 @@ export function pairedNetOdRoi(baselineImages, exposedImages, roi) {
 
   return {
     roi: area,
-    baseline: finish(accumulators[0]),
-    exposed: finish(accumulators[1]),
-    netOd: finish(accumulators[2])
+    baseline: finishRgbAccumulator(accumulators[0]),
+    exposed: finishRgbAccumulator(accumulators[1]),
+    netOd: finishRgbAccumulator(accumulators[2])
   }
 }
 

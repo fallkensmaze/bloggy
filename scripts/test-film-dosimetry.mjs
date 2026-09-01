@@ -1,9 +1,10 @@
 import dcmjs from 'dcmjs'
-import { decodeRgb16Tiff, pairedNetOdRoi, resolveRoi, rgbStats } from '../src/utils/filmTiff.js'
+import { decodeRgb16Tiff, pairedNetOdRoi, resolveRoi, rgbStats, singleExposureRoi } from '../src/utils/filmTiff.js'
 import {
   buildFilmCalibration,
   calibrationNetOd,
-  invertCalibrationNetOd
+  invertCalibrationNetOd,
+  RESPONSE_BASIS_INTENSITY
 } from '../src/utils/filmCalibration.js'
 import { analyzeFilmImage } from '../src/utils/filmAnalysis.js'
 import { parseFilmCalibration, serializeFilmCalibration } from '../src/utils/filmStorage.js'
@@ -94,6 +95,35 @@ function makeCalibration() {
   return { calibration: buildFilmCalibration({ name: 'Sintética', points, roi: null }), truth }
 }
 
+function makeIntensityCalibration() {
+  const truth = [
+    { a: 0.3, b: 0.35, c: 2 },
+    { a: 0.6, b: 0.4, c: 3 },
+    { a: 0.9, b: 0.45, c: 4 }
+  ]
+  const points = [0.5, 1, 2, 3, 4, 5, 6, 7].map((doseGy, index) => {
+    const response = truth.map((params) => calibrationNetOd(doseGy, params))
+    return {
+      id: `intensity-${index}`,
+      doseGy,
+      summary: {
+        roi: { x: 0, y: 0, width: 10, height: 10 },
+        exposed: { mean: response.map((value) => value * 65535), count: 100 },
+        response: { mean: response, covariance: covariance(2e-6), count: 100 }
+      }
+    }
+  })
+  return {
+    calibration: buildFilmCalibration({
+      name: 'Sintética solo post',
+      metadata: { protocol: 'post-only', responseBasis: RESPONSE_BASIS_INTENSITY },
+      points,
+      roi: null
+    }),
+    truth
+  }
+}
+
 console.log('\nTIFF RGB de 16 bits')
 {
   const values = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200]
@@ -143,6 +173,20 @@ console.log('\nROI de calibración')
   )
   check('la acumulación incremental conserva medias', variedSummary.netOd.mean.every((value, channel) => near(value, expectedStats.mean[channel], 1e-12)))
   check('la acumulación incremental conserva covarianzas', variedSummary.netOd.covariance.every((row, r) => row.every((value, c) => near(value, expectedStats.covariance[r][c], 1e-12))))
+
+  const singleData = new Float32Array([
+    10000, 20000, 30000, 20000, 30000, 40000,
+    30000, 40000, 50000, 40000, 50000, 60000
+  ])
+  const singleSummary = singleExposureRoi([{ width: 2, height: 2, data: singleData, name: 'single.tif' }], null)
+  check('un único TIFF conserva el valor medio de su ROI', singleSummary.exposed.mean.every((value, channel) => near(value, [25000, 35000, 45000][channel], 1e-12)))
+  check('normaliza la respuesta única a 16 bits', singleSummary.response.mean.every((value, channel) => near(value, [25000, 35000, 45000][channel] / 65535, 1e-12)))
+
+  const repeatedSummary = singleExposureRoi([
+    { width: 2, height: 2, data: singleData, name: 'repeat-1.tif' },
+    { width: 2, height: 2, data: new Float32Array(singleData.map((value) => value + 2000)), name: 'repeat-2.tif' }
+  ], null)
+  check('varias repeticiones se promedian antes de resumir', repeatedSummary.exposed.mean.every((value, channel) => near(value, [26000, 36000, 46000][channel], 1e-12)))
 }
 
 console.log('\nCalibración racional RGB')
@@ -179,6 +223,34 @@ console.log('\nReconstrucción multicanal')
   check('recupera la dosis', near(result.statistics.meanGy, doseTruth, 0.03), String(result.statistics.meanGy))
   check('recupera la perturbación común', near(result.delta[0], perturbation, 0.002), String(result.delta[0]))
   check('no marca píxeles inválidos', result.invalid.every((value) => value === 0))
+}
+
+console.log('\nCalibración solo post por intensidad')
+{
+  const { calibration: intensityCalibration } = makeIntensityCalibration()
+  check('ajusta tres curvas decrecientes', intensityCalibration.fits.every((fit) => fit.monotonic && fit.direction === 'decreasing' && fit.params.a < fit.params.b * fit.params.c))
+  check('no guarda una referencia I₀ inexistente', intensityCalibration.referenceRgb === null)
+  check('el rango empieza en la menor dosis medida', near(intensityCalibration.doseRangeGy[0], 0.5, 1e-12) && near(intensityCalibration.doseRangeGy[1], 7, 1e-12))
+  check('R² alto en intensidad RGB', intensityCalibration.fits.every((fit) => fit.r2 > 0.999), intensityCalibration.fits.map((fit) => fit.r2.toFixed(6)).join(', '))
+
+  const doseTruth = 3.2
+  const data = new Float32Array(4 * 3)
+  for (let pixel = 0; pixel < 4; pixel++) {
+    for (let channel = 0; channel < 3; channel++) {
+      data[pixel * 3 + channel] = calibrationNetOd(doseTruth, intensityCalibration.fits[channel].params) * 65535
+    }
+  }
+  const result = analyzeFilmImage({
+    measurement: { width: 2, height: 2, data, pixelSpacingMm: [0.1, 0.1] },
+    calibration: intensityCalibration,
+    method: 'multichannel'
+  })
+  check('reconstruye dosis sin TIFF pre', near(result.statistics.meanGy, doseTruth, 0.04), String(result.statistics.meanGy))
+  check('identifica la base de intensidad', result.responseBasis === RESPONSE_BASIS_INTENSITY)
+  check('no marca píxeles inválidos en solo post', result.invalid.every((value) => value === 0))
+
+  const restored = parseFilmCalibration(serializeFilmCalibration(intensityCalibration))
+  check('exporta e importa la calibración solo post', restored.responseBasis === RESPONSE_BASIS_INTENSITY && restored.referenceRgb === null)
 }
 
 function makeReferenceCt() {

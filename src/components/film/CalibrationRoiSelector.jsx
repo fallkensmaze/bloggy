@@ -11,7 +11,7 @@ function percentage(value) {
   return Math.round(value * 1000) / 10
 }
 
-export default function CalibrationRoiSelector({ file, enabled, roi, onEnabledChange, onChange }) {
+export default function CalibrationRoiSelector({ file, enabled, roi, previewRole = 'pre', onEnabledChange, onChange }) {
   const canvasRef = useRef(null)
   const dragRef = useRef(null)
   const [preview, setPreview] = useState(null)
@@ -135,12 +135,12 @@ export default function CalibrationRoiSelector({ file, enabled, roi, onEnabledCh
       {!enabled ? (
         <div className="film-roi-full">
           <i className="bi bi-arrows-fullscreen" />
-          <div><strong>Se utilizará la imagen completa</strong><span>Todos los píxeles de cada pareja pre/post entrarán en el cálculo.</span></div>
+          <div><strong>Se utilizará la imagen completa</strong><span>Todos los píxeles de cada conjunto de imágenes entrarán en el cálculo.</span></div>
         </div>
       ) : !file ? (
         <div className="film-roi-empty">
           <i className="bi bi-file-earmark-image" />
-          <div><strong>Selecciona primero un TIFF pre</strong><span>La primera imagen previa disponible se usará únicamente como previsualización para dibujar la ROI.</span></div>
+          <div><strong>Selecciona primero {previewRole === 'pre' ? 'un TIFF pre' : 'un TIFF'}</strong><span>La primera imagen disponible se usará únicamente como previsualización para dibujar la ROI.</span></div>
         </div>
       ) : busy ? (
         <div className="film-roi-empty"><i className="bi bi-arrow-repeat spin" /><span>Preparando previsualización…</span></div>
@@ -171,7 +171,7 @@ export default function CalibrationRoiSelector({ file, enabled, roi, onEnabledCh
               }}
             ><span>ROI</span></div>
           </div>
-          <span className="film-roi-help">Arrastra sobre la previsualización o ajusta las coordenadas. La misma zona relativa se aplica a todos los TIFF pre/post. El contraste automático solo afecta a la previsualización.</span>
+          <span className="film-roi-help">Arrastra sobre la previsualización o ajusta las coordenadas. La misma zona relativa se aplica a todos los TIFF de la calibración. El contraste automático solo afecta a la previsualización.</span>
         </>
       ) : null}
 
