@@ -170,6 +170,18 @@ export function resolveRoi(image, roi = null) {
   return { x, y, width, height, centerX, centerY, fullImage: false }
 }
 
+export function copyCalibrationRoiToPost(roi, sourceIndex, sourceCount, targetCount, currentRois = []) {
+  if (!roi || targetCount <= 0) return Array.from({ length: Math.max(0, targetCount) }, (_, index) => currentRois[index] || null)
+  const clone = () => ({ ...roi })
+  const next = Array.from({ length: targetCount }, (_, index) => currentRois[index] || null)
+  if (sourceCount === targetCount && sourceIndex >= 0 && sourceIndex < targetCount) {
+    next[sourceIndex] = clone()
+  } else {
+    for (let index = 0; index < targetCount; index++) next[index] = clone()
+  }
+  return next
+}
+
 export function averageImages(images) {
   const { width, height } = assertSameImageGeometry(images)
   const output = new Float32Array(width * height * 3)

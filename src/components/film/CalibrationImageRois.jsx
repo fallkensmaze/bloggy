@@ -3,7 +3,7 @@ import CalibrationRoiSelector from './CalibrationRoiSelector.jsx'
 
 const DEFAULT_ROI = { mode: 'relative', x: 0.25, y: 0.25, width: 0.5, height: 0.5 }
 
-export default function CalibrationImageRois({ label, files, rois, onChange }) {
+export default function CalibrationImageRois({ label, files, rois, onChange, copyLabel = '', onCopy }) {
   const [activeIndex, setActiveIndex] = useState(0)
 
   useEffect(() => {
@@ -51,6 +51,11 @@ export default function CalibrationImageRois({ label, files, rois, onChange }) {
         onEnabledChange={(enabled) => updateRoi(enabled ? { ...DEFAULT_ROI } : null)}
         onChange={updateRoi}
       />
+      {onCopy && (
+        <button type="button" className="film-button secondary film-copy-roi" disabled={!activeRoi} onClick={() => onCopy(activeRoi, activeIndex)}>
+          <i className="bi bi-arrow-down-square" /> {copyLabel}
+        </button>
+      )}
     </div>
   )
 }

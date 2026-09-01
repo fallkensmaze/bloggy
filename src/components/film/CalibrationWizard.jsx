@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useRef, useState } from 'react'
 import { buildFilmCalibration, RESPONSE_BASIS_INTENSITY, RESPONSE_BASIS_NET_OD } from '../../utils/filmCalibration.js'
 import { verifyCalibrationPoints } from '../../utils/filmAnalysis.js'
-import { pairedNetOdRoi, readRgb16TiffFiles, singleExposureRoi } from '../../utils/filmTiff.js'
+import { copyCalibrationRoiToPost, pairedNetOdRoi, readRgb16TiffFiles, singleExposureRoi } from '../../utils/filmTiff.js'
 import CalibrationImageRois from './CalibrationImageRois.jsx'
 import CalibrationFitChart from './CalibrationFitChart.jsx'
 import CalibrationQualityControl from './CalibrationQualityControl.jsx'
@@ -56,6 +56,23 @@ export default function CalibrationWizard({ onCancel, onSave }) {
     roiRevision.current++
     setCandidateCalibration(null)
     updateRow(rowId, { [`${role}Rois`]: rois, summary: null, error: '' })
+  }
+
+  const copyPreRoiToPost = (rowId, roi, sourceIndex) => {
+    roiRevision.current++
+    setCandidateCalibration(null)
+    setRows((current) => current.map((row) => row.id === rowId ? {
+      ...row,
+      exposedRois: copyCalibrationRoiToPost(
+        roi,
+        sourceIndex,
+        row.baselineFiles.length,
+        row.exposedFiles.length,
+        row.exposedRois
+      ),
+      summary: null,
+      error: ''
+    } : row))
   }
 
   const changeProtocol = (nextProtocol) => {
@@ -241,7 +258,14 @@ export default function CalibrationWizard({ onCancel, onSave }) {
                   <tr className="film-roi-row">
                     <td colSpan={pairedProtocol ? 5 : 4}>
                       <div className="film-row-rois">
-                        {pairedProtocol && <CalibrationImageRois label="TIFF pre" files={row.baselineFiles} rois={row.baselineRois} onChange={(next) => updateImageRois(row.id, 'baseline', next)} />}
+                        {pairedProtocol && <CalibrationImageRois
+                          label="TIFF pre / velo"
+                          files={row.baselineFiles}
+                          rois={row.baselineRois}
+                          onChange={(next) => updateImageRois(row.id, 'baseline', next)}
+                          copyLabel={row.baselineFiles.length === row.exposedFiles.length ? 'Copiar ROI al TIFF post correspondiente' : 'Copiar ROI a todos los TIFF post'}
+                          onCopy={row.exposedFiles.length ? (roi, index) => copyPreRoiToPost(row.id, roi, index) : null}
+                        />}
                         <CalibrationImageRois label={pairedProtocol ? 'TIFF post' : 'TIFF'} files={row.exposedFiles} rois={row.exposedRois} onChange={(next) => updateImageRois(row.id, 'exposed', next)} />
                       </div>
                     </td>

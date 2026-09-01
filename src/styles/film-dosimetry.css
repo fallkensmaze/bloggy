@@ -264,6 +264,7 @@
 .film-image-roi-tabs button.active { border-color: rgba(136, 192, 208, .65); background: rgba(136, 192, 208, .12); color: var(--text-primary); }
 .film-image-roi-tabs button span { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .film-image-roi-tabs button small { color: var(--accent-blue); font-size: 8px; text-transform: uppercase; }
+.film-copy-roi { width: fit-content; justify-self: start; }
 .film-calibration-qc { border-color: rgba(163, 190, 140, .35); }
 .film-qc-table th, .film-qc-table td { white-space: nowrap; }
 .film-qc-table td { vertical-align: middle; }
