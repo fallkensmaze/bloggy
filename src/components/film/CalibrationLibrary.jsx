@@ -76,7 +76,9 @@ export default function CalibrationLibrary({ calibrations, activeId, onUse, onDe
                 <dl className="film-calibration-meta">
                   <div><dt>Rango</dt><dd>0–{(calibration.doseRangeGy?.[1] || 0).toFixed(2)} Gy</dd></div>
                   <div><dt>Puntos</dt><dd>{calibration.points?.length || 0}</dd></div>
+                  <div><dt>Zona</dt><dd>{calibration.roi ? 'ROI seleccionada' : 'Imagen completa'}</dd></div>
                   <div><dt>Escáner</dt><dd>{calibration.metadata?.scanner || '—'}</dd></div>
+                  <div><dt>Resolución</dt><dd>{calibration.metadata?.dpi ? `${calibration.metadata.dpi} dpi` : '—'}</dd></div>
                   <div><dt>Actualizada</dt><dd>{dateLabel(calibration.updatedAt)}</dd></div>
                 </dl>
                 <div className="film-fit-mini">

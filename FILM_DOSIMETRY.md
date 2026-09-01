@@ -8,7 +8,7 @@ La calibración usa un protocolo pareado pre/post. Para cada punto de dosis se s
 
 1. Preparar al menos cuatro dosis positivas distintas. La interfaz propone 50–700 cGy y añade automáticamente el anclaje 0 Gy, netOD 0.
 2. Mantener constantes el lote de película, el escáner, la orientación, la resolución, el calentamiento del equipo y el intervalo postirradiación.
-3. Seleccionar una ROI común alejada de bordes, marcas y artefactos.
+3. Elegir la zona de cálculo. Por defecto se utiliza la imagen completa. Opcionalmente se puede activar **Seleccionar ROI** y dibujar un rectángulo sobre la previsualización del primer TIFF previo disponible; las coordenadas relativas de esa ROI se aplican por igual a todos los TIFF pre/post. Conviene evitar bordes, marcas y artefactos.
 4. Procesar cada pareja pre/post. Las repeticiones se promedian antes de calcular, píxel a píxel,
 
    `netOD = log10(I0 / I)`.
@@ -65,7 +65,7 @@ npm run test:film
 npm run build:web
 ```
 
-Las pruebas generan un TIFF RGB de 16 bits, una calibración sintética, un mapa con perturbación común conocida y un RT Dose que se vuelve a leer para comprobar geometría, escala y referencias.
+Las pruebas generan un TIFF RGB de 16 bits, verifican el cálculo con imagen completa y con ROI, ajustan una calibración sintética, reconstruyen un mapa con perturbación común conocida y vuelven a leer un RT Dose para comprobar geometría, escala y referencias.
 
 ## Límites actuales
 

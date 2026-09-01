@@ -1,5 +1,5 @@
 import dcmjs from 'dcmjs'
-import { decodeRgb16Tiff } from '../src/utils/filmTiff.js'
+import { decodeRgb16Tiff, pairedNetOdRoi, resolveRoi, rgbStats } from '../src/utils/filmTiff.js'
 import {
   buildFilmCalibration,
   calibrationNetOd,
@@ -91,7 +91,7 @@ function makeCalibration() {
       }
     }
   }))
-  return { calibration: buildFilmCalibration({ name: 'Sintética', points, roi: points[0].summary.roi }), truth }
+  return { calibration: buildFilmCalibration({ name: 'Sintética', points, roi: null }), truth }
 }
 
 console.log('\nTIFF RGB de 16 bits')
@@ -101,6 +101,48 @@ console.log('\nTIFF RGB de 16 bits')
   check('decodifica dimensiones', image.width === 2 && image.height === 2)
   check('conserva Uint16 RGB', image.data instanceof Uint16Array && image.data.length === 12)
   check('conserva los valores', image.data.every((value, index) => value === values[index]))
+}
+
+console.log('\nROI de calibración')
+{
+  const geometry = { width: 100, height: 80 }
+  const full = resolveRoi(geometry, null)
+  check('sin ROI selecciona la imagen completa', full.x === 0 && full.y === 0 && full.width === 100 && full.height === 80 && full.fullImage)
+
+  const relative = resolveRoi(geometry, { mode: 'relative', x: 0.2, y: 0.25, width: 0.5, height: 0.5 })
+  check('convierte la ROI relativa a píxeles', relative.x === 20 && relative.y === 20 && relative.width === 50 && relative.height === 40 && !relative.fullImage)
+
+  const legacy = resolveRoi(geometry, { centerX: 0.5, centerY: 0.5, widthPx: 35, heightPx: 25 })
+  check('mantiene compatibilidad con la ROI anterior', legacy.width === 35 && legacy.height === 25 && !legacy.fullImage)
+
+  const baselineData = new Float32Array(4 * 2 * 3).fill(1000)
+  const exposedData = new Float32Array(4 * 2 * 3).fill(500)
+  const baseline = [{ width: 4, height: 2, data: baselineData, name: 'pre.tif' }]
+  const exposed = [{ width: 4, height: 2, data: exposedData, name: 'post.tif' }]
+  const fullSummary = pairedNetOdRoi(baseline, exposed, null)
+  const roiSummary = pairedNetOdRoi(baseline, exposed, { mode: 'relative', x: 0.5, y: 0, width: 0.5, height: 1 })
+  check('el cálculo completo usa todos los píxeles', fullSummary.netOd.count === 8 && fullSummary.roi.fullImage)
+  check('el cálculo con ROI usa solo la zona elegida', roiSummary.netOd.count === 4 && roiSummary.roi.x === 2 && !roiSummary.roi.fullImage)
+  check('ambos modos conservan netOD píxel a píxel', near(fullSummary.netOd.mean[0], Math.log10(2), 1e-12) && near(roiSummary.netOd.mean[0], Math.log10(2), 1e-12))
+
+  const variedBaseline = new Float32Array([
+    1000, 1500, 2000, 1200, 1600, 2200,
+    1400, 1800, 2400, 1700, 2100, 2700
+  ])
+  const variedExposed = new Float32Array([
+    800, 1000, 1200, 900, 1100, 1300,
+    950, 1200, 1500, 1000, 1300, 1600
+  ])
+  const expectedNetOd = new Float64Array(variedBaseline.length)
+  for (let index = 0; index < expectedNetOd.length; index++) expectedNetOd[index] = Math.log10(variedBaseline[index] / variedExposed[index])
+  const expectedStats = rgbStats(expectedNetOd)
+  const variedSummary = pairedNetOdRoi(
+    [{ width: 2, height: 2, data: variedBaseline, name: 'pre-varied.tif' }],
+    [{ width: 2, height: 2, data: variedExposed, name: 'post-varied.tif' }],
+    null
+  )
+  check('la acumulación incremental conserva medias', variedSummary.netOd.mean.every((value, channel) => near(value, expectedStats.mean[channel], 1e-12)))
+  check('la acumulación incremental conserva covarianzas', variedSummary.netOd.covariance.every((row, r) => row.every((value, c) => near(value, expectedStats.covariance[r][c], 1e-12))))
 }
 
 console.log('\nCalibración racional RGB')
@@ -114,7 +156,7 @@ const { calibration, truth } = makeCalibration()
     check(`inversión canal ${channel}`, near(recovered, 3.5, 0.03), String(recovered))
   }
   const restored = parseFilmCalibration(serializeFilmCalibration(calibration))
-  check('exportación/importación conserva identidad', restored.id === calibration.id)
+  check('exportación/importación conserva identidad y zona completa', restored.id === calibration.id && restored.roi === null)
 }
 
 console.log('\nReconstrucción multicanal')

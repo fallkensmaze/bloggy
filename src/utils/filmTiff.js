@@ -133,14 +133,41 @@ export function assertSameImageGeometry(images, label = 'escaneos') {
   return { width: first.width, height: first.height }
 }
 
-export function resolveRoi(image, roi = {}) {
+export function resolveRoi(image, roi = null) {
+  if (!roi || roi.enabled === false || roi.mode === 'full-image' || !Object.keys(roi).length) {
+    return { x: 0, y: 0, width: image.width, height: image.height, fullImage: true }
+  }
+
+  if (roi.mode === 'relative') {
+    const relativeX = Math.min(1, Math.max(0, Number(roi.x) || 0))
+    const relativeY = Math.min(1, Math.max(0, Number(roi.y) || 0))
+    const requestedWidth = Number.isFinite(Number(roi.width)) ? Number(roi.width) : 0.5
+    const requestedHeight = Number.isFinite(Number(roi.height)) ? Number(roi.height) : 0.5
+    const relativeWidth = Math.min(1 - relativeX, Math.max(0, requestedWidth))
+    const relativeHeight = Math.min(1 - relativeY, Math.max(0, requestedHeight))
+    const x = Math.min(image.width - 1, Math.floor(relativeX * image.width))
+    const y = Math.min(image.height - 1, Math.floor(relativeY * image.height))
+    const right = Math.max(x + 1, Math.min(image.width, Math.ceil((relativeX + relativeWidth) * image.width)))
+    const bottom = Math.max(y + 1, Math.min(image.height, Math.ceil((relativeY + relativeHeight) * image.height)))
+    return { x, y, width: right - x, height: bottom - y, fullImage: false }
+  }
+
+  if (roi.mode === 'pixels' || ['x', 'y', 'width', 'height'].every((key) => Number.isFinite(Number(roi[key])))) {
+    const x = Math.max(0, Math.min(image.width - 1, Math.round(Number(roi.x))))
+    const y = Math.max(0, Math.min(image.height - 1, Math.round(Number(roi.y))))
+    const width = Math.max(1, Math.min(image.width - x, Math.round(Number(roi.width))))
+    const height = Math.max(1, Math.min(image.height - y, Math.round(Number(roi.height))))
+    return { x, y, width, height, fullImage: false }
+  }
+
+  // Compatibilidad con calibraciones creadas antes del selector visual.
   const width = Math.max(1, Math.min(image.width, Math.round(Number(roi.widthPx) || 35)))
   const height = Math.max(1, Math.min(image.height, Math.round(Number(roi.heightPx) || width)))
   const centerX = Math.min(1, Math.max(0, Number(roi.centerX ?? 0.5)))
   const centerY = Math.min(1, Math.max(0, Number(roi.centerY ?? 0.5)))
   const x = Math.max(0, Math.min(image.width - width, Math.round(centerX * (image.width - 1) - width / 2)))
   const y = Math.max(0, Math.min(image.height - height, Math.round(centerY * (image.height - 1) - height / 2)))
-  return { x, y, width, height, centerX, centerY }
+  return { x, y, width, height, centerX, centerY, fullImage: false }
 }
 
 export function averageImages(images) {
@@ -201,24 +228,82 @@ export function rgbStats(interleaved) {
 }
 
 export function pairedNetOdRoi(baselineImages, exposedImages, roi) {
-  const baseline = averageImages(baselineImages)
-  const exposed = averageImages(exposedImages)
-  assertSameImageGeometry([baseline, exposed], 'imágenes pre/post')
-  const baseRoi = extractRoiRgb(baseline, roi)
-  const exposedRoi = extractRoiRgb(exposed, roi)
-  const netOd = new Float64Array(baseRoi.data.length)
+  assertSameImageGeometry(baselineImages, 'escaneos pre')
+  assertSameImageGeometry(exposedImages, 'escaneos post')
+  assertSameImageGeometry([baselineImages[0], exposedImages[0]], 'imágenes pre/post')
+  const area = resolveRoi(baselineImages[0], roi)
+  const accumulators = Array.from({ length: 3 }, () => ({
+    count: 0,
+    mean: [0, 0, 0],
+    sumProducts: Array.from({ length: 3 }, () => [0, 0, 0])
+  }))
+  const addSample = (accumulator, value0, value1, value2) => {
+    accumulator.count++
+    const delta0 = value0 - accumulator.mean[0]
+    const delta1 = value1 - accumulator.mean[1]
+    const delta2 = value2 - accumulator.mean[2]
+    accumulator.mean[0] += delta0 / accumulator.count
+    accumulator.mean[1] += delta1 / accumulator.count
+    accumulator.mean[2] += delta2 / accumulator.count
+    const adjusted0 = value0 - accumulator.mean[0]
+    const adjusted1 = value1 - accumulator.mean[1]
+    const adjusted2 = value2 - accumulator.mean[2]
+    accumulator.sumProducts[0][0] += delta0 * adjusted0
+    accumulator.sumProducts[0][1] += delta0 * adjusted1
+    accumulator.sumProducts[0][2] += delta0 * adjusted2
+    accumulator.sumProducts[1][0] += delta1 * adjusted0
+    accumulator.sumProducts[1][1] += delta1 * adjusted1
+    accumulator.sumProducts[1][2] += delta1 * adjusted2
+    accumulator.sumProducts[2][0] += delta2 * adjusted0
+    accumulator.sumProducts[2][1] += delta2 * adjusted1
+    accumulator.sumProducts[2][2] += delta2 * adjusted2
+  }
+  const finish = (accumulator) => {
+    const divisor = Math.max(1, accumulator.count - 1)
+    const covariance = accumulator.sumProducts.map((row) => row.map((value) => value / divisor))
+    return {
+      mean: accumulator.mean,
+      covariance,
+      std: covariance.map((row, index) => Math.sqrt(Math.max(0, row[index]))),
+      count: accumulator.count
+    }
+  }
 
-  for (let index = 0; index < netOd.length; index++) {
-    const i0 = Math.max(1, baseRoi.data[index])
-    const value = Math.max(1, exposedRoi.data[index])
-    netOd[index] = Math.log10(i0 / value)
+  for (let row = 0; row < area.height; row++) {
+    for (let column = 0; column < area.width; column++) {
+      const index = ((area.y + row) * baselineImages[0].width + area.x + column) * 3
+      let baseline0 = 0
+      let baseline1 = 0
+      let baseline2 = 0
+      let exposed0 = 0
+      let exposed1 = 0
+      let exposed2 = 0
+      for (const image of baselineImages) {
+        baseline0 += image.data[index] / baselineImages.length
+        baseline1 += image.data[index + 1] / baselineImages.length
+        baseline2 += image.data[index + 2] / baselineImages.length
+      }
+      for (const image of exposedImages) {
+        exposed0 += image.data[index] / exposedImages.length
+        exposed1 += image.data[index + 1] / exposedImages.length
+        exposed2 += image.data[index + 2] / exposedImages.length
+      }
+      addSample(accumulators[0], baseline0, baseline1, baseline2)
+      addSample(accumulators[1], exposed0, exposed1, exposed2)
+      addSample(
+        accumulators[2],
+        Math.log10(Math.max(1, baseline0) / Math.max(1, exposed0)),
+        Math.log10(Math.max(1, baseline1) / Math.max(1, exposed1)),
+        Math.log10(Math.max(1, baseline2) / Math.max(1, exposed2))
+      )
+    }
   }
 
   return {
-    roi: baseRoi.roi,
-    baseline: rgbStats(baseRoi.data),
-    exposed: rgbStats(exposedRoi.data),
-    netOd: rgbStats(netOd)
+    roi: area,
+    baseline: finish(accumulators[0]),
+    exposed: finish(accumulators[1]),
+    netOd: finish(accumulators[2])
   }
 }
 
@@ -236,4 +321,57 @@ export function makeRgbPreview(image, { lower = 0, upper = 65535 } = {}) {
     rgba[target + 3] = 255
   }
   return rgba
+}
+
+export function makeRgbPreviewImage(image, { maxDimension = 900, lowerPercentile = 0.01, upperPercentile = 0.99 } = {}) {
+  const maximum = Math.max(image.width, image.height)
+  const scale = Math.min(1, Math.max(1, Number(maxDimension) || 900) / maximum)
+  const width = Math.max(1, Math.round(image.width * scale))
+  const height = Math.max(1, Math.round(image.height * scale))
+  const histograms = Array.from({ length: 3 }, () => new Uint32Array(4096))
+  const pixelCount = image.width * image.height
+  const sampleStride = Math.max(1, Math.ceil(pixelCount / 250000))
+  let samples = 0
+
+  for (let pixel = 0; pixel < pixelCount; pixel += sampleStride) {
+    const source = pixel * 3
+    for (let channel = 0; channel < 3; channel++) histograms[channel][image.data[source + channel] >> 4]++
+    samples++
+  }
+
+  const percentileBin = (histogram, percentile) => {
+    const target = Math.max(0, Math.min(samples - 1, Math.floor(samples * percentile)))
+    let cumulative = 0
+    for (let bin = 0; bin < histogram.length; bin++) {
+      cumulative += histogram[bin]
+      if (cumulative > target) return bin
+    }
+    return histogram.length - 1
+  }
+  const lower = histograms.map((histogram) => percentileBin(histogram, lowerPercentile) * 16)
+  const upper = histograms.map((histogram) => Math.max(1, percentileBin(histogram, upperPercentile) * 16 + 15))
+  const rgba = new Uint8ClampedArray(width * height * 4)
+
+  for (let targetY = 0; targetY < height; targetY++) {
+    const sourceY = Math.min(image.height - 1, Math.floor(targetY * image.height / height))
+    for (let targetX = 0; targetX < width; targetX++) {
+      const sourceX = Math.min(image.width - 1, Math.floor(targetX * image.width / width))
+      const source = (sourceY * image.width + sourceX) * 3
+      const target = (targetY * width + targetX) * 4
+      for (let channel = 0; channel < 3; channel++) {
+        const range = Math.max(1, upper[channel] - lower[channel])
+        rgba[target + channel] = Math.max(0, Math.min(255, Math.round((image.data[source + channel] - lower[channel]) / range * 255)))
+      }
+      rgba[target + 3] = 255
+    }
+  }
+
+  return {
+    width,
+    height,
+    rgba,
+    sourceWidth: image.width,
+    sourceHeight: image.height,
+    window: { lower, upper }
+  }
 }
