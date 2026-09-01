@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { buildFilmCalibration } from '../../utils/filmCalibration.js'
 import { pairedNetOdRoi, readRgb16TiffFiles } from '../../utils/filmTiff.js'
+import CalibrationRoiSelector from './CalibrationRoiSelector.jsx'
 
 const DEFAULT_DOSES_CGY = [50, 100, 200, 300, 400, 500, 600, 700]
 
@@ -25,20 +26,32 @@ export default function CalibrationWizard({ onCancel, onSave }) {
   const [orientation, setOrientation] = useState('Retrato, misma dirección')
   const [delayHours, setDelayHours] = useState('24')
   const [doseUnit, setDoseUnit] = useState('cGy')
-  const [roi, setRoi] = useState({ centerX: 0.5, centerY: 0.5, widthPx: 35, heightPx: 35 })
+  const [roiEnabled, setRoiEnabled] = useState(false)
+  const [roi, setRoi] = useState({ mode: 'relative', x: 0.25, y: 0.25, width: 0.5, height: 0.5 })
   const [rows, setRows] = useState(DEFAULT_DOSES_CGY.map(newRow))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const roiRevision = useRef(0)
 
   const processedCount = rows.filter((row) => row.summary).length
   const canSave = useMemo(() => processedCount >= 4 && !rows.some((row) => row.busy), [processedCount, rows])
+  const previewFile = rows.find((row) => row.baselineFiles.length)?.baselineFiles[0] || null
+  const activeRoi = roiEnabled ? roi : null
 
   const updateRow = (id, patch) => setRows((current) => current.map((row) =>
     row.id === id ? { ...row, ...patch } : row
   ))
 
   const updateRoi = (patch) => {
+    roiRevision.current++
     setRoi((current) => ({ ...current, ...patch }))
+    setRows((current) => current.map((row) => ({ ...row, summary: null, error: '' })))
+  }
+
+  const changeRoiMode = (enabled) => {
+    if (enabled === roiEnabled) return
+    roiRevision.current++
+    setRoiEnabled(enabled)
     setRows((current) => current.map((row) => ({ ...row, summary: null, error: '' })))
   }
 
@@ -47,13 +60,19 @@ export default function CalibrationWizard({ onCancel, onSave }) {
       updateRow(row.id, { error: 'Selecciona TIFF pre y post.', summary: null })
       return null
     }
+    const processingRevision = roiRevision.current
+    const processingRoi = activeRoi ? { ...activeRoi } : null
     updateRow(row.id, { busy: true, error: '' })
     try {
       const [baseline, exposed] = await Promise.all([
         readRgb16TiffFiles(row.baselineFiles),
         readRgb16TiffFiles(row.exposedFiles)
       ])
-      const summary = pairedNetOdRoi(baseline, exposed, roi)
+      const summary = pairedNetOdRoi(baseline, exposed, processingRoi)
+      if (processingRevision !== roiRevision.current) {
+        updateRow(row.id, { busy: false, summary: null, error: 'La zona cambió durante el cálculo; vuelve a procesar este punto.' })
+        return null
+      }
       updateRow(row.id, { busy: false, summary, error: '' })
       return summary
     } catch (exception) {
@@ -89,9 +108,9 @@ export default function CalibrationWizard({ onCancel, onSave }) {
           delayHours: Number(delayHours),
           inputDoseUnit: doseUnit,
           protocol: 'matched-pre-post',
-          processing: 'pixelwise-netod-roi'
+          processing: roiEnabled ? 'pixelwise-netod-roi' : 'pixelwise-netod-full-image'
         },
-        roi,
+        roi: activeRoi,
         points: rows.filter((row) => row.summary).map((row) => ({
           id: row.id,
           doseGy: Number(row.dose) * (doseUnit === 'cGy' ? 0.01 : 1),
@@ -133,14 +152,15 @@ export default function CalibrationWizard({ onCancel, onSave }) {
 
       <div className="film-subsection">
         <div className="film-subsection-title">
-          <div><strong>ROI común</strong><span>Al cambiarla se deben reprocesar los puntos.</span></div>
+          <div><strong>Zona de calibración</strong><span>La ROI es opcional. Si no se selecciona, se procesa la imagen completa.</span></div>
         </div>
-        <div className="film-roi-controls">
-          <label><span>Centro X</span><input type="number" min="0" max="100" step="1" value={Math.round(roi.centerX * 100)} onChange={(event) => updateRoi({ centerX: Number(event.target.value) / 100 })} /><small>%</small></label>
-          <label><span>Centro Y</span><input type="number" min="0" max="100" step="1" value={Math.round(roi.centerY * 100)} onChange={(event) => updateRoi({ centerY: Number(event.target.value) / 100 })} /><small>%</small></label>
-          <label><span>Ancho</span><input type="number" min="3" step="2" value={roi.widthPx} onChange={(event) => updateRoi({ widthPx: Number(event.target.value) })} /><small>px</small></label>
-          <label><span>Alto</span><input type="number" min="3" step="2" value={roi.heightPx} onChange={(event) => updateRoi({ heightPx: Number(event.target.value) })} /><small>px</small></label>
-        </div>
+        <CalibrationRoiSelector
+          file={previewFile}
+          enabled={roiEnabled}
+          roi={roi}
+          onEnabledChange={changeRoiMode}
+          onChange={updateRoi}
+        />
       </div>
 
       <div className="film-subsection">
