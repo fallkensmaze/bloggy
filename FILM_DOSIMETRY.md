@@ -4,23 +4,26 @@ El módulo disponible en `/dosimetria-pelicula` procesa las imágenes íntegrame
 
 ## Protocolo de calibración
 
-La calibración usa un protocolo pareado pre/post. Para cada punto de dosis se seleccionan uno o varios escaneos de la misma película antes de irradiarla y el mismo número o conjunto de repeticiones después de irradiarla. Todos deben mantener posición, orientación, resolución y dimensiones; el módulo no realiza registro automático.
+La calibración ofrece dos protocolos excluyentes. La selección se aplica a todos los puntos: no se pueden mezclar dosis con y sin TIFF pre.
 
-1. Preparar al menos cuatro dosis positivas distintas. La interfaz propone 50–700 cGy y añade automáticamente el anclaje 0 Gy, netOD 0.
+- **TIFF pre y post:** cada dosis utiliza escaneos de la misma película antes y después de irradiarla. La respuesta es `netOD = log10(Ipre / Ipost)`.
+- **Solo TIFF post:** no utiliza un TIFF pre, una película de velo ni una referencia común. La respuesta es la intensidad media de la ROI normalizada a 16 bits, `I / 65535`. Si el punto contiene una sola imagen se usa directamente su valor; si contiene varias repeticiones se promedian píxel a píxel.
+
+Todos los archivos de una calibración deben mantener posición, orientación, resolución y dimensiones; el módulo no realiza registro automático.
+
+1. Preparar al menos cuatro dosis positivas distintas. La interfaz propone 50–700 cGy. El protocolo pre/post añade automáticamente el anclaje 0 Gy, netOD 0; el protocolo solo post no extrapola hasta 0 Gy y su rango comienza en la menor dosis medida.
 2. Mantener constantes el lote de película, el escáner, la orientación, la resolución, el calentamiento del equipo y el intervalo postirradiación.
-3. Elegir la zona de cálculo. Por defecto se utiliza la imagen completa. Opcionalmente se puede activar **Seleccionar ROI** y dibujar un rectángulo sobre la previsualización del primer TIFF previo disponible; las coordenadas relativas de esa ROI se aplican por igual a todos los TIFF pre/post. Conviene evitar bordes, marcas y artefactos.
-4. Procesar cada pareja pre/post. Las repeticiones se promedian antes de calcular, píxel a píxel,
+3. Elegir la zona de cálculo. Por defecto se utiliza la imagen completa. Opcionalmente se puede activar **Seleccionar ROI** y dibujar un rectángulo sobre la primera imagen disponible; las coordenadas relativas de esa ROI se aplican por igual a todos los TIFF. Conviene evitar bordes, marcas y artefactos.
+4. Procesar los puntos. Las repeticiones se promedian antes de obtener netOD o intensidad normalizada, según el protocolo.
 
-   `netOD = log10(I0 / I)`.
-
-5. Ajustar y guardar. La aplicación conserva las curvas, la referencia RGB, la covarianza entre canales, los puntos y los metadatos.
+5. Ajustar y guardar. La aplicación conserva las curvas, la base de respuesta, la covarianza entre canales, los puntos y los metadatos. La referencia RGB solo existe en calibraciones pre/post.
 6. Exportar el archivo `.filmcal.json` como copia independiente del almacenamiento del navegador.
 
 Para cada canal se ajusta la función racional monótona
 
-`netOD(D) = -log10((a + bD) / (c + D))`.
+`respuesta(D) = -log10((a + bD) / (c + D))`.
 
-Los parámetros se transforman durante el ajuste para mantenerlos positivos y garantizar `a > b·c`. La tarjeta de calibración muestra R² y el RMSE de dosis reconstruida por canal. Esta comprobación interna no sustituye una validación dosimétrica independiente.
+Los parámetros se transforman durante el ajuste para mantenerlos positivos. Se impone `a > b·c` para netOD creciente y `a < b·c` para intensidad decreciente. La tarjeta de calibración muestra R² y el RMSE de dosis reconstruida por canal. Esta comprobación interna no sustituye una validación dosimétrica independiente.
 
 ## TIFF admitido
 
@@ -36,13 +39,13 @@ El lector conserva los valores `Uint16`; no reduce la imagen a 8 bits. Si el TIF
 
 | Método | Uso |
 | --- | --- |
-| Multicanal con perturbación común | Ajusta simultáneamente la dosis y una perturbación común de netOD usando la covarianza RGB. Es el método predeterminado. |
+| Multicanal con perturbación común | Ajusta simultáneamente la dosis y una perturbación común en la base de respuesta de la calibración usando la covarianza RGB. Es el método predeterminado. |
 | RGB ponderado | Combina las dosis de los tres canales según la pendiente local y la dispersión de cada canal. |
 | Rojo, verde o azul | Invierte una única curva; resulta útil para diagnóstico y comparación. |
 
 El cálculo se ejecuta en un Web Worker. El resultado incluye dosis, incertidumbre local aproximada, perturbación común, píxeles saturados, valores fuera del rango de calibración y perfiles centrales.
 
-Una referencia sin irradiar de la misma geometría puede cargarse junto a la medida. Si se omite, se utiliza el `I0` medio guardado en la calibración; esta alternativa no corrige la falta de uniformidad espacial del escáner.
+Con una calibración pre/post puede cargarse una referencia sin irradiar de la misma geometría. Si se omite, se utiliza el `I0` medio guardado en la calibración; esta alternativa no corrige la falta de uniformidad espacial del escáner. Una calibración solo post trabaja directamente con `I/65535` y no admite una referencia sin irradiar.
 
 ## Persistencia
 
@@ -65,7 +68,7 @@ npm run test:film
 npm run build:web
 ```
 
-Las pruebas generan un TIFF RGB de 16 bits, verifican el cálculo con imagen completa y con ROI, ajustan una calibración sintética, reconstruyen un mapa con perturbación común conocida y vuelven a leer un RT Dose para comprobar geometría, escala y referencias.
+Las pruebas generan un TIFF RGB de 16 bits, verifican el cálculo con imagen completa y con ROI, comprueban los protocolos pre/post y solo post —incluidos TIFF únicos y repetidos—, reconstruyen mapas sintéticos y vuelven a leer un RT Dose para comprobar geometría, escala y referencias.
 
 ## Límites actuales
 

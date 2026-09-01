@@ -1,6 +1,8 @@
 export const FILM_CALIBRATION_SCHEMA = 1
-export const FILM_ALGORITHM_VERSION = '1.0.0'
+export const FILM_ALGORITHM_VERSION = '1.1.0'
 export const CHANNELS = ['R', 'G', 'B']
+export const RESPONSE_BASIS_NET_OD = 'netod'
+export const RESPONSE_BASIS_INTENSITY = 'normalized-intensity'
 
 const EPSILON = 1e-12
 
@@ -22,10 +24,12 @@ function logit(value) {
   return Math.log(p / (1 - p))
 }
 
-function thetaToParams(theta) {
+function thetaToParams(theta, direction = 'increasing') {
   const c = Math.exp(clamp(theta[2], -20, 25))
   const b = 1e-8 + (1 - 2e-8) * sigmoid(theta[1])
-  const a = b * c + Math.exp(clamp(theta[0], -20, 25))
+  const a = direction === 'decreasing'
+    ? b * c * (1e-8 + (1 - 2e-8) * sigmoid(theta[0]))
+    : b * c + Math.exp(clamp(theta[0], -20, 25))
   return { a, b, c }
 }
 
@@ -116,21 +120,24 @@ function nelderMead(objective, initial, { step = 0.18, maxIterations = 1200, tol
   return simplex[0]
 }
 
-export function fitCalibrationCurve(dosesGy, netOdValues) {
-  if (dosesGy.length !== netOdValues.length || dosesGy.length < 4) {
+export function fitCalibrationCurve(dosesGy, responseValues, { direction = 'increasing' } = {}) {
+  if (dosesGy.length !== responseValues.length || dosesGy.length < 4) {
     throw new Error('Se necesitan al menos cuatro puntos para ajustar la curva.')
   }
   const pairs = dosesGy
-    .map((dose, index) => ({ dose: Number(dose), value: Number(netOdValues[index]) }))
+    .map((dose, index) => ({ dose: Number(dose), value: Number(responseValues[index]) }))
     .filter((point) => Number.isFinite(point.dose) && Number.isFinite(point.value))
     .sort((left, right) => left.dose - right.dose)
   if (pairs.length < 4) throw new Error('No hay suficientes puntos numéricos para el ajuste.')
 
   const maximumDose = Math.max(...pairs.map((point) => point.dose), 0.01)
-  const maximumNetOd = Math.max(...pairs.map((point) => point.value), 0.01)
-  const asymptote = clamp(10 ** (-maximumNetOd) * 0.65, 1e-5, 0.95)
+  const maximumResponse = Math.max(...pairs.map((point) => point.value), 0.01)
+  const minimumResponse = Math.min(...pairs.map((point) => point.value))
+  const asymptote = direction === 'decreasing'
+    ? clamp(10 ** (-minimumResponse * 0.8), 1e-5, 0.99999)
+    : clamp(10 ** (-maximumResponse) * 0.65, 1e-5, 0.95)
   const objective = (theta) => {
-    const params = thetaToParams(theta)
+    const params = thetaToParams(theta, direction)
     let sum = 0
     for (const point of pairs) {
       const predicted = calibrationNetOd(point.dose, params)
@@ -145,14 +152,22 @@ export function fitCalibrationCurve(dosesGy, netOdValues) {
   let best = null
   for (const scale of [0.08, 0.2, 0.5, 1, 2, 5]) {
     const c = maximumDose * scale
-    const a = c
-    const gap = Math.max(EPSILON, a - asymptote * c)
-    const initial = [Math.log(gap), logit(asymptote), Math.log(c)]
+    const initial = direction === 'decreasing'
+      ? [
+          logit(clamp(10 ** (-maximumResponse) / asymptote, 1e-6, 1 - 1e-6)),
+          logit(asymptote),
+          Math.log(c)
+        ]
+      : [
+          Math.log(Math.max(EPSILON, c - asymptote * c)),
+          logit(asymptote),
+          Math.log(c)
+        ]
     const candidate = nelderMead(objective, initial)
     if (!best || candidate.value < best.value) best = candidate
   }
 
-  const params = thetaToParams(best.x)
+  const params = thetaToParams(best.x, direction)
   const predictions = pairs.map((point) => calibrationNetOd(point.dose, params))
   const residuals = pairs.map((point, index) => point.value - predictions[index])
   const mean = pairs.reduce((sum, point) => sum + point.value, 0) / pairs.length
@@ -161,20 +176,22 @@ export function fitCalibrationCurve(dosesGy, netOdValues) {
 
   return {
     params,
+    direction,
+    rmseResponse: Math.sqrt(sumSquares / pairs.length),
     rmseNetOd: Math.sqrt(sumSquares / pairs.length),
     r2: totalSquares > 0 ? 1 - sumSquares / totalSquares : 1,
-    monotonic: params.a > params.b * params.c,
+    monotonic: direction === 'decreasing' ? params.a < params.b * params.c : params.a > params.b * params.c,
     residuals,
     predictions
   }
 }
 
-function pooledCovariance(points) {
+function pooledCovariance(points, responseKey) {
   const sum = Array.from({ length: 3 }, () => [0, 0, 0])
   let degrees = 0
   for (const point of points) {
-    const covariance = point.summary?.netOd?.covariance
-    const count = Number(point.summary?.netOd?.count || 0)
+    const covariance = point.summary?.[responseKey]?.covariance
+    const count = Number(point.summary?.[responseKey]?.count || 0)
     if (!covariance || count < 2) continue
     const weight = count - 1
     degrees += weight
@@ -226,10 +243,10 @@ function weightedReference(points) {
   return mean
 }
 
-function doseErrors(points, fits, doseRange) {
+function doseErrors(points, fits, doseRange, responseKey) {
   return points.map((point) => {
     const reconstructed = CHANNELS.map((_, channel) =>
-      invertCalibrationNetOd(point.summary.netOd.mean[channel], fits[channel].params, doseRange)
+      invertCalibrationNetOd(point.summary[responseKey].mean[channel], fits[channel].params, doseRange)
     )
     return {
       doseGy: point.doseGy,
@@ -240,24 +257,37 @@ function doseErrors(points, fits, doseRange) {
 }
 
 export function buildFilmCalibration({ name, metadata = {}, points, roi }) {
+  const responseBasis = metadata.responseBasis === RESPONSE_BASIS_INTENSITY
+    ? RESPONSE_BASIS_INTENSITY
+    : RESPONSE_BASIS_NET_OD
+  const responseKey = responseBasis === RESPONSE_BASIS_INTENSITY ? 'response' : 'netOd'
+  const responseDirection = responseBasis === RESPONSE_BASIS_INTENSITY ? 'decreasing' : 'increasing'
   const validPoints = (points || [])
-    .filter((point) => Number(point.doseGy) > 0 && point.summary?.netOd?.mean?.length === 3)
+    .filter((point) => Number(point.doseGy) > 0 && point.summary?.[responseKey]?.mean?.length === 3)
     .map((point) => ({ ...point, doseGy: Number(point.doseGy) }))
     .sort((left, right) => left.doseGy - right.doseGy)
   const uniqueDoses = new Set(validPoints.map((point) => point.doseGy))
   if (uniqueDoses.size < 4) throw new Error('La calibración necesita al menos cuatro dosis positivas diferentes.')
 
-  const fitDoses = [0, ...validPoints.map((point) => point.doseGy)]
+  const fitDoses = responseBasis === RESPONSE_BASIS_NET_OD
+    ? [0, ...validPoints.map((point) => point.doseGy)]
+    : validPoints.map((point) => point.doseGy)
   const fits = CHANNELS.map((_, channel) => fitCalibrationCurve(
     fitDoses,
-    [0, ...validPoints.map((point) => point.summary.netOd.mean[channel])]
+    responseBasis === RESPONSE_BASIS_NET_OD
+      ? [0, ...validPoints.map((point) => point.summary[responseKey].mean[channel])]
+      : validPoints.map((point) => point.summary[responseKey].mean[channel]),
+    { direction: responseDirection }
   ))
   if (fits.some((fit) => !fit.monotonic)) throw new Error('Alguna curva ajustada no es monótona.')
 
-  const doseRange = [0, Math.max(...validPoints.map((point) => point.doseGy))]
-  const covariance = pooledCovariance(validPoints)
+  const doseRange = [
+    responseBasis === RESPONSE_BASIS_NET_OD ? 0 : Math.min(...validPoints.map((point) => point.doseGy)),
+    Math.max(...validPoints.map((point) => point.doseGy))
+  ]
+  const covariance = pooledCovariance(validPoints, responseKey)
   const { inverse, determinant } = invert3x3(covariance)
-  const errors = doseErrors(validPoints, fits, doseRange)
+  const errors = doseErrors(validPoints, fits, doseRange, responseKey)
   const doseRmse = CHANNELS.map((_, channel) => Math.sqrt(
     errors.reduce((sum, point) => sum + point.errorsGy[channel] ** 2, 0) / errors.length
   ))
@@ -272,14 +302,19 @@ export function buildFilmCalibration({ name, metadata = {}, points, roi }) {
     updatedAt: now,
     metadata,
     roi,
+    responseBasis,
+    responseDirection,
     doseRangeGy: doseRange,
-    referenceRgb: weightedReference(validPoints),
+    referenceRgb: responseBasis === RESPONSE_BASIS_NET_OD ? weightedReference(validPoints) : null,
     points: validPoints,
     fits,
     covariance,
     covarianceInverse: inverse,
     covarianceDeterminant: determinant,
-    sigmaNetOd: covariance.map((row, index) => Math.sqrt(Math.max(EPSILON, row[index]))),
+    sigmaResponse: covariance.map((row, index) => Math.sqrt(Math.max(EPSILON, row[index]))),
+    sigmaNetOd: responseBasis === RESPONSE_BASIS_NET_OD
+      ? covariance.map((row, index) => Math.sqrt(Math.max(EPSILON, row[index])))
+      : null,
     validation: {
       doseRmseGy: doseRmse,
       points: errors,
@@ -299,17 +334,26 @@ export function validateCalibrationRecord(calibration) {
   if (!Array.isArray(calibration.fits) || calibration.fits.length !== 3) {
     throw new Error('La calibración no contiene las tres curvas RGB.')
   }
+  const responseBasis = calibration.responseBasis || RESPONSE_BASIS_NET_OD
+  const expectedDirection = responseBasis === RESPONSE_BASIS_INTENSITY ? 'decreasing' : 'increasing'
+  const responseDirection = calibration.responseDirection || expectedDirection
+  if (![RESPONSE_BASIS_NET_OD, RESPONSE_BASIS_INTENSITY].includes(responseBasis)) {
+    throw new Error('La base de respuesta de la calibración no es compatible.')
+  }
+  if (responseDirection !== expectedDirection) {
+    throw new Error('La dirección de las curvas no coincide con la base de respuesta.')
+  }
   for (const fit of calibration.fits) {
     const params = fit?.params
     if (!params || !['a', 'b', 'c'].every((key) => Number.isFinite(params[key]) && params[key] > 0) ||
-        !(params.a > params.b * params.c)) {
+        !(responseDirection === 'decreasing' ? params.a < params.b * params.c : params.a > params.b * params.c)) {
       throw new Error('La calibración contiene una curva RGB no válida o no monótona.')
     }
   }
-  if (!Array.isArray(calibration.referenceRgb) || calibration.referenceRgb.length !== 3) {
+  if (responseBasis === RESPONSE_BASIS_NET_OD && (!Array.isArray(calibration.referenceRgb) || calibration.referenceRgb.length !== 3)) {
     throw new Error('La calibración no contiene una referencia RGB válida.')
   }
-  if (calibration.referenceRgb.some((value) => !Number.isFinite(value) || value <= 0)) {
+  if (responseBasis === RESPONSE_BASIS_NET_OD && calibration.referenceRgb.some((value) => !Number.isFinite(value) || value <= 0)) {
     throw new Error('La referencia RGB de la calibración no es numérica o positiva.')
   }
   if (!Array.isArray(calibration.doseRangeGy) || calibration.doseRangeGy.length !== 2 ||
@@ -317,8 +361,9 @@ export function validateCalibrationRecord(calibration) {
       calibration.doseRangeGy[1] <= calibration.doseRangeGy[0]) {
     throw new Error('El rango de dosis de la calibración no es válido.')
   }
-  if (!Array.isArray(calibration.sigmaNetOd) || calibration.sigmaNetOd.length !== 3 ||
-      calibration.sigmaNetOd.some((value) => !Number.isFinite(value) || value <= 0)) {
+  const sigmaResponse = calibration.sigmaResponse || calibration.sigmaNetOd
+  if (!Array.isArray(sigmaResponse) || sigmaResponse.length !== 3 ||
+      sigmaResponse.some((value) => !Number.isFinite(value) || value <= 0)) {
     throw new Error('La calibración no contiene incertidumbres RGB válidas.')
   }
   if (!Array.isArray(calibration.covariance) || calibration.covariance.length !== 3 ||
