@@ -76,7 +76,7 @@ export default function CalibrationLibrary({ calibrations, activeId, onUse, onDe
                 <dl className="film-calibration-meta">
                   <div><dt>Rango</dt><dd>{(calibration.doseRangeGy?.[0] || 0).toFixed(2)}–{(calibration.doseRangeGy?.[1] || 0).toFixed(2)} Gy</dd></div>
                   <div><dt>Puntos</dt><dd>{calibration.points?.length || 0}</dd></div>
-                  <div><dt>Zona</dt><dd>{calibration.roi ? 'ROI seleccionada' : 'Imagen completa'}</dd></div>
+                  <div><dt>Zona</dt><dd>{calibration.roi?.mode === 'per-image' ? 'ROI por imagen' : calibration.roi ? 'ROI seleccionada' : 'Imagen completa'}</dd></div>
                   <div><dt>Protocolo</dt><dd>{calibration.responseBasis === 'normalized-intensity' ? 'Solo post' : 'Pre/post'}</dd></div>
                   <div><dt>Escáner</dt><dd>{calibration.metadata?.scanner || '—'}</dd></div>
                   <div><dt>Resolución</dt><dd>{calibration.metadata?.dpi ? `${calibration.metadata.dpi} dpi` : '—'}</dd></div>

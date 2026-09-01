@@ -187,6 +187,44 @@ console.log('\nROI de calibración')
     { width: 2, height: 2, data: new Float32Array(singleData.map((value) => value + 2000)), name: 'repeat-2.tif' }
   ], null)
   check('varias repeticiones se promedian antes de resumir', repeatedSummary.exposed.mean.every((value, channel) => near(value, [26000, 36000, 46000][channel], 1e-12)))
+
+  const shiftedData = new Float32Array([
+    9000, 9000, 9000, 1000, 2000, 3000,
+    4000, 5000, 6000, 9000, 9000, 9000
+  ])
+  const shiftedSummary = singleExposureRoi(
+    [
+      { width: 2, height: 2, data: shiftedData, name: 'left.tif' },
+      { width: 2, height: 2, data: shiftedData, name: 'right.tif' }
+    ],
+    [
+      { mode: 'pixels', x: 1, y: 0, width: 1, height: 2 },
+      { mode: 'pixels', x: 0, y: 0, width: 1, height: 2 }
+    ]
+  )
+  check('cada TIFF puede usar una ROI en coordenadas diferentes', shiftedSummary.rois[0].x === 1 && shiftedSummary.rois[1].x === 0)
+  check('las ROI desplazadas se promedian en coordenadas locales', shiftedSummary.exposed.mean.every((value, channel) => near(value, [5750, 6250, 6750][channel], 1e-12)))
+
+  const shiftedPair = pairedNetOdRoi(
+    [{ width: 2, height: 2, data: new Float32Array(12).fill(2000), name: 'pre-shift.tif' }],
+    [{ width: 2, height: 2, data: new Float32Array(12).fill(1000), name: 'post-shift.tif' }],
+    {
+      baseline: [{ mode: 'pixels', x: 0, y: 0, width: 1, height: 2 }],
+      exposed: [{ mode: 'pixels', x: 1, y: 0, width: 1, height: 2 }]
+    }
+  )
+  check('pre y post pueden usar posiciones ROI distintas', shiftedPair.rois.baseline[0].x === 0 && shiftedPair.rois.exposed[0].x === 1)
+  check('netOD usa coordenadas locales de cada ROI', shiftedPair.netOd.mean.every((value) => near(value, Math.log10(2), 1e-12)))
+
+  const mixedAreaSummary = singleExposureRoi(
+    [
+      { width: 2, height: 2, data: singleData, name: 'complete.tif' },
+      { width: 2, height: 2, data: singleData, name: 'roi.tif' }
+    ],
+    [null, { mode: 'pixels', x: 0, y: 0, width: 1, height: 1 }]
+  )
+  check('sin ROI una imagen concreta se procesa completa', mixedAreaSummary.rois[0].fullImage && !mixedAreaSummary.rois[1].fullImage)
+  check('se admiten ROI de distinto tamaño con igual peso por imagen', mixedAreaSummary.aggregation === 'equal-image-roi-stats')
 }
 
 console.log('\nCalibración racional RGB')

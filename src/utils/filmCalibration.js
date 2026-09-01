@@ -1,5 +1,5 @@
 export const FILM_CALIBRATION_SCHEMA = 1
-export const FILM_ALGORITHM_VERSION = '1.1.0'
+export const FILM_ALGORITHM_VERSION = '1.2.0'
 export const CHANNELS = ['R', 'G', 'B']
 export const RESPONSE_BASIS_NET_OD = 'netod'
 export const RESPONSE_BASIS_INTENSITY = 'normalized-intensity'
