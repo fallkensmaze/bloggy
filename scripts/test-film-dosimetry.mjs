@@ -1,5 +1,5 @@
 import dcmjs from 'dcmjs'
-import { decodeRgb16Tiff, pairedNetOdRoi, resolveRoi, rgbStats, singleExposureRoi } from '../src/utils/filmTiff.js'
+import { copyCalibrationRoiToPost, decodeRgb16Tiff, pairedNetOdRoi, resolveRoi, rgbStats, singleExposureRoi } from '../src/utils/filmTiff.js'
 import {
   buildFilmCalibration,
   calibrationNetOd,
@@ -225,6 +225,12 @@ console.log('\nROI de calibración')
   )
   check('sin ROI una imagen concreta se procesa completa', mixedAreaSummary.rois[0].fullImage && !mixedAreaSummary.rois[1].fullImage)
   check('se admiten ROI de distinto tamaño con igual peso por imagen', mixedAreaSummary.aggregation === 'equal-image-roi-stats')
+
+  const roiToCopy = { mode: 'relative', x: 0.15, y: 0.2, width: 0.3, height: 0.4 }
+  const pairedCopies = copyCalibrationRoiToPost(roiToCopy, 1, 2, 2, [null, null])
+  check('con listas parejas copia la ROI al post correspondiente', pairedCopies[0] === null && pairedCopies[1]?.x === 0.15)
+  const commonVeilCopies = copyCalibrationRoiToPost(roiToCopy, 0, 1, 3, [null, null, null])
+  check('un velo común puede copiar su ROI a todos los TIFF post', commonVeilCopies.every((roi) => roi?.x === 0.15 && roi !== roiToCopy))
 }
 
 console.log('\nCalibración racional RGB')

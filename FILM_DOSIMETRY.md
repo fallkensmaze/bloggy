@@ -14,6 +14,7 @@ Todos los archivos de una calibración deben mantener posición, orientación, r
 1. Preparar al menos cuatro dosis positivas distintas. La interfaz propone 50–700 cGy. El protocolo pre/post añade automáticamente el anclaje 0 Gy, netOD 0; el protocolo solo post no extrapola hasta 0 Gy y su rango comienza en la menor dosis medida.
 2. Mantener constantes el lote de película, el escáner, la orientación, la resolución, el calentamiento del equipo y el intervalo postirradiación.
 3. Elegir la zona de cálculo de cada TIFF. Cada imagen tiene su propia previsualización y puede llevar una ROI en coordenadas diferentes. Si no se define una ROI para una imagen, se utiliza completa. Conviene evitar bordes, marcas y artefactos.
+   En el protocolo pre/post, la ROI dibujada sobre un TIFF pre o velo puede copiarse al TIFF irradiado correspondiente. Si el número de TIFF pre y post no coincide —por ejemplo, un único velo para varias irradiaciones— puede aplicarse esa ROI a todos los TIFF post.
 4. Procesar los puntos. Las repeticiones se promedian antes de obtener netOD o intensidad normalizada, según el protocolo.
 
 5. Ajustar y guardar. La aplicación conserva las curvas, la base de respuesta, la covarianza entre canales, los puntos y los metadatos. La referencia RGB solo existe en calibraciones pre/post.
