@@ -1,7 +1,9 @@
-import { useMemo, useRef, useState } from 'react'
+import { Fragment, useMemo, useRef, useState } from 'react'
 import { buildFilmCalibration, RESPONSE_BASIS_INTENSITY, RESPONSE_BASIS_NET_OD } from '../../utils/filmCalibration.js'
+import { verifyCalibrationPoints } from '../../utils/filmAnalysis.js'
 import { pairedNetOdRoi, readRgb16TiffFiles, singleExposureRoi } from '../../utils/filmTiff.js'
-import CalibrationRoiSelector from './CalibrationRoiSelector.jsx'
+import CalibrationImageRois from './CalibrationImageRois.jsx'
+import CalibrationQualityControl from './CalibrationQualityControl.jsx'
 
 const DEFAULT_DOSES_CGY = [50, 100, 200, 300, 400, 500, 600, 700]
 
@@ -11,6 +13,8 @@ function newRow(dose = '') {
     dose,
     baselineFiles: [],
     exposedFiles: [],
+    baselineRois: [],
+    exposedRois: [],
     summary: null,
     busy: false,
     error: ''
@@ -27,44 +31,41 @@ export default function CalibrationWizard({ onCancel, onSave }) {
   const [delayHours, setDelayHours] = useState('24')
   const [doseUnit, setDoseUnit] = useState('cGy')
   const [protocol, setProtocol] = useState('matched-pre-post')
-  const [roiEnabled, setRoiEnabled] = useState(false)
-  const [roi, setRoi] = useState({ mode: 'relative', x: 0.25, y: 0.25, width: 0.5, height: 0.5 })
   const [rows, setRows] = useState(DEFAULT_DOSES_CGY.map(newRow))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [candidateCalibration, setCandidateCalibration] = useState(null)
   const roiRevision = useRef(0)
 
   const processedCount = rows.filter((row) => row.summary).length
-  const canSave = useMemo(() => processedCount >= 4 && !rows.some((row) => row.busy), [processedCount, rows])
+  const canFit = useMemo(() => processedCount >= 4 && !rows.some((row) => row.busy), [processedCount, rows])
   const pairedProtocol = protocol === 'matched-pre-post'
-  const previewRow = rows.find((row) => pairedProtocol ? row.baselineFiles.length : row.exposedFiles.length)
-  const previewFile = pairedProtocol ? previewRow?.baselineFiles[0] || null : previewRow?.exposedFiles[0] || null
-  const activeRoi = roiEnabled ? roi : null
 
-  const updateRow = (id, patch) => setRows((current) => current.map((row) =>
-    row.id === id ? { ...row, ...patch } : row
-  ))
-
-  const updateRoi = (patch) => {
-    roiRevision.current++
-    setRoi((current) => ({ ...current, ...patch }))
-    setRows((current) => current.map((row) => ({ ...row, summary: null, error: '' })))
+  const updateRow = (id, patch) => {
+    setCandidateCalibration(null)
+    setRows((current) => current.map((row) => row.id === id ? { ...row, ...patch } : row))
   }
 
-  const changeRoiMode = (enabled) => {
-    if (enabled === roiEnabled) return
+  const changeSetting = (setter, value) => {
+    setCandidateCalibration(null)
+    setter(value)
+  }
+
+  const updateImageRois = (rowId, role, rois) => {
     roiRevision.current++
-    setRoiEnabled(enabled)
-    setRows((current) => current.map((row) => ({ ...row, summary: null, error: '' })))
+    setCandidateCalibration(null)
+    updateRow(rowId, { [`${role}Rois`]: rois, summary: null, error: '' })
   }
 
   const changeProtocol = (nextProtocol) => {
     if (nextProtocol === protocol) return
     roiRevision.current++
+    setCandidateCalibration(null)
     setProtocol(nextProtocol)
     setRows((current) => current.map((row) => ({
       ...row,
       baselineFiles: nextProtocol === 'post-only' ? [] : row.baselineFiles,
+      baselineRois: nextProtocol === 'post-only' ? [] : row.baselineRois,
       summary: null,
       busy: false,
       error: ''
@@ -77,13 +78,14 @@ export default function CalibrationWizard({ onCancel, onSave }) {
       return null
     }
     const processingRevision = roiRevision.current
-    const processingRoi = activeRoi ? { ...activeRoi } : null
+    const baselineRois = row.baselineFiles.map((_, index) => row.baselineRois[index] || null)
+    const exposedRois = row.exposedFiles.map((_, index) => row.exposedRois[index] || null)
     updateRow(row.id, { busy: true, error: '' })
     try {
       const exposed = await readRgb16TiffFiles(row.exposedFiles)
       const summary = pairedProtocol
-        ? pairedNetOdRoi(await readRgb16TiffFiles(row.baselineFiles), exposed, processingRoi)
-        : singleExposureRoi(exposed, processingRoi)
+        ? pairedNetOdRoi(await readRgb16TiffFiles(row.baselineFiles), exposed, { baseline: baselineRois, exposed: exposedRois })
+        : singleExposureRoi(exposed, exposedRois)
       if (processingRevision !== roiRevision.current) {
         updateRow(row.id, { busy: false, summary: null, error: 'El protocolo o la zona cambió durante el cálculo; vuelve a procesar este punto.' })
         return null
@@ -109,11 +111,11 @@ export default function CalibrationWizard({ onCancel, onSave }) {
     }
   }
 
-  const save = async () => {
+  const fitAndVerify = () => {
     setBusy(true)
     setError('')
     try {
-      const calibration = buildFilmCalibration({
+      const baseCalibration = buildFilmCalibration({
         name,
         metadata: {
           filmType,
@@ -125,11 +127,9 @@ export default function CalibrationWizard({ onCancel, onSave }) {
           inputDoseUnit: doseUnit,
           protocol,
           responseBasis: pairedProtocol ? RESPONSE_BASIS_NET_OD : RESPONSE_BASIS_INTENSITY,
-          processing: pairedProtocol
-            ? roiEnabled ? 'pixelwise-netod-roi' : 'pixelwise-netod-full-image'
-            : roiEnabled ? 'roi-mean-normalized-intensity' : 'full-image-mean-normalized-intensity'
+          processing: 'per-image-roi'
         },
-        roi: activeRoi,
+        roi: rows.some((row) => [...row.baselineRois, ...row.exposedRois].some(Boolean)) ? { mode: 'per-image' } : null,
         points: rows.filter((row) => row.summary).map((row) => ({
           id: row.id,
           doseGy: Number(row.dose) * (doseUnit === 'cGy' ? 0.01 : 1),
@@ -137,10 +137,31 @@ export default function CalibrationWizard({ onCancel, onSave }) {
             baseline: row.baselineFiles.map((file) => file.name),
             exposed: row.exposedFiles.map((file) => file.name)
           },
+          imageRois: {
+            baseline: row.baselineFiles.map((_, index) => row.baselineRois[index] || null),
+            exposed: row.exposedFiles.map((_, index) => row.exposedRois[index] || null)
+          },
           summary: row.summary
         }))
       })
-      await onSave(calibration)
+      const calibration = {
+        ...baseCalibration,
+        qualityControl: verifyCalibrationPoints(baseCalibration)
+      }
+      setCandidateCalibration(calibration)
+    } catch (exception) {
+      setError(exception.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const save = async () => {
+    if (!candidateCalibration) return
+    setBusy(true)
+    setError('')
+    try {
+      await onSave(candidateCalibration)
     } catch (exception) {
       setError(exception.message)
     } finally {
@@ -161,14 +182,14 @@ export default function CalibrationWizard({ onCancel, onSave }) {
       </div>
 
       <div className="film-form-grid">
-        <label><span>Nombre</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
-        <label><span>Película</span><input value={filmType} onChange={(event) => setFilmType(event.target.value)} /></label>
-        <label><span>Lote</span><input value={lot} onChange={(event) => setLot(event.target.value)} placeholder="p. ej. 03012401" /></label>
-        <label><span>Escáner</span><input value={scanner} onChange={(event) => setScanner(event.target.value)} placeholder="Modelo y unidad" /></label>
-        <label><span>Resolución nominal</span><div className="film-input-suffix"><input type="number" min="1" value={dpi} onChange={(event) => setDpi(event.target.value)} /><span>dpi</span></div></label>
-        <label><span>Espera postirradiación</span><div className="film-input-suffix"><input type="number" min="0" step="0.5" value={delayHours} onChange={(event) => setDelayHours(event.target.value)} /><span>h</span></div></label>
-        <label><span>Orientación</span><input value={orientation} onChange={(event) => setOrientation(event.target.value)} /></label>
-        <label><span>Unidad de dosis</span><select value={doseUnit} onChange={(event) => setDoseUnit(event.target.value)}><option value="cGy">cGy</option><option value="Gy">Gy</option></select></label>
+        <label><span>Nombre</span><input value={name} onChange={(event) => changeSetting(setName, event.target.value)} /></label>
+        <label><span>Película</span><input value={filmType} onChange={(event) => changeSetting(setFilmType, event.target.value)} /></label>
+        <label><span>Lote</span><input value={lot} onChange={(event) => changeSetting(setLot, event.target.value)} placeholder="p. ej. 03012401" /></label>
+        <label><span>Escáner</span><input value={scanner} onChange={(event) => changeSetting(setScanner, event.target.value)} placeholder="Modelo y unidad" /></label>
+        <label><span>Resolución nominal</span><div className="film-input-suffix"><input type="number" min="1" value={dpi} onChange={(event) => changeSetting(setDpi, event.target.value)} /><span>dpi</span></div></label>
+        <label><span>Espera postirradiación</span><div className="film-input-suffix"><input type="number" min="0" step="0.5" value={delayHours} onChange={(event) => changeSetting(setDelayHours, event.target.value)} /><span>h</span></div></label>
+        <label><span>Orientación</span><input value={orientation} onChange={(event) => changeSetting(setOrientation, event.target.value)} /></label>
+        <label><span>Unidad de dosis</span><select value={doseUnit} onChange={(event) => changeSetting(setDoseUnit, event.target.value)}><option value="cGy">cGy</option><option value="Gy">Gy</option></select></label>
       </div>
 
       <div className="film-subsection">
@@ -192,32 +213,19 @@ export default function CalibrationWizard({ onCancel, onSave }) {
 
       <div className="film-subsection">
         <div className="film-subsection-title">
-          <div><strong>Zona de calibración</strong><span>La ROI es opcional. Si no se selecciona, se procesa la imagen completa.</span></div>
-        </div>
-        <CalibrationRoiSelector
-          file={previewFile}
-          enabled={roiEnabled}
-          roi={roi}
-          previewRole={pairedProtocol ? 'pre' : 'post'}
-          onEnabledChange={changeRoiMode}
-          onChange={updateRoi}
-        />
-      </div>
-
-      <div className="film-subsection">
-        <div className="film-subsection-title">
           <div><strong>Puntos de calibración</strong><span>Selecciona las repeticiones con Ctrl/Mayús. No se aplica registro automático entre escaneos.</span></div>
-          <button type="button" className="film-button secondary" onClick={() => setRows((current) => [...current, newRow()])}><i className="bi bi-plus" /> Punto</button>
+          <button type="button" className="film-button secondary" onClick={() => { setCandidateCalibration(null); setRows((current) => [...current, newRow()]) }}><i className="bi bi-plus" /> Punto</button>
         </div>
         <div className="film-points-table-wrap">
           <table className="film-points-table">
             <thead><tr><th>Dosis</th>{pairedProtocol && <th>TIFF pre</th>}<th>{pairedProtocol ? 'TIFF post' : 'TIFF'}</th><th>{pairedProtocol ? 'netOD' : 'I/65535'} R / G / B</th><th /></tr></thead>
             <tbody>
               {rows.map((row) => (
-                <tr key={row.id} className={row.error ? 'row-error' : row.summary ? 'row-ready' : ''}>
+                <Fragment key={row.id}>
+                <tr className={row.error ? 'row-error' : row.summary ? 'row-ready' : ''}>
                   <td><div className="film-dose-input"><input type="number" min="0" step="any" value={row.dose} onChange={(event) => updateRow(row.id, { dose: event.target.value, summary: null })} /><span>{doseUnit}</span></div></td>
-                  {pairedProtocol && <td><label className="film-file-button"><i className="bi bi-file-earmark-image" /><span>{row.baselineFiles.length ? `${row.baselineFiles.length} archivo(s)` : 'Seleccionar'}</span><input type="file" multiple accept=".tif,.tiff,image/tiff" onChange={(event) => updateRow(row.id, { baselineFiles: Array.from(event.target.files || []), summary: null, error: '' })} /></label></td>}
-                  <td><label className="film-file-button"><i className="bi bi-file-earmark-image" /><span>{row.exposedFiles.length ? `${row.exposedFiles.length} archivo(s)` : 'Seleccionar'}</span><input type="file" multiple accept=".tif,.tiff,image/tiff" onChange={(event) => updateRow(row.id, { exposedFiles: Array.from(event.target.files || []), summary: null, error: '' })} /></label></td>
+                  {pairedProtocol && <td><label className="film-file-button"><i className="bi bi-file-earmark-image" /><span>{row.baselineFiles.length ? `${row.baselineFiles.length} archivo(s)` : 'Seleccionar'}</span><input type="file" multiple accept=".tif,.tiff,image/tiff" onChange={(event) => updateRow(row.id, { baselineFiles: Array.from(event.target.files || []), baselineRois: [], summary: null, error: '' })} /></label></td>}
+                  <td><label className="film-file-button"><i className="bi bi-file-earmark-image" /><span>{row.exposedFiles.length ? `${row.exposedFiles.length} archivo(s)` : 'Seleccionar'}</span><input type="file" multiple accept=".tif,.tiff,image/tiff" onChange={(event) => updateRow(row.id, { exposedFiles: Array.from(event.target.files || []), exposedRois: [], summary: null, error: '' })} /></label></td>
                   <td>
                     {row.busy ? <span className="film-row-state"><i className="bi bi-arrow-repeat spin" /> Procesando</span> : row.summary ? (
                       <span className="film-netod-values">{(pairedProtocol ? row.summary.netOd : row.summary.response).mean.map((value) => value.toFixed(5)).join(' / ')}</span>
@@ -225,14 +233,27 @@ export default function CalibrationWizard({ onCancel, onSave }) {
                   </td>
                   <td className="film-row-actions">
                     <button type="button" className="film-icon-button" title="Procesar" disabled={row.busy} onClick={() => processRow(row)}><i className="bi bi-calculator" /></button>
-                    <button type="button" className="film-icon-button danger" title="Quitar" onClick={() => setRows((current) => current.filter((item) => item.id !== row.id))}><i className="bi bi-x-lg" /></button>
+                    <button type="button" className="film-icon-button danger" title="Quitar" onClick={() => { setCandidateCalibration(null); setRows((current) => current.filter((item) => item.id !== row.id)) }}><i className="bi bi-x-lg" /></button>
                   </td>
                 </tr>
+                {(row.baselineFiles.length > 0 || row.exposedFiles.length > 0) && (
+                  <tr className="film-roi-row">
+                    <td colSpan={pairedProtocol ? 5 : 4}>
+                      <div className="film-row-rois">
+                        {pairedProtocol && <CalibrationImageRois label="TIFF pre" files={row.baselineFiles} rois={row.baselineRois} onChange={(next) => updateImageRois(row.id, 'baseline', next)} />}
+                        <CalibrationImageRois label={pairedProtocol ? 'TIFF post' : 'TIFF'} files={row.exposedFiles} rois={row.exposedRois} onChange={(next) => updateImageRois(row.id, 'exposed', next)} />
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      <CalibrationQualityControl calibration={candidateCalibration} />
 
       {error && <div className="film-alert error"><i className="bi bi-exclamation-triangle" />{error}</div>}
       <div className="film-wizard-footer">
@@ -241,7 +262,8 @@ export default function CalibrationWizard({ onCancel, onSave }) {
           : 'No se añade un anclaje 0 Gy: el rango válido comienza en la menor dosis medida.'}</span>
         <div>
           <button type="button" className="film-button secondary" disabled={busy} onClick={processAll}><i className="bi bi-gear" /> Procesar disponibles</button>
-          <button type="button" className="film-button" disabled={!canSave || busy} onClick={save}><i className="bi bi-save" /> Ajustar y guardar</button>
+          <button type="button" className="film-button secondary" disabled={!canFit || busy} onClick={fitAndVerify}><i className="bi bi-clipboard2-check" /> Ajustar y verificar</button>
+          <button type="button" className="film-button" disabled={!candidateCalibration || busy} onClick={save}><i className="bi bi-save" /> Guardar calibración</button>
         </div>
       </div>
     </section>

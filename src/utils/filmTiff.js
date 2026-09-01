@@ -268,6 +268,45 @@ function finishRgbAccumulator(accumulator) {
   }
 }
 
+function independentRoiStats(images, rois) {
+  const imageStats = images.map((image, index) => rgbStats(extractRoiRgb(image, rois[index]).data))
+  const mean = [0, 0, 0]
+  for (const stats of imageStats) {
+    for (let channel = 0; channel < 3; channel++) mean[channel] += stats.mean[channel] / imageStats.length
+  }
+
+  // Cada TIFF es una repetición con el mismo peso, aunque sus ROI contengan
+  // distinto número de píxeles. Se combina la variación dentro y entre imágenes.
+  const covariance = Array.from({ length: 3 }, () => [0, 0, 0])
+  for (const stats of imageStats) {
+    for (let row = 0; row < 3; row++) {
+      for (let column = 0; column < 3; column++) {
+        covariance[row][column] += (
+          stats.covariance[row][column] +
+          (stats.mean[row] - mean[row]) * (stats.mean[column] - mean[column])
+        ) / imageStats.length
+      }
+    }
+  }
+  return {
+    mean,
+    covariance,
+    std: covariance.map((row, index) => Math.sqrt(Math.max(0, row[index]))),
+    count: Math.max(1, Math.round(imageStats.reduce((sum, stats) => sum + stats.count, 0) / imageStats.length))
+  }
+}
+
+function resolveImageRois(images, roiOrRois) {
+  const requested = Array.isArray(roiOrRois)
+    ? images.map((_, index) => roiOrRois[index] || null)
+    : images.map(() => roiOrRois || null)
+  return requested.map((roi, index) => resolveRoi(images[index], roi))
+}
+
+function sameRoiDimensions(areas) {
+  return areas.every((area) => area.width === areas[0].width && area.height === areas[0].height)
+}
+
 function normalizedRgbStats(stats) {
   const scale = 65535
   return {
@@ -278,19 +317,28 @@ function normalizedRgbStats(stats) {
   }
 }
 
-export function singleExposureRoi(images, roi) {
+export function singleExposureRoi(images, roiOrRois) {
   assertSameImageGeometry(images, 'escaneos de calibración')
-  const area = resolveRoi(images[0], roi)
+  const areas = resolveImageRois(images, roiOrRois)
+
+  if (!sameRoiDimensions(areas)) {
+    const exposedStats = independentRoiStats(images, areas)
+    return { roi: areas[0], rois: areas, exposed: exposedStats, response: normalizedRgbStats(exposedStats), aggregation: 'equal-image-roi-stats' }
+  }
+
+  const area = areas[0]
   const exposed = createRgbAccumulator()
   const imageWeight = 1 / images.length
 
   for (let row = 0; row < area.height; row++) {
     for (let column = 0; column < area.width; column++) {
-      const index = ((area.y + row) * images[0].width + area.x + column) * 3
       let value0 = 0
       let value1 = 0
       let value2 = 0
-      for (const image of images) {
+      for (let imageIndex = 0; imageIndex < images.length; imageIndex++) {
+        const image = images[imageIndex]
+        const imageArea = areas[imageIndex]
+        const index = ((imageArea.y + row) * image.width + imageArea.x + column) * 3
         value0 += image.data[index] * imageWeight
         value1 += image.data[index + 1] * imageWeight
         value2 += image.data[index + 2] * imageWeight
@@ -300,31 +348,69 @@ export function singleExposureRoi(images, roi) {
   }
 
   const exposedStats = finishRgbAccumulator(exposed)
-  return { roi: area, exposed: exposedStats, response: normalizedRgbStats(exposedStats) }
+  return { roi: area, rois: areas, exposed: exposedStats, response: normalizedRgbStats(exposedStats), aggregation: 'pixelwise-local-roi' }
 }
 
-export function pairedNetOdRoi(baselineImages, exposedImages, roi) {
+export function pairedNetOdRoi(baselineImages, exposedImages, roiOrRois) {
   assertSameImageGeometry(baselineImages, 'escaneos pre')
   assertSameImageGeometry(exposedImages, 'escaneos post')
   assertSameImageGeometry([baselineImages[0], exposedImages[0]], 'imágenes pre/post')
-  const area = resolveRoi(baselineImages[0], roi)
+  const baselineRois = roiOrRois && !Array.isArray(roiOrRois) && Array.isArray(roiOrRois.baseline)
+    ? roiOrRois.baseline
+    : roiOrRois
+  const exposedRois = roiOrRois && !Array.isArray(roiOrRois) && Array.isArray(roiOrRois.exposed)
+    ? roiOrRois.exposed
+    : roiOrRois
+  const baselineAreas = resolveImageRois(baselineImages, baselineRois)
+  const exposedAreas = resolveImageRois(exposedImages, exposedRois)
+  const allAreas = [...baselineAreas, ...exposedAreas]
+
+  if (!sameRoiDimensions(allAreas)) {
+    const baseline = independentRoiStats(baselineImages, baselineAreas)
+    const exposed = independentRoiStats(exposedImages, exposedAreas)
+    const mean = baseline.mean.map((value, channel) => Math.log10(Math.max(1, value) / Math.max(1, exposed.mean[channel])))
+    const covariance = Array.from({ length: 3 }, () => [0, 0, 0])
+    const scale = 1 / (Math.LN10 * Math.LN10)
+    for (let row = 0; row < 3; row++) {
+      for (let column = 0; column < 3; column++) {
+        covariance[row][column] = scale * (
+          baseline.covariance[row][column] / (Math.max(1, baseline.mean[row]) * Math.max(1, baseline.mean[column])) +
+          exposed.covariance[row][column] / (Math.max(1, exposed.mean[row]) * Math.max(1, exposed.mean[column]))
+        )
+      }
+    }
+    const netOd = {
+      mean,
+      covariance,
+      std: covariance.map((row, index) => Math.sqrt(Math.max(0, row[index]))),
+      count: Math.min(baseline.count, exposed.count)
+    }
+    return { roi: baselineAreas[0], rois: { baseline: baselineAreas, exposed: exposedAreas }, baseline, exposed, netOd, aggregation: 'equal-image-roi-stats' }
+  }
+
+  const area = baselineAreas[0]
   const accumulators = Array.from({ length: 3 }, createRgbAccumulator)
 
   for (let row = 0; row < area.height; row++) {
     for (let column = 0; column < area.width; column++) {
-      const index = ((area.y + row) * baselineImages[0].width + area.x + column) * 3
       let baseline0 = 0
       let baseline1 = 0
       let baseline2 = 0
       let exposed0 = 0
       let exposed1 = 0
       let exposed2 = 0
-      for (const image of baselineImages) {
+      for (let imageIndex = 0; imageIndex < baselineImages.length; imageIndex++) {
+        const image = baselineImages[imageIndex]
+        const imageArea = baselineAreas[imageIndex]
+        const index = ((imageArea.y + row) * image.width + imageArea.x + column) * 3
         baseline0 += image.data[index] / baselineImages.length
         baseline1 += image.data[index + 1] / baselineImages.length
         baseline2 += image.data[index + 2] / baselineImages.length
       }
-      for (const image of exposedImages) {
+      for (let imageIndex = 0; imageIndex < exposedImages.length; imageIndex++) {
+        const image = exposedImages[imageIndex]
+        const imageArea = exposedAreas[imageIndex]
+        const index = ((imageArea.y + row) * image.width + imageArea.x + column) * 3
         exposed0 += image.data[index] / exposedImages.length
         exposed1 += image.data[index + 1] / exposedImages.length
         exposed2 += image.data[index + 2] / exposedImages.length
@@ -342,9 +428,11 @@ export function pairedNetOdRoi(baselineImages, exposedImages, roi) {
 
   return {
     roi: area,
+    rois: { baseline: baselineAreas, exposed: exposedAreas },
     baseline: finishRgbAccumulator(accumulators[0]),
     exposed: finishRgbAccumulator(accumulators[1]),
-    netOd: finishRgbAccumulator(accumulators[2])
+    netOd: finishRgbAccumulator(accumulators[2]),
+    aggregation: 'pixelwise-local-roi'
   }
 }
 

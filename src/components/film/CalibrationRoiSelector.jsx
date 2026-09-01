@@ -140,7 +140,7 @@ export default function CalibrationRoiSelector({ file, enabled, roi, previewRole
       ) : !file ? (
         <div className="film-roi-empty">
           <i className="bi bi-file-earmark-image" />
-          <div><strong>Selecciona primero {previewRole === 'pre' ? 'un TIFF pre' : 'un TIFF'}</strong><span>La primera imagen disponible se usará únicamente como previsualización para dibujar la ROI.</span></div>
+          <div><strong>Selecciona primero {previewRole === 'pre' ? 'un TIFF pre' : 'un TIFF'}</strong><span>La imagen se usará como previsualización para dibujar su ROI.</span></div>
         </div>
       ) : busy ? (
         <div className="film-roi-empty"><i className="bi bi-arrow-repeat spin" /><span>Preparando previsualización…</span></div>
@@ -171,7 +171,7 @@ export default function CalibrationRoiSelector({ file, enabled, roi, previewRole
               }}
             ><span>ROI</span></div>
           </div>
-          <span className="film-roi-help">Arrastra sobre la previsualización o ajusta las coordenadas. La misma zona relativa se aplica a todos los TIFF de la calibración. El contraste automático solo afecta a la previsualización.</span>
+          <span className="film-roi-help">Arrastra sobre la previsualización o ajusta las coordenadas. Esta ROI solo se aplica al TIFF seleccionado. El contraste automático solo afecta a la previsualización.</span>
         </>
       ) : null}
 

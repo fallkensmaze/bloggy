@@ -253,6 +253,23 @@
 .film-roi-controls label { position: relative; display: grid; gap: 5px; }
 .film-roi-controls small { position: absolute; right: 9px; bottom: 9px; color: var(--text-muted); font-size: 9px; }
 .film-roi-reset { grid-column: 1 / -1; justify-self: start; }
+.film-roi-row > td { padding: 0 8px 14px; border-top: 0; }
+.film-row-rois { display: grid; gap: 12px; }
+.film-image-rois { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--border); border-radius: 9px; background: rgba(31, 35, 43, .32); }
+.film-image-rois-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.film-image-rois-heading strong { color: var(--text-primary); font-size: 11px; }
+.film-image-rois-heading span { color: var(--text-muted); font-size: 9px; }
+.film-image-roi-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.film-image-roi-tabs button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; min-width: 150px; max-width: 260px; align-items: center; gap: 7px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: rgba(46, 52, 64, .45); color: var(--text-muted); font: inherit; cursor: pointer; }
+.film-image-roi-tabs button.active { border-color: rgba(136, 192, 208, .65); background: rgba(136, 192, 208, .12); color: var(--text-primary); }
+.film-image-roi-tabs button span { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.film-image-roi-tabs button small { color: var(--accent-blue); font-size: 8px; text-transform: uppercase; }
+.film-calibration-qc { border-color: rgba(163, 190, 140, .35); }
+.film-qc-table th, .film-qc-table td { white-space: nowrap; }
+.film-qc-table td { vertical-align: middle; }
+.film-qc-table td small { display: block; margin-top: 2px; color: var(--text-muted); font-size: 8px; }
+.film-qc-table tfoot th, .film-qc-table tfoot td { border-top: 1px solid var(--border); color: var(--text-muted); font-size: 9px; }
+.film-qc-dose { color: var(--text-primary); font-size: 10px; }
 
 .film-points-table-wrap { overflow-x: auto; }
 .film-points-table { width: 100%; min-width: 890px; border-collapse: collapse; }
