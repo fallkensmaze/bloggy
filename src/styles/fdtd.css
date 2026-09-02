@@ -98,6 +98,22 @@
   margin-top: 8px;
 }
 
+.fdtd-geometry-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-top: 12px;
+}
+.fdtd-geometry-summary div {
+  display: grid;
+  gap: 2px;
+  padding: 7px;
+  border: 1px solid rgba(136, 192, 208, .2);
+  background: rgba(136, 192, 208, .06);
+}
+.fdtd-geometry-summary span { color: var(--text-dim); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
+.fdtd-geometry-summary strong { color: var(--text-secondary); font: 10px var(--font-mono); }
+
 .fdtd-grid-fields { display: grid; gap: 12px; }
 .fdtd-grid-fields label { display: grid; grid-template-columns: 1fr 70px; gap: 4px 8px; align-items: center; }
 .fdtd-grid-fields label > span { color: var(--text-secondary); font-size: 12px; }
@@ -110,7 +126,18 @@
   padding: 6px 7px;
   font: 12px var(--font-mono);
 }
+.fdtd-grid-fields input:disabled { opacity: .58; cursor: not-allowed; }
 .fdtd-grid-fields small { grid-column: 2; color: var(--text-dim); font: 9px var(--font-mono); }
+
+.fdtd-material-note {
+  margin: 12px 0 0;
+  padding: 8px;
+  color: var(--text-dim);
+  border-left: 2px solid rgba(136, 192, 208, .55);
+  background: rgba(136, 192, 208, .05);
+  font-size: 10px;
+  line-height: 1.45;
+}
 
 .fdtd-segmented { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--border); }
 .fdtd-segmented button {

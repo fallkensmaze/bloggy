@@ -1,4 +1,15 @@
-export const FDTD_CONFIG_VERSION = 4
+export const FDTD_CONFIG_VERSION = 5
+
+export const FDTD_COURTYARD = Object.freeze({
+  longSideMetres: 30,
+  shortSideMetres: 15,
+  wireLengthMetres: 10,
+  wireOffsetMetres: 0.4,
+  wireHeightMetres: 20,
+  heightAboveWireMetres: 15,
+  wallRelativePermittivity: 5,
+  spatialStepMetres: 0.4
+})
 
 export const FDTD_PRESETS = {
   halfWave: {
@@ -140,6 +151,27 @@ export const FDTD_PRESETS = {
     sourceAmplitude: 0.65,
     stepsPerFrame: 1,
     dielectric: false
+  },
+  courtyard: {
+    id: 'courtyard',
+    name: 'Patio 30 × 15 m · hilo de 10 m',
+    description: 'Hueco rectangular: hilo horizontal paralelo a A, saliendo de C, a 0,40 m de A y 20 m sobre el suelo; coronación a 35 m.',
+    antennaType: 'courtyard',
+    nx: 112,
+    depthCells: 72,
+    ny: 120,
+    wavelengthCells: 50,
+    frequencyMHz: 14.9896229,
+    dipoleFraction: 0.5,
+    wireRadiusCells: 1,
+    absorberCells: 8,
+    pmlTargetReflection: 1e-7,
+    pmlKappaMax: 5,
+    pmlAlphaMax: 0.05,
+    sourceType: 'pulse',
+    sourceAmplitude: 0.65,
+    stepsPerFrame: 1,
+    dielectric: true
   }
 }
 
@@ -150,10 +182,21 @@ const within = (value, min, max, fallback) => {
 
 export function sanitizeFdtdConfig(input = {}) {
   const base = FDTD_PRESETS.halfWave
-  const antennaType = ['dipole', 'monopole', 'longwire', 'yagi'].includes(input.antennaType) ? input.antennaType : base.antennaType
-  const nx = Math.round(within(input.nx, antennaType === 'yagi' ? 56 : 120, antennaType === 'yagi' ? 112 : 520, base.nx))
-  const ny = Math.round(within(input.ny, 80, 360, base.ny))
-  const radialExtent = antennaType === 'yagi' ? nx : Math.floor(nx / 2) + 1
+  const antennaType = ['dipole', 'monopole', 'longwire', 'yagi', 'courtyard'].includes(input.antennaType) ? input.antennaType : base.antennaType
+  const cartesian = antennaType === 'yagi' || antennaType === 'courtyard'
+  const courtyard = antennaType === 'courtyard'
+  const nx = courtyard
+    ? FDTD_PRESETS.courtyard.nx
+    : Math.round(within(input.nx, antennaType === 'yagi' ? 56 : 120, antennaType === 'yagi' ? 112 : 520, base.nx))
+  const depthCells = courtyard
+    ? FDTD_PRESETS.courtyard.depthCells
+    : cartesian
+      ? Math.round(within(input.depthCells, 48, 112, nx))
+      : nx
+  const ny = courtyard
+    ? FDTD_PRESETS.courtyard.ny
+    : Math.round(within(input.ny, 80, 360, base.ny))
+  const radialExtent = cartesian ? Math.min(nx, depthCells) : Math.floor(nx / 2) + 1
   const maxAbsorber = Math.max(8, Math.floor(Math.min(radialExtent, ny) / 3))
 
   return {
@@ -163,19 +206,20 @@ export function sanitizeFdtdConfig(input = {}) {
     description: typeof input.description === 'string' ? input.description.slice(0, 240) : '',
     antennaType,
     nx,
+    depthCells,
     ny,
-    wavelengthCells: within(input.wavelengthCells, 16, 100, base.wavelengthCells),
-    frequencyMHz: within(input.frequencyMHz, 0.1, 100000, base.frequencyMHz),
-    dipoleFraction: within(input.dipoleFraction, 0.1, 1.8, base.dipoleFraction),
-    wireRadiusCells: Math.round(within(input.wireRadiusCells, 1, 6, base.wireRadiusCells)),
-    absorberCells: Math.round(within(input.absorberCells, 8, maxAbsorber, base.absorberCells)),
+    wavelengthCells: courtyard ? FDTD_PRESETS.courtyard.wavelengthCells : within(input.wavelengthCells, 16, 100, base.wavelengthCells),
+    frequencyMHz: courtyard ? FDTD_PRESETS.courtyard.frequencyMHz : within(input.frequencyMHz, 0.1, 100000, base.frequencyMHz),
+    dipoleFraction: courtyard ? FDTD_PRESETS.courtyard.dipoleFraction : within(input.dipoleFraction, 0.1, 1.8, base.dipoleFraction),
+    wireRadiusCells: courtyard ? FDTD_PRESETS.courtyard.wireRadiusCells : Math.round(within(input.wireRadiusCells, 1, 6, base.wireRadiusCells)),
+    absorberCells: courtyard ? FDTD_PRESETS.courtyard.absorberCells : Math.round(within(input.absorberCells, 8, maxAbsorber, base.absorberCells)),
     pmlTargetReflection: within(input.pmlTargetReflection, 1e-12, 1e-2, base.pmlTargetReflection),
     pmlKappaMax: within(input.pmlKappaMax, 1, 12, base.pmlKappaMax),
     pmlAlphaMax: within(input.pmlAlphaMax, 0, 0.25, base.pmlAlphaMax),
     sourceType: input.sourceType === 'pulse' ? 'pulse' : 'continuous',
     sourceAmplitude: within(input.sourceAmplitude, 0.01, 4, base.sourceAmplitude),
     stepsPerFrame: Math.round(within(input.stepsPerFrame, 1, 16, base.stepsPerFrame)),
-    dielectric: Boolean(input.dielectric)
+    dielectric: courtyard || Boolean(input.dielectric)
   }
 }
 
@@ -191,7 +235,7 @@ export function parseFdtdConfig(text) {
   if (!parsed || parsed.schema !== 'falkens-maze/fdtd') {
     throw new Error('El archivo no es una configuración FDTD de Falken\'s Maze.')
   }
-  if (![1, 2, 3, FDTD_CONFIG_VERSION].includes(parsed.version)) {
+  if (![1, 2, 3, 4, FDTD_CONFIG_VERSION].includes(parsed.version)) {
     throw new Error(`Versión de configuración no compatible: ${parsed.version ?? 'sin versión'}.`)
   }
   if (parsed.version === 1) {
@@ -204,5 +248,6 @@ export function parseFdtdConfig(text) {
     parsed.wireRadiusCells = FDTD_PRESETS.halfWave.wireRadiusCells
   }
   if (parsed.version < 4) parsed.antennaType = FDTD_PRESETS.halfWave.antennaType
+  if (parsed.version < 5) parsed.depthCells = parsed.nx
   return sanitizeFdtdConfig(parsed)
 }

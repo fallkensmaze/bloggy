@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFdtdAnalysis, s11Db } from '../src/utils/fdtdAnalysis.js'
 import { FdtdSimulation3dFallback } from '../src/utils/fdtdCartesian3dFallback.js'
 import { FdtdSimulationFallback } from '../src/utils/fdtdFallback.js'
-import { FDTD_PRESETS, parseFdtdConfig, sanitizeFdtdConfig, serializeFdtdConfig } from '../src/utils/fdtdConfig.js'
+import { FDTD_COURTYARD, FDTD_PRESETS, parseFdtdConfig, sanitizeFdtdConfig, serializeFdtdConfig } from '../src/utils/fdtdConfig.js'
 
 const config = sanitizeFdtdConfig(FDTD_PRESETS.halfWave)
 const makeSimulation = (sourceKind = 1) => new FdtdSimulationFallback(
@@ -93,7 +93,7 @@ assert.ok(Number.isFinite(continuousAnalysis.nominalImpedance.real) && Number.is
 const roundTrip = parseFdtdConfig(serializeFdtdConfig(config))
 assert.deepEqual(roundTrip, config)
 const migrated = parseFdtdConfig(JSON.stringify({ schema: 'falkens-maze/fdtd', version: 2, nx: 240, ny: 150 }))
-assert.equal(migrated.version, 4)
+assert.equal(migrated.version, 5)
 assert.equal(migrated.antennaType, 'dipole')
 assert.equal(migrated.frequencyMHz, FDTD_PRESETS.halfWave.frequencyMHz)
 assert.throws(() => parseFdtdConfig('{"version":1}'), /no es una configuración/)
@@ -106,6 +106,7 @@ assert.ok(clamped.absorberCells <= Math.floor(Math.min(Math.floor(clamped.nx / 2
 assert.equal(sanitizeFdtdConfig(FDTD_PRESETS.longWire).antennaType, 'longwire')
 assert.ok(sanitizeFdtdConfig(FDTD_PRESETS.longWire).dipoleFraction > 1)
 assert.equal(sanitizeFdtdConfig(FDTD_PRESETS.yagi).nx, 72)
+assert.equal(sanitizeFdtdConfig(FDTD_PRESETS.yagi).depthCells, 72)
 
 const monopoleConfig = sanitizeFdtdConfig(FDTD_PRESETS.quarterWave)
 const monopole = new FdtdSimulationFallback(
@@ -143,7 +144,8 @@ const yagi = new FdtdSimulation3dFallback(
   yagiConfig.pmlKappaMax,
   yagiConfig.pmlAlphaMax,
   yagiConfig.wireRadiusCells,
-  2
+  2,
+  yagiConfig.depthCells
 )
 for (let block = 0; block < 6; block += 1) yagi.step(16)
 assert.equal(yagi.field_snapshot().length, yagi.nx() * yagi.ny())
@@ -155,4 +157,41 @@ assert.ok(yagi.spectrum_impedance_real().every(Number.isFinite), 'La impedancia 
 assert.equal(yagi.radiation_pattern_at(yagi.resonance_index()).length, 72)
 assert.ok(Number.isFinite(yagi.directivity_3d_at(yagi.resonance_index())))
 
-console.log('✓ FDTD 3D: campos E/H, CPML, dipolo, monopolo, hilo largo y Yagi cartesiana verificados')
+const courtyardConfig = sanitizeFdtdConfig(FDTD_PRESETS.courtyard)
+assert.equal(courtyardConfig.antennaType, 'courtyard')
+assert.deepEqual([courtyardConfig.nx, courtyardConfig.depthCells, courtyardConfig.ny], [112, 72, 120])
+assert.equal(courtyardConfig.frequencyMHz, FDTD_PRESETS.courtyard.frequencyMHz)
+const courtyard = new FdtdSimulation3dFallback(
+  courtyardConfig.nx,
+  courtyardConfig.ny,
+  courtyardConfig.wavelengthCells,
+  courtyardConfig.dipoleFraction,
+  courtyardConfig.absorberCells,
+  courtyardConfig.pmlTargetReflection,
+  0,
+  courtyardConfig.sourceAmplitude,
+  true,
+  courtyardConfig.pmlKappaMax,
+  courtyardConfig.pmlAlphaMax,
+  courtyardConfig.wireRadiusCells,
+  3,
+  courtyardConfig.depthCells
+)
+const courtyardScene = Array.from(courtyard.scene_geometry())
+const sceneMetres = cells => Math.round(cells * FDTD_COURTYARD.spatialStepMetres * 1e6) / 1e6
+assert.equal(courtyardScene[0], 1)
+assert.equal(sceneMetres(courtyardScene[2] - courtyardScene[1]), FDTD_COURTYARD.longSideMetres)
+assert.equal(sceneMetres(courtyardScene[8] - courtyardScene[7]), FDTD_COURTYARD.wireLengthMetres)
+assert.equal(sceneMetres(courtyardScene[9] - courtyardScene[3]), FDTD_COURTYARD.wireOffsetMetres)
+assert.equal(sceneMetres(courtyardScene[10] - courtyardScene[5]), FDTD_COURTYARD.wireHeightMetres)
+assert.equal(courtyard.depth(), courtyardConfig.depthCells)
+assert.ok(courtyard.material_snapshot().some(value => value === FDTD_COURTYARD.wallRelativePermittivity), 'El corte del patio debe contener suelo y paredes dieléctricas')
+const courtyardWire = Array.from(courtyard.conductor_points())
+assert.equal(courtyardWire[1], courtyardWire.at(-2), 'El hilo debe ser paralelo al lado A sobre y constante')
+assert.equal(courtyardWire[2], courtyardWire.at(-1), 'El hilo debe permanecer horizontal')
+assert.equal(sceneMetres(courtyardWire.at(-3) - courtyardWire[0]), FDTD_COURTYARD.wireLengthMetres)
+for (let block = 0; block < 4; block += 1) courtyard.step(4)
+assert.ok(courtyard.energy() > 0 && Number.isFinite(courtyard.energy()), 'El hilo del patio debe excitar un campo finito')
+assert.ok(courtyard.electric_magnitude_snapshot().every(Number.isFinite), 'El campo del patio debe permanecer finito')
+
+console.log('✓ FDTD 3D: campos E/H, CPML, dipolo, monopolo, hilo largo, Yagi y patio cartesiano verificados')
