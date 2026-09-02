@@ -216,6 +216,16 @@ console.log('\nROI de calibración')
   check('pre y post pueden usar posiciones ROI distintas', shiftedPair.rois.baseline[0].x === 0 && shiftedPair.rois.exposed[0].x === 1)
   check('netOD usa coordenadas locales de cada ROI', shiftedPair.netOd.mean.every((value) => near(value, Math.log10(2), 1e-12)))
 
+  const differentGeometryPair = pairedNetOdRoi(
+    [{ width: 2, height: 2, data: new Float32Array(12).fill(2000), name: 'pre-2x2.tif' }],
+    [{ width: 3, height: 2, data: new Float32Array(18).fill(1000), name: 'post-3x2.tif' }],
+    {
+      baseline: [{ mode: 'pixels', x: 1, y: 0, width: 1, height: 2 }],
+      exposed: [{ mode: 'pixels', x: 2, y: 0, width: 1, height: 2 }]
+    }
+  )
+  check('admite TIFF pre y post con dimensiones globales diferentes', differentGeometryPair.netOd.mean.every((value) => near(value, Math.log10(2), 1e-12)))
+
   const mixedAreaSummary = singleExposureRoi(
     [
       { width: 2, height: 2, data: singleData, name: 'complete.tif' },
