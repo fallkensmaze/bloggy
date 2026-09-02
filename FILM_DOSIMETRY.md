@@ -22,6 +22,8 @@ Todos los archivos de una calibración deben mantener posición, orientación, r
 
 Antes de guardar, **Ajustar y verificar** reconstruye la dosis de cada punto a partir de las mismas imágenes de calibración. La tabla situada después de las películas compara la dosis nominal con la dosis multicanal, RGB ponderada y de cada canal, e informa del error porcentual y el RMSE. Es una autoverificación de la consistencia del ajuste y queda almacenada con la calibración; no sustituye una validación independiente con películas diferentes.
 
+El botón se habilita cuando hay al menos cuatro dosis positivas diferentes con los archivos requeridos. No es necesario pulsar antes **Procesar disponibles**: **Ajustar y verificar** procesa automáticamente los puntos pendientes. Los TIFF pre y post pueden tener dimensiones globales diferentes; cada ROI se resuelve dentro de su propia imagen y, si sus tamaños no coinciden, las repeticiones se combinan con el mismo peso estadístico por imagen.
+
 El mismo paso muestra una gráfica de las tres curvas RGB con los puntos medidos superpuestos al ajuste racional. La gráfica también puede abrirse posteriormente desde **Ver ajuste** en la tarjeta de cada calibración guardada.
 
 Para cada canal se ajusta la función racional monótona

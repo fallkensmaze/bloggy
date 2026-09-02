@@ -39,8 +39,12 @@ export default function CalibrationWizard({ onCancel, onSave }) {
   const roiRevision = useRef(0)
 
   const processedCount = rows.filter((row) => row.summary).length
-  const canFit = useMemo(() => processedCount >= 4 && !rows.some((row) => row.busy), [processedCount, rows])
   const pairedProtocol = protocol === 'matched-pre-post'
+  const rowHasRequiredFiles = (row) => row.exposedFiles.length > 0 && (!pairedProtocol || row.baselineFiles.length > 0)
+  const doseInGy = (row) => Number(row.dose) * (doseUnit === 'cGy' ? 0.01 : 1)
+  const configuredRows = useMemo(() => rows.filter((row) => rowHasRequiredFiles(row) && doseInGy(row) > 0), [rows, pairedProtocol, doseUnit])
+  const configuredDoseCount = new Set(configuredRows.map(doseInGy)).size
+  const canFit = configuredDoseCount >= 4 && !rows.some((row) => row.busy)
 
   const updateRow = (id, patch) => {
     setCandidateCalibration(null)
@@ -90,20 +94,24 @@ export default function CalibrationWizard({ onCancel, onSave }) {
     })))
   }
 
+  const calculateRowSummary = async (row) => {
+    const baselineRois = row.baselineFiles.map((_, index) => row.baselineRois[index] || null)
+    const exposedRois = row.exposedFiles.map((_, index) => row.exposedRois[index] || null)
+    const exposed = await readRgb16TiffFiles(row.exposedFiles)
+    return pairedProtocol
+      ? pairedNetOdRoi(await readRgb16TiffFiles(row.baselineFiles), exposed, { baseline: baselineRois, exposed: exposedRois })
+      : singleExposureRoi(exposed, exposedRois)
+  }
+
   const processRow = async (row) => {
     if (!row.exposedFiles.length || (pairedProtocol && !row.baselineFiles.length)) {
       updateRow(row.id, { error: pairedProtocol ? 'Selecciona TIFF pre y post.' : 'Selecciona al menos un TIFF.', summary: null })
       return null
     }
     const processingRevision = roiRevision.current
-    const baselineRois = row.baselineFiles.map((_, index) => row.baselineRois[index] || null)
-    const exposedRois = row.exposedFiles.map((_, index) => row.exposedRois[index] || null)
     updateRow(row.id, { busy: true, error: '' })
     try {
-      const exposed = await readRgb16TiffFiles(row.exposedFiles)
-      const summary = pairedProtocol
-        ? pairedNetOdRoi(await readRgb16TiffFiles(row.baselineFiles), exposed, { baseline: baselineRois, exposed: exposedRois })
-        : singleExposureRoi(exposed, exposedRois)
+      const summary = await calculateRowSummary(row)
       if (processingRevision !== roiRevision.current) {
         updateRow(row.id, { busy: false, summary: null, error: 'El protocolo o la zona cambió durante el cálculo; vuelve a procesar este punto.' })
         return null
@@ -129,10 +137,36 @@ export default function CalibrationWizard({ onCancel, onSave }) {
     }
   }
 
-  const fitAndVerify = () => {
+  const fitAndVerify = async () => {
     setBusy(true)
     setError('')
     try {
+      const processingRevision = roiRevision.current
+      const processedRows = []
+      const failures = []
+      for (const row of configuredRows) {
+        try {
+          const summary = row.summary || await calculateRowSummary(row)
+          processedRows.push({ ...row, summary, error: '', busy: false })
+        } catch (exception) {
+          failures.push({ id: row.id, message: exception.message })
+        }
+      }
+      if (processingRevision !== roiRevision.current) {
+        throw new Error('Las ROI cambiaron durante el cálculo; vuelve a ajustar y verificar.')
+      }
+      setRows((current) => current.map((row) => {
+        const processed = processedRows.find((item) => item.id === row.id)
+        const failure = failures.find((item) => item.id === row.id)
+        if (processed) return { ...row, summary: processed.summary, error: '', busy: false }
+        if (failure) return { ...row, summary: null, error: failure.message, busy: false }
+        return row
+      }))
+      const validDoseCount = new Set(processedRows.map(doseInGy)).size
+      if (validDoseCount < 4) {
+        const detail = failures[0]?.message ? ` Primer error: ${failures[0].message}` : ''
+        throw new Error(`Solo se han podido procesar ${validDoseCount} dosis diferentes; se necesitan al menos cuatro.${detail}`)
+      }
       const baseCalibration = buildFilmCalibration({
         name,
         metadata: {
@@ -147,10 +181,10 @@ export default function CalibrationWizard({ onCancel, onSave }) {
           responseBasis: pairedProtocol ? RESPONSE_BASIS_NET_OD : RESPONSE_BASIS_INTENSITY,
           processing: 'per-image-roi'
         },
-        roi: rows.some((row) => [...row.baselineRois, ...row.exposedRois].some(Boolean)) ? { mode: 'per-image' } : null,
-        points: rows.filter((row) => row.summary).map((row) => ({
+        roi: processedRows.some((row) => [...row.baselineRois, ...row.exposedRois].some(Boolean)) ? { mode: 'per-image' } : null,
+        points: processedRows.map((row) => ({
           id: row.id,
-          doseGy: Number(row.dose) * (doseUnit === 'cGy' ? 0.01 : 1),
+          doseGy: doseInGy(row),
           files: {
             baseline: row.baselineFiles.map((file) => file.name),
             exposed: row.exposedFiles.map((file) => file.name)
@@ -288,9 +322,12 @@ export default function CalibrationWizard({ onCancel, onSave }) {
 
       {error && <div className="film-alert error"><i className="bi bi-exclamation-triangle" />{error}</div>}
       <div className="film-wizard-footer">
-        <span>{processedCount} punto(s) procesado(s). {pairedProtocol
-          ? 'Se añade automáticamente el anclaje 0 Gy, netOD 0.'
-          : 'No se añade un anclaje 0 Gy: el rango válido comienza en la menor dosis medida.'}</span>
+        <span className={configuredDoseCount < 4 ? 'film-fit-requirement incomplete' : 'film-fit-requirement ready'}>
+          {configuredDoseCount < 4
+            ? `${configuredDoseCount}/4 dosis con archivos listas. Añade pre/post y una dosis válida en al menos cuatro puntos.`
+            : `${configuredDoseCount} dosis listas · ${processedCount} procesadas. Ajustar y verificar procesará automáticamente las pendientes.`}
+          {' '}{pairedProtocol ? 'Se añadirá el anclaje 0 Gy, netOD 0.' : 'El rango comenzará en la menor dosis medida.'}
+        </span>
         <div>
           <button type="button" className="film-button secondary" disabled={busy} onClick={processAll}><i className="bi bi-gear" /> Procesar disponibles</button>
           <button type="button" className="film-button secondary" disabled={!canFit || busy} onClick={fitAndVerify}><i className="bi bi-clipboard2-check" /> Ajustar y verificar</button>

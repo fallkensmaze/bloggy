@@ -330,7 +330,7 @@ function normalizedRgbStats(stats) {
 }
 
 export function singleExposureRoi(images, roiOrRois) {
-  assertSameImageGeometry(images, 'escaneos de calibración')
+  if (!images?.length) throw new Error('No hay escaneos de calibración.')
   const areas = resolveImageRois(images, roiOrRois)
 
   if (!sameRoiDimensions(areas)) {
@@ -364,9 +364,8 @@ export function singleExposureRoi(images, roiOrRois) {
 }
 
 export function pairedNetOdRoi(baselineImages, exposedImages, roiOrRois) {
-  assertSameImageGeometry(baselineImages, 'escaneos pre')
-  assertSameImageGeometry(exposedImages, 'escaneos post')
-  assertSameImageGeometry([baselineImages[0], exposedImages[0]], 'imágenes pre/post')
+  if (!baselineImages?.length) throw new Error('No hay escaneos pre.')
+  if (!exposedImages?.length) throw new Error('No hay escaneos post.')
   const baselineRois = roiOrRois && !Array.isArray(roiOrRois) && Array.isArray(roiOrRois.baseline)
     ? roiOrRois.baseline
     : roiOrRois

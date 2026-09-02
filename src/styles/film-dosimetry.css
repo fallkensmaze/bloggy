@@ -278,6 +278,9 @@
 .film-fit-chart-panel.compact .film-fit-chart { height: 250px; }
 .film-fit-chart-metrics { display: flex; flex-wrap: wrap; gap: 7px; }
 .film-fit-chart-metrics span { padding: 4px 7px; border-left: 3px solid var(--film-channel-color); border-radius: 4px; background: rgba(46, 52, 64, .5); color: var(--text-muted); font-size: 9px; }
+.film-fit-requirement { line-height: 1.45; }
+.film-fit-requirement.incomplete { color: var(--accent-yellow); }
+.film-fit-requirement.ready { color: var(--accent-green); }
 
 .film-points-table-wrap { overflow-x: auto; }
 .film-points-table { width: 100%; min-width: 890px; border-collapse: collapse; }
