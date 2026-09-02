@@ -59,6 +59,9 @@ export async function getFilmCalibration(id) {
 
 export async function saveFilmCalibration(calibration) {
   validateCalibrationRecord(calibration)
+  if (!calibration.lateralCorrection) {
+    throw new Error('No se puede guardar ni importar una calibración sin corrección lateral.')
+  }
   const record = { ...calibration, updatedAt: new Date().toISOString() }
   await transact('readwrite', (store) => store.put(record))
   return record

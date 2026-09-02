@@ -1,5 +1,6 @@
 import dcmjs from 'dcmjs'
-import { copyCalibrationRoiToPost, decodeRgb16Tiff, pairedNetOdRoi, resolveRoi, rgbStats, singleExposureRoi } from '../src/utils/filmTiff.js'
+import { copyCalibrationRoiToPost, decodeRgb16Tiff, extractLateralProfile, pairedNetOdRoi, resolveRoi, rgbStats, singleExposureRoi } from '../src/utils/filmTiff.js'
+import { correctLateralValue, fitLateralCorrection, isInsideLateralRange } from '../src/utils/filmLateralCorrection.js'
 import {
   buildFilmCalibration,
   calibrationNetOd,
@@ -72,6 +73,26 @@ function covariance(value = 1e-6) {
   return [[value, value * 0.15, value * 0.08], [value * 0.15, value * 1.2, value * 0.12], [value * 0.08, value * 0.12, value * 1.5]]
 }
 
+function identityLateralCorrection() {
+  return {
+    version: 1,
+    model: 'lewis-chan-affine-quadratic',
+    axis: 'x',
+    coordinate: 'normalized-scan-center',
+    validRangeNormalized: [-1, 1],
+    channelFits: [0, 1, 2].map(() => ({
+      coefficients: { a1: 0, a2: 0, b1: 0, b2: 0 },
+      observations: 100,
+      rmseIntensity: 0,
+      maximumAbsoluteIntensity: 0,
+      maximumCorrectionIntensity: 0
+    })),
+    profileCount: 4,
+    sourceImages: ['synthetic.tif'],
+    createdAt: new Date(0).toISOString()
+  }
+}
+
 function makeCalibration() {
   const truth = [
     { a: 100, b: 0.16, c: 100 },
@@ -92,7 +113,17 @@ function makeCalibration() {
       }
     }
   }))
-  return { calibration: buildFilmCalibration({ name: 'Sintética', points, roi: null }), truth }
+  return { calibration: buildFilmCalibration({ name: 'Sintética', points, roi: null, lateralCorrection: identityLateralCorrection() }), truth }
+}
+
+function rejectsCalibrationWithoutLateralCorrection() {
+  try {
+    const { calibration } = makeCalibration()
+    buildFilmCalibration({ name: 'No permitida', points: calibration.points, roi: null })
+    return false
+  } catch (error) {
+    return error.message.includes('corrección lateral')
+  }
 }
 
 function makeIntensityCalibration() {
@@ -118,7 +149,8 @@ function makeIntensityCalibration() {
       name: 'Sintética solo post',
       metadata: { protocol: 'post-only', responseBasis: RESPONSE_BASIS_INTENSITY },
       points,
-      roi: null
+      roi: null,
+      lateralCorrection: identityLateralCorrection()
     }),
     truth
   }
@@ -243,9 +275,70 @@ console.log('\nROI de calibración')
   check('un velo común puede copiar su ROI a todos los TIFF post', commonVeilCopies.every((roi) => roi?.x === 0.15 && roi !== roiToCopy))
 }
 
+console.log('\nCorrección lateral RGB')
+{
+  const width = 121
+  const height = 9
+  const coefficients = [
+    { a1: 0.001, a2: 0.018, b1: -0.002, b2: -0.010 },
+    { a1: -0.0005, a2: 0.012, b1: 0.001, b2: -0.007 },
+    { a1: 0.0003, a2: 0.008, b1: -0.001, b2: -0.004 }
+  ]
+  const centers = [
+    [0.66, 0.64, 0.58],
+    [0.55, 0.57, 0.53],
+    [0.42, 0.48, 0.47],
+    [0.28, 0.36, 0.40],
+    [0.16, 0.24, 0.32]
+  ]
+  const images = centers.map((center, imageIndex) => {
+    const data = new Uint16Array(width * height * 3)
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const u = 2 * ((x + 0.5) / width - 0.5)
+        for (let channel = 0; channel < 3; channel++) {
+          const c = coefficients[channel]
+          const local = (center[channel] - c.a1 * u - c.a2 * u * u) /
+            (1 + c.b1 * u + c.b2 * u * u)
+          data[(y * width + x) * 3 + channel] = Math.round(local * 65535)
+        }
+      }
+    }
+    return { name: `lateral-${imageIndex}.tif`, width, height, data }
+  })
+  const profiles = images.map((image) => extractLateralProfile(image, null, 'x'))
+  const correction = fitLateralCorrection(profiles, 'x')
+  check('identifica el eje y la cobertura caracterizada', correction.axis === 'x' && correction.validRangeNormalized[0] < -0.98 && correction.validRangeNormalized[1] > 0.98)
+  const correctedAtEdges = images.every((image, imageIndex) => [0, width - 1].every((x) => [0, 1, 2].every((channel) => {
+    const source = (Math.floor(height / 2) * width + x) * 3 + channel
+    const corrected = correctLateralValue(image.data[source], channel, x, Math.floor(height / 2), width, height, correction) / 65535
+    return near(corrected, centers[imageIndex][channel], 3e-4)
+  })))
+  check('lleva las respuestas laterales a la respuesta central', correctedAtEdges)
+  const limited = { ...correction, validRangeNormalized: [-0.5, 0.5] }
+  check('no extrapola fuera del intervalo medido', isInsideLateralRange(limited, 60, 4, width, height) && !isInsideLateralRange(limited, 0, 4, width, height))
+  const limitedSummary = singleExposureRoi([images[0]], null, { lateralCorrection: limited })
+  check('excluye del resumen los píxeles fuera del intervalo medido', limitedSummary.response.count === 61 * height)
+  let insufficientCoverageRejected = false
+  try {
+    fitLateralCorrection(images.map((image) => extractLateralProfile(image, { mode: 'relative', x: 0.3, y: 0, width: 0.4, height: 1 }, 'x')), 'x')
+  } catch (error) {
+    insufficientCoverageRejected = error.message.includes('50 %')
+  }
+  check('exige que las ROI cubran el 50 % central', insufficientCoverageRejected)
+  let rejected = false
+  try {
+    fitLateralCorrection(images.map((image) => extractLateralProfile(image, { mode: 'relative', x: 0, y: 0, width: 0.2, height: 1 }, 'x')), 'x')
+  } catch (error) {
+    rejected = error.message.includes('centro') || error.message.includes('50 %')
+  }
+  check('rechaza ROI que no caracterizan ambos lados del centro', rejected)
+}
+
 console.log('\nCalibración racional RGB')
 const { calibration, truth } = makeCalibration()
 {
+  check('rechaza crear calibraciones sin corrección lateral', rejectsCalibrationWithoutLateralCorrection())
   check('las tres curvas son monótonas', calibration.fits.every((fit) => fit.monotonic))
   check('R² alto en los tres canales', calibration.fits.every((fit) => fit.r2 > 0.9999), calibration.fits.map((fit) => fit.r2.toFixed(6)).join(', '))
   for (let channel = 0; channel < 3; channel++) {

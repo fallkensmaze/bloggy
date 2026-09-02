@@ -5,6 +5,7 @@ import {
   RESPONSE_BASIS_INTENSITY,
   validateCalibrationRecord
 } from './filmCalibration.js'
+import { correctLateralValue, isInsideLateralRange } from './filmLateralCorrection.js'
 
 export const FILM_ANALYSIS_METHODS = [
   { id: 'multichannel', label: 'Multicanal con perturbación común' },
@@ -163,6 +164,9 @@ function summarize(values, invalid) {
 
 export function analyzeFilmImage({ measurement, reference = null, calibration, method = 'multichannel', onProgress }) {
   validateCalibrationRecord(calibration)
+  if (!calibration.lateralCorrection) {
+    throw new Error('Esta calibración no contiene corrección lateral. Crea una calibración nueva con tiras uniformes que atraviesen el centro del escaneo.')
+  }
   if (!measurement?.data || !measurement.width || !measurement.height) throw new Error('Imagen de medida no válida.')
   const intensityBasis = calibration.responseBasis === RESPONSE_BASIS_INTENSITY
   if (!intensityBasis && reference?.data && (reference.width !== measurement.width || reference.height !== measurement.height)) {
@@ -177,6 +181,7 @@ export function analyzeFilmImage({ measurement, reference = null, calibration, m
   const outOfRange = new Uint8Array(pixels)
   const saturated = new Uint8Array(pixels)
   const invalid = new Uint8Array(pixels)
+  const lateralOutOfRange = new Uint8Array(pixels)
   const range = calibration.doseRangeGy
   const sigmaResponse = calibration.sigmaResponse || calibration.sigmaNetOd
   const responseBounds = calibration.fits.map((fit) => {
@@ -188,11 +193,28 @@ export function analyzeFilmImage({ measurement, reference = null, calibration, m
 
   for (let pixel = 0; pixel < pixels; pixel++) {
     const start = pixel * 3
-    const measured = [measurement.data[start], measurement.data[start + 1], measurement.data[start + 2]]
-    const i0 = intensityBasis ? null : pixelReference(reference, calibration.referenceRgb, pixel)
-    if (measured.some((value) => value <= 1 || value >= 65534) || i0?.some((value) => value <= 1 || value >= 65534)) {
+    const x = pixel % measurement.width
+    const y = Math.floor(pixel / measurement.width)
+    if (!isInsideLateralRange(calibration.lateralCorrection, x, y, measurement.width, measurement.height)) {
+      lateralOutOfRange[pixel] = 1
+      invalid[pixel] = 1
+      dose[pixel] = NaN
+      sigma[pixel] = NaN
+      continue
+    }
+    const measuredRaw = [measurement.data[start], measurement.data[start + 1], measurement.data[start + 2]]
+    const i0Raw = intensityBasis ? null : pixelReference(reference, calibration.referenceRgb, pixel)
+    if (measuredRaw.some((value) => value <= 1 || value >= 65534) || i0Raw?.some((value) => value <= 1 || value >= 65534)) {
       saturated[pixel] = 1
     }
+    const measured = measuredRaw.map((value, channel) =>
+      correctLateralValue(value, channel, x, y, measurement.width, measurement.height, calibration.lateralCorrection)
+    )
+    const i0 = intensityBasis
+      ? null
+      : reference?.data
+        ? i0Raw.map((value, channel) => correctLateralValue(value, channel, x, y, reference.width, reference.height, calibration.lateralCorrection))
+        : i0Raw
     const response = intensityBasis
       ? measured.map((value) => value / 65535)
       : measured.map((value, channel) => Math.log10(Math.max(1, i0[channel]) / Math.max(1, value)))
@@ -245,11 +267,13 @@ export function analyzeFilmImage({ measurement, reference = null, calibration, m
     outOfRange,
     saturated,
     invalid,
+    lateralOutOfRange,
     statistics: summarize(dose, invalid),
     calibrationId: calibration.id,
     calibrationName: calibration.name,
     calibrationVersion: calibration.algorithmVersion,
     responseBasis: calibration.responseBasis || 'netod',
+    lateralCorrectionVersion: calibration.lateralCorrection.version,
     createdAt: new Date().toISOString()
   }
 }

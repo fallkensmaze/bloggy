@@ -13,7 +13,8 @@ self.onmessage = (event) => {
       result.delta.buffer,
       result.outOfRange.buffer,
       result.saturated.buffer,
-      result.invalid.buffer
+      result.invalid.buffer,
+      result.lateralOutOfRange.buffer
     ]
     self.postMessage({ type: 'result', result }, transfer)
   } catch (error) {

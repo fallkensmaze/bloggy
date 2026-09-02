@@ -1,5 +1,7 @@
+import { validateLateralCorrection } from './filmLateralCorrection.js'
+
 export const FILM_CALIBRATION_SCHEMA = 1
-export const FILM_ALGORITHM_VERSION = '1.3.0'
+export const FILM_ALGORITHM_VERSION = '1.4.0'
 export const CHANNELS = ['R', 'G', 'B']
 export const RESPONSE_BASIS_NET_OD = 'netod'
 export const RESPONSE_BASIS_INTENSITY = 'normalized-intensity'
@@ -256,7 +258,11 @@ function doseErrors(points, fits, doseRange, responseKey) {
   })
 }
 
-export function buildFilmCalibration({ name, metadata = {}, points, roi }) {
+export function buildFilmCalibration({ name, metadata = {}, points, roi, lateralCorrection = null }) {
+  if (!lateralCorrection) {
+    throw new Error('La calibración necesita una corrección lateral obtenida con tiras uniformes que atraviesen el centro del escaneo.')
+  }
+  validateLateralCorrection(lateralCorrection)
   const responseBasis = metadata.responseBasis === RESPONSE_BASIS_INTENSITY
     ? RESPONSE_BASIS_INTENSITY
     : RESPONSE_BASIS_NET_OD
@@ -302,6 +308,7 @@ export function buildFilmCalibration({ name, metadata = {}, points, roi }) {
     updatedAt: now,
     metadata,
     roi,
+    lateralCorrection,
     responseBasis,
     responseDirection,
     doseRangeGy: doseRange,
@@ -373,6 +380,7 @@ export function validateCalibrationRecord(calibration) {
   if (!Array.isArray(calibration.validation?.doseRmseGy) || calibration.validation.doseRmseGy.length !== 3) {
     throw new Error('La calibración no contiene métricas de validación compatibles.')
   }
+  if (calibration.lateralCorrection) validateLateralCorrection(calibration.lateralCorrection)
   invert3x3(calibration.covariance)
   return calibration
 }
