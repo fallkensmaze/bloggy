@@ -21,7 +21,7 @@ function fieldColour(value, magnitudeOnly = false) {
 }
 
 function drawCartesianFrame(context, frame, size, rotation, zoom) {
-  const { volume, gridX, gridY, gridZ, conductorPoints, scale, fieldKind, absorberCells } = frame
+  const { volume, gridX, gridY, gridZ, conductorPoints, sceneGeometry, scale, fieldKind, absorberCells } = frame
   if (!volume?.length) return
   const usableX = Math.max(8, gridX - 2 * absorberCells)
   const usableY = Math.max(8, gridY - 2 * absorberCells)
@@ -51,6 +51,32 @@ function drawCartesianFrame(context, frame, size, rotation, zoom) {
     context.beginPath(); context.moveTo(corners[a].x, corners[a].y); context.lineTo(corners[b].x, corners[b].y); context.stroke()
   }
 
+  const courtyardFaces = []
+  if (sceneGeometry?.length >= 12 && sceneGeometry[0] === 1) {
+    const [, courtyardX0, courtyardX1, courtyardY0, courtyardY1, ground, top] = sceneGeometry
+    const faceSpecs = [
+      { label: 'Suelo', points: [[courtyardX0, courtyardY0, ground], [courtyardX1, courtyardY0, ground], [courtyardX1, courtyardY1, ground], [courtyardX0, courtyardY1, ground]] },
+      { label: 'A · 30 m', points: [[courtyardX0, courtyardY0, ground], [courtyardX1, courtyardY0, ground], [courtyardX1, courtyardY0, top], [courtyardX0, courtyardY0, top]] },
+      { label: 'B · 30 m', points: [[courtyardX0, courtyardY1, ground], [courtyardX1, courtyardY1, ground], [courtyardX1, courtyardY1, top], [courtyardX0, courtyardY1, top]] },
+      { label: 'C · 15 m', points: [[courtyardX0, courtyardY0, ground], [courtyardX0, courtyardY1, ground], [courtyardX0, courtyardY1, top], [courtyardX0, courtyardY0, top]] },
+      { label: 'D · 15 m', points: [[courtyardX1, courtyardY0, ground], [courtyardX1, courtyardY1, ground], [courtyardX1, courtyardY1, top], [courtyardX1, courtyardY0, top]] }
+    ]
+    for (const face of faceSpecs) {
+      const projected = face.points.map(point => project(world(...point)))
+      courtyardFaces.push({ ...face, projected, depth: projected.reduce((sum, point) => sum + point.depth, 0) / projected.length })
+    }
+    courtyardFaces.sort((a, b) => a.depth - b.depth)
+    for (const face of courtyardFaces) {
+      context.fillStyle = face.label === 'Suelo' ? 'rgba(126, 146, 167, .16)' : 'rgba(112, 139, 166, .10)'
+      context.strokeStyle = 'rgba(169, 196, 218, .42)'
+      context.beginPath()
+      face.projected.forEach((point, index) => index === 0 ? context.moveTo(point.x, point.y) : context.lineTo(point.x, point.y))
+      context.closePath()
+      context.fill()
+      context.stroke()
+    }
+  }
+
   const points = []
   const stride = Math.max(3, Math.round(Math.max(gridX, gridZ) / 28))
   const safeScale = Math.max(1e-7, scale)
@@ -71,25 +97,33 @@ function drawCartesianFrame(context, frame, size, rotation, zoom) {
     context.fill()
   }
 
-  const groups = new Map()
-  for (let index = 0; index < conductorPoints.length; index += 3) {
-    const x = conductorPoints[index]
-    const y = conductorPoints[index + 1]
-    const z = conductorPoints[index + 2]
-    const key = `${x}:${y}`
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key).push(z)
-  }
   context.strokeStyle = '#f0d58a'
   context.lineWidth = 4
   context.lineCap = 'round'
-  for (const [key, zs] of groups) {
-    const [x, y] = key.split(':').map(Number)
-    const a = project(world(x, y, Math.min(...zs)))
-    const b = project(world(x, y, Math.max(...zs)))
-    context.beginPath(); context.moveTo(a.x, a.y); context.lineTo(b.x, b.y); context.stroke()
+  let previous = null
+  for (let index = 0; index < (conductorPoints?.length || 0); index += 3) {
+    const currentGrid = [conductorPoints[index], conductorPoints[index + 1], conductorPoints[index + 2]]
+    const current = project(world(...currentGrid))
+    if (previous) {
+      const distance = Math.hypot(currentGrid[0] - previous.grid[0], currentGrid[1] - previous.grid[1], currentGrid[2] - previous.grid[2])
+      if (distance <= 1.5) {
+        context.beginPath(); context.moveTo(previous.point.x, previous.point.y); context.lineTo(current.x, current.y); context.stroke()
+      }
+    }
+    previous = { grid: currentGrid, point: current }
   }
   context.lineCap = 'butt'
+
+  if (courtyardFaces.length) {
+    context.fillStyle = '#c7d7e5'
+    context.font = '600 11px ui-monospace, monospace'
+    for (const face of courtyardFaces.filter(face => face.label !== 'Suelo')) {
+      const topEdge = [face.projected[2], face.projected[3]]
+      const x = (topEdge[0].x + topEdge[1].x) / 2
+      const y = (topEdge[0].y + topEdge[1].y) / 2
+      context.fillText(face.label, x + 4, y - 5)
+    }
+  }
 }
 
 const FdtdField3D = forwardRef(function FdtdField3D({ absorberCells }, forwardedRef) {

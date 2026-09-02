@@ -4,6 +4,12 @@ const SPECTRUM_BINS = 41
 const SPECTRAL_STRIDE = 2
 const TRACE_LIMIT = 4096
 const PATTERN_SAMPLES = 72
+const COURTYARD_LONG_CELLS = 75
+const COURTYARD_SHORT_CELLS = 38
+const COURTYARD_HEIGHT_CELLS = 88
+const COURTYARD_WIRE_CELLS = 25
+const COURTYARD_WIRE_HEIGHT_CELLS = 50
+const COURTYARD_EPSILON = 5
 
 function makePmlAxis(length, thickness, stagger, targetReflection, kappaMax, alphaMax) {
   const kappa = new Float32Array(length).fill(1)
@@ -32,18 +38,27 @@ function makePmlAxis(length, thickness, stagger, targetReflection, kappaMax, alp
 }
 
 export class FdtdSimulation3dFallback {
-  constructor(nx, nz, wavelengthCells, _dipoleFraction, pmlCells, targetReflection, sourceKind, sourceAmplitude, _dielectricEnabled, kappaMax = 5, alphaMax = 0.05, wireRadiusCells = 1) {
-    this.gx = Math.max(56, Math.min(112, Math.round(nx)))
-    this.gy = this.gx
-    this.gz = Math.max(80, Math.min(160, Math.round(nz)))
-    this.wavelength = Math.max(14, Math.min(40, wavelengthCells))
-    this.pmlCells = Math.max(8, Math.min(Math.floor(Math.min(this.gx, this.gz) / 3), Math.round(pmlCells)))
+  constructor(nx, nz, wavelengthCells, _dipoleFraction, pmlCells, targetReflection, sourceKind, sourceAmplitude, _dielectricEnabled, kappaMax = 5, alphaMax = 0.05, wireRadiusCells = 1, antennaKind = 2, depthCells = nx) {
+    this.antennaKind = Math.round(antennaKind)
+    this.isCourtyard = this.antennaKind === 3
+    this.gx = this.isCourtyard
+      ? Math.max(96, Math.min(112, Math.round(nx)))
+      : Math.max(56, Math.min(112, Math.round(nx)))
+    this.gy = this.isCourtyard
+      ? Math.max(64, Math.min(112, Math.round(depthCells)))
+      : this.gx
+    this.gz = this.isCourtyard
+      ? Math.max(104, Math.min(160, Math.round(nz)))
+      : Math.max(80, Math.min(160, Math.round(nz)))
+    this.wavelength = Math.max(14, Math.min(60, wavelengthCells))
+    this.pmlCells = Math.max(8, Math.min(Math.floor(Math.min(this.gx, this.gy, this.gz) / 3), Math.round(pmlCells)))
     this.sourceKind = sourceKind ? 1 : 0
     this.sourceAmplitude = Math.max(0.01, Math.min(2, sourceAmplitude))
     this.wireRadius = Math.max(0, Math.min(1, Math.round(wireRadiusCells) - 1))
     this.cx = Math.floor(this.gx / 2)
     this.cy = Math.floor(this.gy / 2)
-    this.sourceZ = Math.floor(this.gz / 2)
+    this.sourcePosition = Math.floor(this.gz / 2)
+    this.sliceY = this.cy
     this.steps = 0
     const size = this.gx * this.gy * this.gz
     this.ex = new Float32Array(size)
@@ -77,6 +92,26 @@ export class FdtdSimulation3dFallback {
     this.pmlYE = makePmlAxis(this.gy, this.pmlCells, 0, reflection, safeKappa, safeAlpha)
     this.pmlZE = makePmlAxis(this.gz, this.pmlCells, 0, reflection, safeKappa, safeAlpha)
 
+    this.sceneGeometry = new Float32Array()
+    if (this.isCourtyard) this.buildCourtyardGeometry()
+    else this.buildYagiGeometry()
+    this.drivenIndex = this.elements.findIndex(element => element.driven)
+    this.profileLength = Math.max(this.gx, this.gz)
+    this.markConductors()
+
+    this.frequencyRatios = Float64Array.from({ length: SPECTRUM_BINS }, (_, index) => 0.7 + index * 0.6 / (SPECTRUM_BINS - 1))
+    this.vRe = new Float64Array(SPECTRUM_BINS)
+    this.vIm = new Float64Array(SPECTRUM_BINS)
+    this.iRe = new Float64Array(SPECTRUM_BINS)
+    this.iIm = new Float64Array(SPECTRUM_BINS)
+    this.profileRe = new Float64Array(SPECTRUM_BINS * this.elements.length * this.profileLength)
+    this.profileIm = new Float64Array(SPECTRUM_BINS * this.elements.length * this.profileLength)
+    this.voltageTrace = []
+    this.currentTrace = []
+    this.measurements = 0
+  }
+
+  buildYagiGeometry() {
     const elementSpecs = [
       { role: 'Reflector', offset: -0.22, length: 0.53, driven: false },
       { role: 'Excitado', offset: 0, length: 0.47, driven: true },
@@ -86,29 +121,64 @@ export class FdtdSimulation3dFallback {
     this.elements = elementSpecs.map(spec => {
       const x = this.cx + Math.round(spec.offset * this.wavelength)
       const cells = Math.max(7, Math.round(spec.length * this.wavelength))
-      const zStart = this.sourceZ - Math.floor(cells / 2)
-      return { ...spec, x, y: this.cy, zStart, zEnd: zStart + cells }
+      const start = this.sourcePosition - Math.floor(cells / 2)
+      return { ...spec, axis: 'z', x, y: this.cy, z: 0, start, end: start + cells }
     })
-    this.drivenIndex = this.elements.findIndex(element => element.driven)
+  }
+
+  buildCourtyardGeometry() {
+    const x0 = Math.floor((this.gx - COURTYARD_LONG_CELLS) / 2)
+    const x1 = x0 + COURTYARD_LONG_CELLS
+    const y0 = Math.floor((this.gy - COURTYARD_SHORT_CELLS) / 2)
+    const y1 = y0 + COURTYARD_SHORT_CELLS
+    const ground = this.pmlCells + 4
+    const top = ground + COURTYARD_HEIGHT_CELLS
+    const wireStart = x0 + 1
+    const wireEnd = wireStart + COURTYARD_WIRE_CELLS
+    const wireY = y0 + 1
+    const wireZ = ground + COURTYARD_WIRE_HEIGHT_CELLS
+    this.sourcePosition = wireStart
+    this.sliceY = wireY
+    this.elements = [{ role: 'Hilo de 10 m', axis: 'x', x: 0, y: wireY, z: wireZ, start: wireStart, end: wireEnd, driven: true }]
+
+    for (let x = x0; x <= x1; x += 1) {
+      for (let y = y0; y <= y1; y += 1) this.epsilon[this.index(x, y, ground)] = COURTYARD_EPSILON
+    }
+    for (let z = ground; z <= top; z += 1) {
+      for (let x = x0; x <= x1; x += 1) {
+        this.epsilon[this.index(x, y0, z)] = COURTYARD_EPSILON
+        this.epsilon[this.index(x, y1, z)] = COURTYARD_EPSILON
+      }
+      for (let y = y0; y <= y1; y += 1) {
+        this.epsilon[this.index(x0, y, z)] = COURTYARD_EPSILON
+        this.epsilon[this.index(x1, y, z)] = COURTYARD_EPSILON
+      }
+    }
+    this.sceneGeometry = Float32Array.from([1, x0, x1, y0, y1, ground, top, wireStart, wireEnd, wireY, wireZ, 0.4])
+  }
+
+  elementPoint(element, coordinate) {
+    return element.axis === 'x'
+      ? [coordinate, element.y, element.z]
+      : [element.x, element.y, coordinate]
+  }
+
+  markConductors() {
     for (const element of this.elements) {
-      for (let z = element.zStart; z <= element.zEnd; z += 1) {
-        if (element.driven && z === this.sourceZ) continue
-        for (let dy = -this.wireRadius; dy <= this.wireRadius; dy += 1) {
-          for (let dx = -this.wireRadius; dx <= this.wireRadius; dx += 1) this.metal[this.index(element.x + dx, element.y + dy, z)] = 1
+      for (let coordinate = element.start; coordinate <= element.end; coordinate += 1) {
+        if (element.driven && coordinate === this.sourcePosition) continue
+        const [x, y, z] = this.elementPoint(element, coordinate)
+        if (element.axis === 'x') {
+          for (let dz = -this.wireRadius; dz <= this.wireRadius; dz += 1) {
+            for (let dy = -this.wireRadius; dy <= this.wireRadius; dy += 1) this.metal[this.index(x, y + dy, z + dz)] = 1
+          }
+        } else {
+          for (let dy = -this.wireRadius; dy <= this.wireRadius; dy += 1) {
+            for (let dx = -this.wireRadius; dx <= this.wireRadius; dx += 1) this.metal[this.index(x + dx, y + dy, z)] = 1
+          }
         }
       }
     }
-
-    this.frequencyRatios = Float64Array.from({ length: SPECTRUM_BINS }, (_, index) => 0.7 + index * 0.6 / (SPECTRUM_BINS - 1))
-    this.vRe = new Float64Array(SPECTRUM_BINS)
-    this.vIm = new Float64Array(SPECTRUM_BINS)
-    this.iRe = new Float64Array(SPECTRUM_BINS)
-    this.iIm = new Float64Array(SPECTRUM_BINS)
-    this.profileRe = new Float64Array(SPECTRUM_BINS * this.elements.length * this.gz)
-    this.profileIm = new Float64Array(SPECTRUM_BINS * this.elements.length * this.gz)
-    this.voltageTrace = []
-    this.currentTrace = []
-    this.measurements = 0
   }
 
   index(x, y, z) { return (z * this.gy + y) * this.gx + x }
@@ -168,12 +238,17 @@ export class FdtdSimulation3dFallback {
     }
 
     const driven = this.elements[this.drivenIndex]
-    this.ez[this.index(driven.x, driven.y, this.sourceZ)] += this.sourceValue()
+    const [sourceX, sourceY, sourceZ] = this.elementPoint(driven, this.sourcePosition)
+    const sourceIndex = this.index(sourceX, sourceY, sourceZ)
+    if (driven.axis === 'x') this.ex[sourceIndex] += this.sourceValue()
+    else this.ez[sourceIndex] += this.sourceValue()
     for (let i = 0; i < this.metal.length; i += 1) if (this.metal[i]) this.ex[i] = this.ey[i] = this.ez[i] = 0
     this.zeroOuterElectricBoundary()
     this.steps += 1
-    const voltage = this.ez[this.index(driven.x, driven.y, this.sourceZ)]
-    const current = 0.5 * (this.wireCurrentAt(this.drivenIndex, this.sourceZ - 1) + this.wireCurrentAt(this.drivenIndex, this.sourceZ + 1))
+    const voltage = driven.axis === 'x' ? this.ex[sourceIndex] : this.ez[sourceIndex]
+    const current = driven.axis === 'x'
+      ? this.wireCurrentAt(this.drivenIndex, this.sourcePosition + 1)
+      : 0.5 * (this.wireCurrentAt(this.drivenIndex, this.sourcePosition - 1) + this.wireCurrentAt(this.drivenIndex, this.sourcePosition + 1))
     if (this.voltageTrace.length < TRACE_LIMIT) {
       this.voltageTrace.push(voltage)
       this.currentTrace.push(current)
@@ -213,14 +288,23 @@ export class FdtdSimulation3dFallback {
     return this.sourceAmplitude * Math.exp(-(((t - centre) / width) ** 2)) * Math.sin(phase)
   }
 
-  wireCurrentAt(elementIndex, z) {
+  wireCurrentAt(elementIndex, coordinate) {
     const element = this.elements[elementIndex]
-    if (z < element.zStart || z > element.zEnd || (element.driven && z === this.sourceZ)) return 0
+    if (coordinate < element.start || coordinate > element.end || (element.driven && coordinate === this.sourcePosition)) return 0
     const radius = this.wireRadius + 2
-    const xp = this.index(element.x + radius, element.y, z)
-    const xm = this.index(element.x - radius, element.y, z)
-    const yp = this.index(element.x, element.y + radius, z)
-    const ym = this.index(element.x, element.y - radius, z)
+    const [x, y, z] = this.elementPoint(element, coordinate)
+    if (element.axis === 'x') {
+      const yp = this.index(x, y + radius, z)
+      const ym = this.index(x, y - radius, z)
+      const zp = this.index(x, y, z + radius)
+      const zm = this.index(x, y, z - radius)
+      const hPhi = (this.hz[yp] - this.hz[ym] - this.hy[zp] + this.hy[zm]) / 4
+      return -2 * Math.PI * radius * hPhi
+    }
+    const xp = this.index(x + radius, y, z)
+    const xm = this.index(x - radius, y, z)
+    const yp = this.index(x, y + radius, z)
+    const ym = this.index(x, y - radius, z)
     const hPhi = (this.hy[xp] - this.hy[xm] - this.hx[yp] + this.hx[ym]) / 4
     return -2 * Math.PI * radius * hPhi
   }
@@ -237,11 +321,11 @@ export class FdtdSimulation3dFallback {
       this.iIm[bin] += current * sin
       for (let elementIndex = 0; elementIndex < this.elements.length; elementIndex += 1) {
         const element = this.elements[elementIndex]
-        const offset = (bin * this.elements.length + elementIndex) * this.gz
-        for (let z = element.zStart; z <= element.zEnd; z += 1) {
-          const wireCurrent = this.wireCurrentAt(elementIndex, z)
-          this.profileRe[offset + z] += wireCurrent * cos
-          this.profileIm[offset + z] += wireCurrent * sin
+        const offset = (bin * this.elements.length + elementIndex) * this.profileLength
+        for (let coordinate = element.start; coordinate <= element.end; coordinate += 1) {
+          const wireCurrent = this.wireCurrentAt(elementIndex, coordinate)
+          this.profileRe[offset + coordinate] += wireCurrent * cos
+          this.profileIm[offset + coordinate] += wireCurrent * sin
         }
       }
     }
@@ -275,12 +359,12 @@ export class FdtdSimulation3dFallback {
   current_profile(bin) {
     const index = Math.max(0, Math.min(SPECTRUM_BINS - 1, Math.round(bin)))
     const element = this.elements[this.drivenIndex]
-    const offset = (index * this.elements.length + this.drivenIndex) * this.gz
-    const profile = new Float32Array(this.gz)
+    const offset = (index * this.elements.length + this.drivenIndex) * this.profileLength
+    const profile = new Float32Array(this.profileLength)
     let maximum = 0
-    for (let z = element.zStart; z <= element.zEnd; z += 1) {
-      profile[z] = Math.hypot(this.profileRe[offset + z], this.profileIm[offset + z])
-      maximum = Math.max(maximum, profile[z])
+    for (let coordinate = element.start; coordinate <= element.end; coordinate += 1) {
+      profile[coordinate] = Math.hypot(this.profileRe[offset + coordinate], this.profileIm[offset + coordinate])
+      maximum = Math.max(maximum, profile[coordinate])
     }
     if (maximum > 0) for (let z = 0; z < profile.length; z += 1) profile[z] /= maximum
     return profile
@@ -292,18 +376,20 @@ export class FdtdSimulation3dFallback {
     let imag = 0
     for (let elementIndex = 0; elementIndex < this.elements.length; elementIndex += 1) {
       const element = this.elements[elementIndex]
-      const offset = (bin * this.elements.length + elementIndex) * this.gz
-      for (let z = element.zStart; z <= element.zEnd; z += 1) {
-        const phase = waveNumber * ((element.x - this.cx) * ux + (element.y - this.cy) * uy + (z - this.sourceZ) * uz)
+      const offset = (bin * this.elements.length + elementIndex) * this.profileLength
+      for (let coordinate = element.start; coordinate <= element.end; coordinate += 1) {
+        const [x, y, z] = this.elementPoint(element, coordinate)
+        const phase = waveNumber * ((x - this.cx) * ux + (y - this.cy) * uy + (z - Math.floor(this.gz / 2)) * uz)
         const cos = Math.cos(phase)
         const sin = Math.sin(phase)
-        const pr = this.profileRe[offset + z]
-        const pi = this.profileIm[offset + z]
+        const pr = this.profileRe[offset + coordinate]
+        const pi = this.profileIm[offset + coordinate]
         real += pr * cos - pi * sin
         imag += pr * sin + pi * cos
       }
     }
-    return (real * real + imag * imag) * Math.max(0, 1 - uz * uz)
+    const along = this.elements[this.drivenIndex].axis === 'x' ? ux : uz
+    return (real * real + imag * imag) * Math.max(0, 1 - along * along)
   }
 
   radiation_pattern_at(bin) {
@@ -342,7 +428,7 @@ export class FdtdSimulation3dFallback {
 
   slice(source) {
     const result = new Float32Array(this.gx * this.gz)
-    for (let z = 0; z < this.gz; z += 1) for (let x = 0; x < this.gx; x += 1) result[z * this.gx + x] = source[this.index(x, this.cy, z)]
+    for (let z = 0; z < this.gz; z += 1) for (let x = 0; x < this.gx; x += 1) result[z * this.gx + x] = source[this.index(x, this.sliceY, z)]
     return result
   }
 
@@ -354,7 +440,7 @@ export class FdtdSimulation3dFallback {
     const result = new Float32Array(this.gx * this.gz)
     for (let z = 0; z < this.gz; z += 1) {
       for (let x = 0; x < this.gx; x += 1) {
-        const i = this.index(x, this.cy, z)
+        const i = this.index(x, this.sliceY, z)
         result[z * this.gx + x] = Math.hypot(this.ex[i], this.ey[i], this.ez[i])
       }
     }
@@ -372,9 +458,12 @@ export class FdtdSimulation3dFallback {
   }
   conductor_points() {
     const points = []
-    for (const element of this.elements) for (let z = element.zStart; z <= element.zEnd; z += 1) points.push(element.x, element.y, z)
+    for (const element of this.elements) {
+      for (let coordinate = element.start; coordinate <= element.end; coordinate += 1) points.push(...this.elementPoint(element, coordinate))
+    }
     return Float32Array.from(points)
   }
+  scene_geometry() { return this.sceneGeometry.slice() }
   metal_snapshot() { return this.slice(this.metal) }
   material_snapshot() { return this.slice(this.epsilon) }
   time_voltage_snapshot() { return Float32Array.from(this.voltageTrace) }
@@ -393,9 +482,9 @@ export class FdtdSimulation3dFallback {
   ny() { return this.gz }
   depth() { return this.gy }
   time_step() { return COURANT_3D }
-  wire_start() { return this.elements[this.drivenIndex].zStart }
-  wire_end() { return this.elements[this.drivenIndex].zEnd }
-  feed_position() { return this.sourceZ }
+  wire_start() { return this.elements[this.drivenIndex].start }
+  wire_end() { return this.elements[this.drivenIndex].end }
+  feed_position() { return this.sourcePosition }
 
   energy() {
     let total = 0

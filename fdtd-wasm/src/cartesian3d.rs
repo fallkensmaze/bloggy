@@ -5,6 +5,12 @@ const ETA0: f64 = 376.730_313_668;
 const BINS: usize = 41;
 const TRACE_LIMIT: usize = 4096;
 const PATTERN_SAMPLES: usize = 72;
+const COURTYARD_LONG_CELLS: usize = 75;
+const COURTYARD_SHORT_CELLS: usize = 38;
+const COURTYARD_HEIGHT_CELLS: usize = 88;
+const COURTYARD_WIRE_CELLS: usize = 25;
+const COURTYARD_WIRE_HEIGHT_CELLS: usize = 50;
+const COURTYARD_EPSILON: f32 = 5.0;
 
 struct PmlAxis {
     kappa: Vec<f32>,
@@ -37,10 +43,12 @@ fn pml_axis(length: usize, thickness: usize, stagger: f32, reflection: f32, kapp
 
 #[derive(Clone)]
 struct WireElement {
+    axis: u8,
     x: usize,
     y: usize,
-    z_start: usize,
-    z_end: usize,
+    z: usize,
+    start: usize,
+    end: usize,
     driven: bool,
 }
 
@@ -56,7 +64,9 @@ pub struct FdtdSimulation3d {
     wire_radius: usize,
     cx: usize,
     cy: usize,
-    source_z: usize,
+    source_position: usize,
+    slice_y: usize,
+    profile_len: usize,
     steps: u32,
     ex: Vec<f32>, ey: Vec<f32>, ez: Vec<f32>,
     hx: Vec<f32>, hy: Vec<f32>, hz: Vec<f32>,
@@ -72,6 +82,7 @@ pub struct FdtdSimulation3d {
     pml_x_e: PmlAxis, pml_y_e: PmlAxis, pml_z_e: PmlAxis,
     elements: Vec<WireElement>,
     driven_index: usize,
+    scene_geometry: Vec<f32>,
     ratios: Vec<f64>,
     v_re: Vec<f64>, v_im: Vec<f64>, i_re: Vec<f64>, i_im: Vec<f64>,
     profile_re: Vec<f64>, profile_im: Vec<f64>,
@@ -95,41 +106,88 @@ impl FdtdSimulation3d {
         kappa_max: f32,
         alpha_max: f32,
         wire_radius_cells: usize,
-        _antenna_kind: u8,
+        antenna_kind: u8,
+        depth_cells: usize,
     ) -> FdtdSimulation3d {
-        let gx = nx.clamp(56, 112);
-        let gy = gx;
-        let gz = nz.clamp(80, 160);
-        let wavelength = wavelength_cells.clamp(14.0, 40.0);
-        let pml_cells = pml_cells.clamp(8, gx.min(gz) / 3);
+        let is_courtyard = antenna_kind == 3;
+        let gx = if is_courtyard { nx.clamp(96, 112) } else { nx.clamp(56, 112) };
+        let gy = if is_courtyard { depth_cells.clamp(64, 112) } else { gx };
+        let gz = if is_courtyard { nz.clamp(104, 160) } else { nz.clamp(80, 160) };
+        let wavelength = wavelength_cells.clamp(14.0, 60.0);
+        let pml_cells = pml_cells.clamp(8, gx.min(gy).min(gz) / 3);
         let reflection = target_reflection.clamp(1e-12, 1e-2);
         let kappa_max = kappa_max.clamp(1.0, 12.0);
         let alpha_max = alpha_max.clamp(0.0, 0.25);
         let wire_radius = wire_radius_cells.saturating_sub(1).min(1);
         let cx = gx / 2;
         let cy = gy / 2;
-        let source_z = gz / 2;
         let len = gx * gy * gz;
-        let specs = [(-0.22_f32, 0.53_f32, false), (0.0, 0.47, true), (0.17, 0.45, false), (0.34, 0.43, false)];
-        let element_count = specs.len();
-        let mut elements = Vec::with_capacity(element_count);
-        let mut driven_index = 0;
-        for (element_index, (offset, length, driven)) in specs.into_iter().enumerate() {
-            let x = (cx as f32 + offset * wavelength).round() as usize;
-            let cells = (length * wavelength).round().max(7.0) as usize;
-            let z_start = source_z - cells / 2;
-            if driven { driven_index = element_index; }
-            elements.push(WireElement { x, y: cy, z_start, z_end: z_start + cells, driven });
-        }
+        let mut epsilon = vec![1.0; len];
+        let (elements, driven_index, source_position, slice_y, scene_geometry) = if is_courtyard {
+            let x0 = (gx - COURTYARD_LONG_CELLS) / 2;
+            let x1 = x0 + COURTYARD_LONG_CELLS;
+            let y0 = (gy - COURTYARD_SHORT_CELLS) / 2;
+            let y1 = y0 + COURTYARD_SHORT_CELLS;
+            let ground = pml_cells + 4;
+            let top = ground + COURTYARD_HEIGHT_CELLS;
+            let wire_start = x0 + 1;
+            let wire_end = wire_start + COURTYARD_WIRE_CELLS;
+            let wire_y = y0 + 1;
+            let wire_z = ground + COURTYARD_WIRE_HEIGHT_CELLS;
+            for x in x0..=x1 { for y in y0..=y1 { epsilon[(ground * gy + y) * gx + x] = COURTYARD_EPSILON; }}
+            for z in ground..=top {
+                for x in x0..=x1 {
+                    epsilon[(z * gy + y0) * gx + x] = COURTYARD_EPSILON;
+                    epsilon[(z * gy + y1) * gx + x] = COURTYARD_EPSILON;
+                }
+                for y in y0..=y1 {
+                    epsilon[(z * gy + y) * gx + x0] = COURTYARD_EPSILON;
+                    epsilon[(z * gy + y) * gx + x1] = COURTYARD_EPSILON;
+                }
+            }
+            (
+                vec![WireElement { axis: 0, x: 0, y: wire_y, z: wire_z, start: wire_start, end: wire_end, driven: true }],
+                0,
+                wire_start,
+                wire_y,
+                vec![1.0, x0 as f32, x1 as f32, y0 as f32, y1 as f32, ground as f32, top as f32, wire_start as f32, wire_end as f32, wire_y as f32, wire_z as f32, 0.4],
+            )
+        } else {
+            let source_z = gz / 2;
+            let specs = [(-0.22_f32, 0.53_f32, false), (0.0, 0.47, true), (0.17, 0.45, false), (0.34, 0.43, false)];
+            let mut elements = Vec::with_capacity(specs.len());
+            let mut driven_index = 0;
+            for (element_index, (offset, length, driven)) in specs.into_iter().enumerate() {
+                let x = (cx as f32 + offset * wavelength).round() as usize;
+                let cells = (length * wavelength).round().max(7.0) as usize;
+                let start = source_z - cells / 2;
+                if driven { driven_index = element_index; }
+                elements.push(WireElement { axis: 2, x, y: cy, z: 0, start, end: start + cells, driven });
+            }
+            (elements, driven_index, source_z, cy, Vec::new())
+        };
+        let element_count = elements.len();
+        let profile_len = gx.max(gz);
         let mut metal = vec![0_u8; len];
         for element in &elements {
-            for z in element.z_start..=element.z_end {
-                if element.driven && z == source_z { continue; }
-                for dy in -(wire_radius as isize)..=wire_radius as isize {
-                    for dx in -(wire_radius as isize)..=wire_radius as isize {
-                        let x = (element.x as isize + dx) as usize;
-                        let y = (element.y as isize + dy) as usize;
-                        metal[(z * gy + y) * gx + x] = 1;
+            for coordinate in element.start..=element.end {
+                if element.driven && coordinate == source_position { continue; }
+                let (x, y, z) = Self::point_on_element(element, coordinate);
+                if element.axis == 0 {
+                    for dz in -(wire_radius as isize)..=wire_radius as isize {
+                        for dy in -(wire_radius as isize)..=wire_radius as isize {
+                            let yy = (y as isize + dy) as usize;
+                            let zz = (z as isize + dz) as usize;
+                            metal[(zz * gy + yy) * gx + x] = 1;
+                        }
+                    }
+                } else {
+                    for dy in -(wire_radius as isize)..=wire_radius as isize {
+                        for dx in -(wire_radius as isize)..=wire_radius as isize {
+                            let xx = (x as isize + dx) as usize;
+                            let yy = (y as isize + dy) as usize;
+                            metal[(z * gy + yy) * gx + xx] = 1;
+                        }
                     }
                 }
             }
@@ -138,10 +196,10 @@ impl FdtdSimulation3d {
         FdtdSimulation3d {
             gx, gy, gz, wavelength, pml_cells,
             source_kind: source_kind.min(1), source_amplitude: source_amplitude.clamp(0.01, 2.0),
-            wire_radius, cx, cy, source_z, steps: 0,
+            wire_radius, cx, cy, source_position, slice_y, profile_len, steps: 0,
             ex: vec![0.0; len], ey: vec![0.0; len], ez: vec![0.0; len],
             hx: vec![0.0; len], hy: vec![0.0; len], hz: vec![0.0; len],
-            epsilon: vec![1.0; len], metal,
+            epsilon, metal,
             psi_hx_y: vec![0.0; len], psi_hx_z: vec![0.0; len],
             psi_hy_z: vec![0.0; len], psi_hy_x: vec![0.0; len],
             psi_hz_x: vec![0.0; len], psi_hz_y: vec![0.0; len],
@@ -154,9 +212,9 @@ impl FdtdSimulation3d {
             pml_x_e: pml_axis(gx, pml_cells, 0.0, reflection, kappa_max, alpha_max),
             pml_y_e: pml_axis(gy, pml_cells, 0.0, reflection, kappa_max, alpha_max),
             pml_z_e: pml_axis(gz, pml_cells, 0.0, reflection, kappa_max, alpha_max),
-            elements, driven_index, ratios,
+            elements, driven_index, scene_geometry, ratios,
             v_re: vec![0.0; BINS], v_im: vec![0.0; BINS], i_re: vec![0.0; BINS], i_im: vec![0.0; BINS],
-            profile_re: vec![0.0; BINS * element_count * gz], profile_im: vec![0.0; BINS * element_count * gz],
+            profile_re: vec![0.0; BINS * element_count * profile_len], profile_im: vec![0.0; BINS * element_count * profile_len],
             voltage_trace: Vec::with_capacity(TRACE_LIMIT), current_trace: Vec::with_capacity(TRACE_LIMIT), measurements: 0,
         }
     }
@@ -169,7 +227,7 @@ impl FdtdSimulation3d {
     pub fn electric_magnitude_snapshot(&self) -> Vec<f32> {
         let mut result = vec![0.0; self.gx * self.gz];
         for z in 0..self.gz { for x in 0..self.gx {
-            let i = self.index(x, self.cy, z);
+            let i = self.index(x, self.slice_y, z);
             result[z * self.gx + x] = (self.ex[i] * self.ex[i] + self.ey[i] * self.ey[i] + self.ez[i] * self.ez[i]).sqrt();
         }}
         result
@@ -184,11 +242,13 @@ impl FdtdSimulation3d {
     }
     pub fn conductor_points(&self) -> Vec<f32> {
         let mut points = Vec::new();
-        for element in &self.elements { for z in element.z_start..=element.z_end {
-            points.extend_from_slice(&[element.x as f32, element.y as f32, z as f32]);
+        for element in &self.elements { for coordinate in element.start..=element.end {
+            let (x, y, z) = Self::point_on_element(element, coordinate);
+            points.extend_from_slice(&[x as f32, y as f32, z as f32]);
         }}
         points
     }
+    pub fn scene_geometry(&self) -> Vec<f32> { self.scene_geometry.clone() }
     pub fn metal_snapshot(&self) -> Vec<u8> { self.slice_u8(&self.metal) }
     pub fn material_snapshot(&self) -> Vec<f32> { self.slice(&self.epsilon) }
     pub fn time_voltage_snapshot(&self) -> Vec<f32> { self.voltage_trace.clone() }
@@ -205,9 +265,9 @@ impl FdtdSimulation3d {
     pub fn ny(&self) -> usize { self.gz }
     pub fn depth(&self) -> usize { self.gy }
     pub fn time_step(&self) -> f32 { COURANT }
-    pub fn wire_start(&self) -> usize { self.elements[self.driven_index].z_start }
-    pub fn wire_end(&self) -> usize { self.elements[self.driven_index].z_end }
-    pub fn feed_position(&self) -> usize { self.source_z }
+    pub fn wire_start(&self) -> usize { self.elements[self.driven_index].start }
+    pub fn wire_end(&self) -> usize { self.elements[self.driven_index].end }
+    pub fn feed_position(&self) -> usize { self.source_position }
     pub fn impedance_real(&self) -> f64 { self.impedance_at(BINS / 2).0 }
     pub fn impedance_imag(&self) -> f64 { self.impedance_at(BINS / 2).1 }
 
@@ -234,12 +294,12 @@ impl FdtdSimulation3d {
     pub fn current_profile(&self, bin: usize) -> Vec<f32> {
         let bin = bin.min(BINS - 1);
         let element = &self.elements[self.driven_index];
-        let offset = (bin * self.elements.len() + self.driven_index) * self.gz;
-        let mut result = vec![0.0_f32; self.gz];
+        let offset = (bin * self.elements.len() + self.driven_index) * self.profile_len;
+        let mut result = vec![0.0_f32; self.profile_len];
         let mut maximum = 0.0_f32;
-        for z in element.z_start..=element.z_end {
-            result[z] = self.profile_re[offset + z].hypot(self.profile_im[offset + z]) as f32;
-            maximum = maximum.max(result[z]);
+        for coordinate in element.start..=element.end {
+            result[coordinate] = self.profile_re[offset + coordinate].hypot(self.profile_im[offset + coordinate]) as f32;
+            maximum = maximum.max(result[coordinate]);
         }
         if maximum > 0.0 { for value in &mut result { *value /= maximum; } }
         result
@@ -286,6 +346,10 @@ impl FdtdSimulation3d {
 impl FdtdSimulation3d {
     fn index(&self, x: usize, y: usize, z: usize) -> usize { (z * self.gy + y) * self.gx + x }
 
+    fn point_on_element(element: &WireElement, coordinate: usize) -> (usize, usize, usize) {
+        if element.axis == 0 { (coordinate, element.y, element.z) } else { (element.x, element.y, coordinate) }
+    }
+
     fn single_step(&mut self) {
         let plane = self.gx * self.gy;
         for z in 0..self.gz - 1 { for y in 0..self.gy - 1 { for x in 0..self.gx - 1 {
@@ -326,14 +390,19 @@ impl FdtdSimulation3d {
             self.ez[i] += COURANT * inv_eps * ((dhy_dx / self.pml_x_e.kappa[x] + self.psi_ez_x[i]) - (dhx_dy / self.pml_y_e.kappa[y] + self.psi_ez_y[i]));
         }}}
         let driven = self.elements[self.driven_index].clone();
-        let source_index = self.index(driven.x, driven.y, self.source_z);
+        let (source_x, source_y, source_z) = Self::point_on_element(&driven, self.source_position);
+        let source_index = self.index(source_x, source_y, source_z);
         let drive = self.source_value();
-        self.ez[source_index] += drive;
+        if driven.axis == 0 { self.ex[source_index] += drive; } else { self.ez[source_index] += drive; }
         for i in 0..self.metal.len() { if self.metal[i] != 0 { self.ex[i] = 0.0; self.ey[i] = 0.0; self.ez[i] = 0.0; } }
         self.zero_boundaries();
         self.steps = self.steps.wrapping_add(1);
-        let voltage = self.ez[source_index];
-        let current = 0.5 * (self.wire_current(self.driven_index, self.source_z - 1) + self.wire_current(self.driven_index, self.source_z + 1));
+        let voltage = if driven.axis == 0 { self.ex[source_index] } else { self.ez[source_index] };
+        let current = if driven.axis == 0 {
+            self.wire_current(self.driven_index, self.source_position + 1)
+        } else {
+            0.5 * (self.wire_current(self.driven_index, self.source_position - 1) + self.wire_current(self.driven_index, self.source_position + 1))
+        };
         if self.voltage_trace.len() < TRACE_LIMIT { self.voltage_trace.push(voltage); self.current_trace.push(current); }
         if self.steps % 2 == 0 { self.accumulate(voltage, current); }
     }
@@ -362,15 +431,24 @@ impl FdtdSimulation3d {
         }}}
     }
 
-    fn wire_current(&self, element_index: usize, z: usize) -> f32 {
+    fn wire_current(&self, element_index: usize, coordinate: usize) -> f32 {
         let element = &self.elements[element_index];
-        if z < element.z_start || z > element.z_end || (element.driven && z == self.source_z) { return 0.0; }
+        if coordinate < element.start || coordinate > element.end || (element.driven && coordinate == self.source_position) { return 0.0; }
         let radius = self.wire_radius + 2;
-        let xp = self.index(element.x + radius, element.y, z);
-        let xm = self.index(element.x - radius, element.y, z);
-        let yp = self.index(element.x, element.y + radius, z);
-        let ym = self.index(element.x, element.y - radius, z);
-        let hphi = (self.hy[xp] - self.hy[xm] - self.hx[yp] + self.hx[ym]) * 0.25;
+        let (x, y, z) = Self::point_on_element(element, coordinate);
+        let hphi = if element.axis == 0 {
+            let yp = self.index(x, y + radius, z);
+            let ym = self.index(x, y - radius, z);
+            let zp = self.index(x, y, z + radius);
+            let zm = self.index(x, y, z - radius);
+            (self.hz[yp] - self.hz[ym] - self.hy[zp] + self.hy[zm]) * 0.25
+        } else {
+            let xp = self.index(x + radius, y, z);
+            let xm = self.index(x - radius, y, z);
+            let yp = self.index(x, y + radius, z);
+            let ym = self.index(x, y - radius, z);
+            (self.hy[xp] - self.hy[xm] - self.hx[yp] + self.hx[ym]) * 0.25
+        };
         -std::f32::consts::TAU * radius as f32 * hphi
     }
 
@@ -383,11 +461,11 @@ impl FdtdSimulation3d {
             self.i_re[bin] += current as f64 * cos; self.i_im[bin] += current as f64 * sin;
             for element_index in 0..self.elements.len() {
                 let element = self.elements[element_index].clone();
-                let offset = (bin * self.elements.len() + element_index) * self.gz;
-                for z in element.z_start..=element.z_end {
-                    let wire_current = self.wire_current(element_index, z) as f64;
-                    self.profile_re[offset + z] += wire_current * cos;
-                    self.profile_im[offset + z] += wire_current * sin;
+                let offset = (bin * self.elements.len() + element_index) * self.profile_len;
+                for coordinate in element.start..=element.end {
+                    let wire_current = self.wire_current(element_index, coordinate) as f64;
+                    self.profile_re[offset + coordinate] += wire_current * cos;
+                    self.profile_im[offset + coordinate] += wire_current * sin;
                 }
             }
         }
@@ -406,25 +484,27 @@ impl FdtdSimulation3d {
         let k = std::f64::consts::TAU * self.ratios[bin] / self.wavelength as f64;
         let mut real = 0.0; let mut imag = 0.0;
         for (element_index, element) in self.elements.iter().enumerate() {
-            let offset = (bin * self.elements.len() + element_index) * self.gz;
-            for z in element.z_start..=element.z_end {
-                let phase = k * ((element.x as f64 - self.cx as f64) * ux + (element.y as f64 - self.cy as f64) * uy + (z as f64 - self.source_z as f64) * uz);
+            let offset = (bin * self.elements.len() + element_index) * self.profile_len;
+            for coordinate in element.start..=element.end {
+                let (x, y, z) = Self::point_on_element(element, coordinate);
+                let phase = k * ((x as f64 - self.cx as f64) * ux + (y as f64 - self.cy as f64) * uy + (z as f64 - (self.gz / 2) as f64) * uz);
                 let cos = phase.cos(); let sin = phase.sin();
-                let pr = self.profile_re[offset + z]; let pi = self.profile_im[offset + z];
+                let pr = self.profile_re[offset + coordinate]; let pi = self.profile_im[offset + coordinate];
                 real += pr * cos - pi * sin; imag += pr * sin + pi * cos;
             }
         }
-        (real * real + imag * imag) * (1.0 - uz * uz).max(0.0)
+        let along = if self.elements[self.driven_index].axis == 0 { ux } else { uz };
+        (real * real + imag * imag) * (1.0 - along * along).max(0.0)
     }
 
     fn slice(&self, source: &[f32]) -> Vec<f32> {
         let mut result = vec![0.0; self.gx * self.gz];
-        for z in 0..self.gz { for x in 0..self.gx { result[z * self.gx + x] = source[self.index(x, self.cy, z)]; }}
+        for z in 0..self.gz { for x in 0..self.gx { result[z * self.gx + x] = source[self.index(x, self.slice_y, z)]; }}
         result
     }
     fn slice_u8(&self, source: &[u8]) -> Vec<u8> {
         let mut result = vec![0; self.gx * self.gz];
-        for z in 0..self.gz { for x in 0..self.gx { result[z * self.gx + x] = source[self.index(x, self.cy, z)]; }}
+        for z in 0..self.gz { for x in 0..self.gx { result[z * self.gx + x] = source[self.index(x, self.slice_y, z)]; }}
         result
     }
 }
@@ -435,7 +515,7 @@ mod tests {
 
     #[test]
     fn yagi_grid_propagates_and_exports_fields() {
-        let mut sim = FdtdSimulation3d::new(56, 80, 18.0, 0.47, 8, 1e-7, 1, 0.6, false, 5.0, 0.05, 1, 2);
+        let mut sim = FdtdSimulation3d::new(56, 80, 18.0, 0.47, 8, 1e-7, 1, 0.6, false, 5.0, 0.05, 1, 2, 56);
         for _ in 0..12 { sim.step(8); }
         assert_eq!(sim.field_snapshot().len(), 56 * 80);
         assert_eq!(sim.volume_snapshot(3).len(), 56 * 56 * 80);
@@ -447,5 +527,23 @@ mod tests {
         let resonance = sim.resonance_index();
         assert!(sim.directivity_3d_at(resonance).is_finite());
         assert_eq!(sim.radiation_pattern_at(resonance).len(), PATTERN_SAMPLES);
+    }
+
+    #[test]
+    fn courtyard_preserves_building_and_horizontal_wire_geometry() {
+        let mut sim = FdtdSimulation3d::new(96, 104, 50.0, 0.5, 8, 1e-7, 0, 0.6, true, 5.0, 0.05, 1, 3, 64);
+        let scene = sim.scene_geometry();
+        assert_eq!(scene.len(), 12);
+        assert!(((scene[2] - scene[1]) * scene[11] - 30.0).abs() < 1e-4);
+        assert!(((scene[8] - scene[7]) * scene[11] - 10.0).abs() < 1e-4);
+        assert!(((scene[9] - scene[3]) * scene[11] - 0.4).abs() < 1e-4);
+        assert!(((scene[10] - scene[5]) * scene[11] - 20.0).abs() < 1e-4);
+        assert_eq!(sim.depth(), 64);
+        assert!(sim.material_snapshot().iter().any(|value| *value == COURTYARD_EPSILON));
+        let wire = sim.conductor_points();
+        assert_eq!(wire[1], wire[wire.len() - 2]);
+        assert_eq!(wire[2], wire[wire.len() - 1]);
+        for _ in 0..4 { sim.step(4); }
+        assert!(sim.energy().is_finite() && sim.energy() > 0.0);
     }
 }

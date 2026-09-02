@@ -91,10 +91,11 @@ export function readFdtdAnalysis(simulation, config) {
   const wireLength = Math.max(1, wireEnd - wireStart)
   const profile = Array.from(simulation.current_profile(resonanceIndex))
   const profileIndices = Array.from({ length: wireEnd - wireStart + 1 }, (_, index) => wireStart + index)
-  const position = config.antennaType === 'monopole'
+  const endFed = config.antennaType === 'monopole' || config.antennaType === 'courtyard'
+  const position = endFed
     ? profileIndices.map(index => (index - sourceZ) / Math.max(1, wireEnd - sourceZ))
     : profileIndices.map(index => (index - sourceZ) / wireLength)
-  const idealProfile = config.antennaType === 'monopole'
+  const idealProfile = endFed
     ? position.map(value => Math.max(0, Math.cos(Math.PI * value / 2)))
     : position.map(value => Math.max(0, Math.cos(Math.PI * value)))
 

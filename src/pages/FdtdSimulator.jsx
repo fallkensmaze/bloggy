@@ -12,7 +12,7 @@ import {
 } from 'chart.js'
 import { Line, Radar } from 'react-chartjs-2'
 import FdtdField3D from '../components/fdtd/FdtdField3D'
-import { FDTD_PRESETS, parseFdtdConfig, sanitizeFdtdConfig, serializeFdtdConfig } from '../utils/fdtdConfig'
+import { FDTD_COURTYARD, FDTD_PRESETS, parseFdtdConfig, sanitizeFdtdConfig, serializeFdtdConfig } from '../utils/fdtdConfig'
 import { EMPTY_FDTD_ANALYSIS, readFdtdAnalysis } from '../utils/fdtdAnalysis'
 import { loadFdtdBackend } from '../utils/fdtdBackend'
 import { renderFdtdFrame } from '../utils/fdtdRenderer'
@@ -26,6 +26,7 @@ const FIELD_OPTIONS = {
   er: { label: 'Er', cartesianLabel: 'Ex', method: 'electric_r_snapshot', volumeKind: 2 },
   emagnitude: { label: '|E|', cartesianLabel: '|E|', method: 'electric_magnitude_snapshot', volumeKind: 3 }
 }
+const isCartesianAntenna = antennaType => antennaType === 'yagi' || antennaType === 'courtyard'
 
 const referenceLinesPlugin = {
   id: 'fdtdReferenceLines',
@@ -90,7 +91,7 @@ function FdtdSimulator() {
     if (!simulation) return
     const fieldOption = FIELD_OPTIONS[fieldKind]
     const field = simulation[fieldOption.method]()
-    const cartesian = appliedConfig.antennaType === 'yagi'
+    const cartesian = isCartesianAntenna(appliedConfig.antennaType)
     const frame = {
       field,
       metal: geometryRef.current.metal,
@@ -121,14 +122,17 @@ function FdtdSimulator() {
       gridX: cartesian ? simulation.nx() : null,
       gridY: cartesian ? simulation.depth() : null,
       gridZ: cartesian ? simulation.ny() : null,
-      conductorPoints: cartesian ? geometryRef.current.conductorPoints : null
+      conductorPoints: cartesian ? geometryRef.current.conductorPoints : null,
+      sceneGeometry: cartesian ? geometryRef.current.sceneGeometry : null
     })
   }, [appliedConfig.absorberCells, appliedConfig.antennaType, fieldKind, viewMode])
 
   const createSimulation = useCallback((nextConfig) => {
     if (!backendRef.current) return
     const safe = sanitizeFdtdConfig(nextConfig)
-    const SimulationClass = safe.antennaType === 'yagi' ? backendRef.current.Simulation3d : backendRef.current.Simulation
+    const cartesian = isCartesianAntenna(safe.antennaType)
+    const SimulationClass = cartesian ? backendRef.current.Simulation3d : backendRef.current.Simulation
+    const antennaKind = safe.antennaType === 'monopole' ? 1 : safe.antennaType === 'yagi' ? 2 : safe.antennaType === 'courtyard' ? 3 : 0
     simulationRef.current = new SimulationClass(
       safe.nx,
       safe.ny,
@@ -142,12 +146,14 @@ function FdtdSimulator() {
       safe.pmlKappaMax,
       safe.pmlAlphaMax,
       safe.wireRadiusCells,
-      safe.antennaType === 'monopole' ? 1 : 0
+      antennaKind,
+      safe.depthCells
     )
     geometryRef.current = {
       metal: simulationRef.current.metal_snapshot(),
       material: simulationRef.current.material_snapshot(),
-      conductorPoints: safe.antennaType === 'yagi' ? simulationRef.current.conductor_points() : null
+      conductorPoints: cartesian ? simulationRef.current.conductor_points() : null,
+      sceneGeometry: cartesian && typeof simulationRef.current.scene_geometry === 'function' ? simulationRef.current.scene_geometry() : null
     }
     setAppliedConfig(safe)
     setConfig(safe)
@@ -300,7 +306,8 @@ function FdtdSimulator() {
   const timeNs = stats.steps * timeStep * 1000 / (appliedConfig.wavelengthCells * appliedConfig.frequencyMHz)
   const wavelengthMetres = C_METRES_PER_MICROSECOND / appliedConfig.frequencyMHz
   const dipoleLengthMetres = wavelengthMetres * appliedConfig.dipoleFraction
-  const cartesian = appliedConfig.antennaType === 'yagi'
+  const cartesian = isCartesianAntenna(appliedConfig.antennaType)
+  const courtyard = appliedConfig.antennaType === 'courtyard'
   const fieldLabel = cartesian ? FIELD_OPTIONS[fieldKind].cartesianLabel : FIELD_OPTIONS[fieldKind].label
   const theoreticalDirectivity = appliedConfig.antennaType === 'monopole' && appliedConfig.dipoleFraction < 0.4
     ? 'ideal 5,15'
@@ -316,7 +323,11 @@ function FdtdSimulator() {
     ...(hasResonance ? [{ axis: 'x', value: analysis.resonancePlotIndex, color: '#bf616a' }] : []),
     ...(showHalfWaveReference ? [{ axis: 'y', value: 73, color: '#78849a', dash: [3, 4] }] : [])
   ]
-  const currentReferenceLabel = appliedConfig.antennaType === 'monopole' ? 'cos(πz/2L)' : 'cos(πz/L)'
+  const currentReferenceLabel = appliedConfig.antennaType === 'monopole'
+    ? 'cos(πz/2L)'
+    : courtyard
+      ? 'cos(πs/2L)'
+      : 'cos(πz/L)'
   const polarData = {
     labels: ANGLES.map(angle => `${angle}°`),
     datasets: [{
@@ -395,14 +406,20 @@ function FdtdSimulator() {
               {presetId === 'custom' && <option value="custom">Configuración personalizada</option>}
             </select>
             <p className="fdtd-control-help">{config.description || 'Parámetros cargados desde un archivo JSON.'}</p>
+            {config.antennaType === 'courtyard' && <div className="fdtd-geometry-summary" aria-label="Geometría del patio">
+              <div><span>Planta</span><strong>{FDTD_COURTYARD.longSideMetres} × {FDTD_COURTYARD.shortSideMetres} m</strong></div>
+              <div><span>Hilo</span><strong>{FDTD_COURTYARD.wireLengthMetres} m · h = {FDTD_COURTYARD.wireHeightMetres} m</strong></div>
+              <div><span>Separación de A</span><strong>{FDTD_COURTYARD.wireOffsetMetres.toFixed(2)} m</strong></div>
+              <div><span>Altura total</span><strong>{FDTD_COURTYARD.wireHeightMetres + FDTD_COURTYARD.heightAboveWireMetres} m</strong></div>
+            </div>}
           </div>
 
           <div className="fdtd-control-section fdtd-grid-fields">
-            <label><span>Frecuencia nominal</span><input type="number" value={config.frequencyMHz} min="0.1" max="100000" step="0.1" onChange={e => changeConfig('frequencyMHz', e.target.value)} /><small>MHz</small></label>
-            <label><span>Resolución</span><input type="number" value={config.wavelengthCells} min="18" max="100" onChange={e => changeConfig('wavelengthCells', e.target.value)} /><small>celdas / λ</small></label>
-            <label><span>Longitud del elemento</span><input type="number" value={config.dipoleFraction} min="0.1" max="1.8" step="0.01" disabled={config.antennaType === 'yagi'} onChange={e => changeConfig('dipoleFraction', e.target.value)} /><small>fracción de λ₀</small></label>
-            <label><span>Radio del hilo</span><input type="number" value={config.wireRadiusCells} min="1" max="6" onChange={e => changeConfig('wireRadiusCells', e.target.value)} /><small>celdas</small></label>
-            <label><span>Espesor CPML</span><input type="number" value={config.absorberCells} min="8" max="48" onChange={e => changeConfig('absorberCells', e.target.value)} /><small>celdas</small></label>
+            <label><span>Frecuencia nominal</span><input type="number" value={config.frequencyMHz} min="0.1" max="100000" step="0.1" disabled={config.antennaType === 'courtyard'} onChange={e => changeConfig('frequencyMHz', e.target.value)} /><small>MHz</small></label>
+            <label><span>Resolución</span><input type="number" value={config.wavelengthCells} min="18" max="100" disabled={config.antennaType === 'courtyard'} onChange={e => changeConfig('wavelengthCells', e.target.value)} /><small>celdas / λ</small></label>
+            <label><span>Longitud del elemento</span><input type="number" value={config.dipoleFraction} min="0.1" max="1.8" step="0.01" disabled={config.antennaType === 'yagi' || config.antennaType === 'courtyard'} onChange={e => changeConfig('dipoleFraction', e.target.value)} /><small>fracción de λ₀</small></label>
+            <label><span>Radio del hilo</span><input type="number" value={config.wireRadiusCells} min="1" max="6" disabled={config.antennaType === 'courtyard'} onChange={e => changeConfig('wireRadiusCells', e.target.value)} /><small>celdas</small></label>
+            <label><span>Espesor CPML</span><input type="number" value={config.absorberCells} min="8" max="48" disabled={config.antennaType === 'courtyard'} onChange={e => changeConfig('absorberCells', e.target.value)} /><small>celdas</small></label>
             <label><span>Pasos por fotograma</span><input type="number" value={config.stepsPerFrame} min="1" max="16" onChange={e => changeConfig('stepsPerFrame', e.target.value)} /><small>Δt / frame</small></label>
           </div>
 
@@ -412,7 +429,8 @@ function FdtdSimulator() {
               <button className={config.sourceType === 'pulse' ? 'active' : ''} onClick={() => changeConfig('sourceType', 'pulse')}>Pulso</button>
               <button className={config.sourceType === 'continuous' ? 'active' : ''} onClick={() => changeConfig('sourceType', 'continuous')}>Continua</button>
             </div>
-            {config.antennaType !== 'yagi' && <label className="fdtd-check"><input type="checkbox" checked={config.dielectric} onChange={e => changeConfig('dielectric', e.target.checked)} /><span>Anillo dieléctrico εr = 4</span></label>}
+            {!isCartesianAntenna(config.antennaType) && <label className="fdtd-check"><input type="checkbox" checked={config.dielectric} onChange={e => changeConfig('dielectric', e.target.checked)} /><span>Anillo dieléctrico εr = 4</span></label>}
+            {config.antennaType === 'courtyard' && <p className="fdtd-material-note">Paredes y suelo: hormigón homogéneo sin pérdidas, εr = {FDTD_COURTYARD.wallRelativePermittivity}. Paso espacial: {FDTD_COURTYARD.spatialStepMetres.toFixed(2)} m; por redondeo, el lado de 15 m y la coronación se representan como 15,2 m y 35,2 m.</p>}
           </div>
 
           <button className="fdtd-apply" onClick={() => createSimulation(config)} disabled={!backendReady}><i className="bi bi-arrow-repeat" /> Aplicar y reiniciar</button>
@@ -430,7 +448,7 @@ function FdtdSimulator() {
             <div className="fdtd-field-selector" role="group" aria-label="Componente del campo">
               {Object.entries(FIELD_OPTIONS).map(([key, option]) => <button key={key} className={fieldKind === key ? 'active' : ''} onClick={() => setFieldKind(key)}>{cartesian ? option.cartesianLabel : option.label}</button>)}
             </div>
-            <span>{viewMode === 'slice' ? 'Plano central x–z' : cartesian ? 'Malla cartesiana completa' : 'Revolución alrededor del eje'}</span>
+            <span>{viewMode === 'slice' ? courtyard ? 'Plano x–z que contiene el hilo' : 'Plano central x–z' : cartesian ? 'Malla cartesiana completa' : 'Revolución alrededor del eje'}</span>
           </div>
           <div className={`fdtd-canvas-wrap ${viewMode !== 'slice' ? 'fdtd-view-hidden' : ''}`}>
             <canvas ref={canvasRef} width="960" height="600" aria-label={`Corte central del campo ${fieldLabel}`} />
@@ -455,7 +473,7 @@ function FdtdSimulator() {
             <div><span>Tiempo simulado</span><strong>{timeNs.toFixed(2)} ns</strong></div>
             <div><span>Longitud física</span><strong>{dipoleLengthMetres >= 1 ? `${dipoleLengthMetres.toFixed(3)} m` : `${(dipoleLengthMetres * 100).toFixed(2)} cm`}</strong></div>
             <div><span>Energía relativa</span><strong>{stats.energy.toExponential(2)}</strong></div>
-            <div><span>{cartesian ? 'Malla cartesiana' : 'Malla axisimétrica'}</span><strong>{cartesian ? `${appliedConfig.nx} × ${appliedConfig.nx} × ${appliedConfig.ny}` : `${Math.floor(appliedConfig.nx / 2) + 1} × ${appliedConfig.ny}`}</strong></div>
+            <div><span>{cartesian ? 'Malla cartesiana' : 'Malla axisimétrica'}</span><strong>{cartesian ? `${appliedConfig.nx} × ${appliedConfig.depthCells} × ${appliedConfig.ny}` : `${Math.floor(appliedConfig.nx / 2) + 1} × ${appliedConfig.ny}`}</strong></div>
           </div>
         </section>
       </div>
@@ -470,7 +488,7 @@ function FdtdSimulator() {
 
       {appliedConfig.sourceType !== 'pulse' && <div className="fdtd-analysis-notice"><i className="bi bi-info-circle" /> Onda continua: Zin y S11 se muestran únicamente en f₀. La resonancia y el espectro completo requieren excitación por pulso.</div>}
       {!analysis.ready && <div className="fdtd-analysis-notice"><i className="bi bi-hourglass-split" /> Acumulando señal: {analysis.elapsedCycles.toFixed(1)} de {analysis.requiredCycles} ciclos mínimos. Las curvas permanecen ocultas hasta alcanzar un registro estable.</div>}
-      {cartesian && <div className="fdtd-analysis-notice"><i className="bi bi-info-circle" /> La Yagi usa el núcleo cartesiano 3D experimental. Refina la malla y aumenta el tiempo antes de utilizar Zin o la directividad como valores cuantitativos.</div>}
+      {cartesian && <div className="fdtd-analysis-notice"><i className="bi bi-info-circle" /> {courtyard ? 'El patio usa el núcleo cartesiano 3D experimental. El hormigón se aproxima como dieléctrico homogéneo sin pérdidas; Zin y directividad requieren especial cautela por la alimentación junto al muro.' : 'La Yagi usa el núcleo cartesiano 3D experimental. Refina la malla y aumenta el tiempo antes de utilizar Zin o la directividad como valores cuantitativos.'}</div>}
 
       <section className="fdtd-analysis-grid" aria-label="Caracterización de la antena">
         <article className="fdtd-analysis-card">
@@ -493,21 +511,21 @@ function FdtdSimulator() {
 
         <article className="fdtd-analysis-card">
           <div className="fdtd-analysis-heading"><div><span>Corriente superficial</span><h2>Distribución sobre el hilo</h2></div><strong>{hasResonance ? 'fres' : 'f₀'}</strong></div>
-          <div className="fdtd-chart"><Line data={currentData} options={{ ...commonChartOptions, scales: { ...cartesianScales('z / L', '|I| normalizada'), y: { ...cartesianScales('', '|I| normalizada').y, min: 0, max: 1.08 } } }} /></div>
-          <p>La corriente procede de la circulación del campo magnético alrededor del conductor. La referencia cosenoidal se adapta al dipolo o al monopolo y no se impone al cálculo.</p>
+          <div className="fdtd-chart"><Line data={currentData} options={{ ...commonChartOptions, scales: { ...cartesianScales(courtyard ? 's / L' : 'z / L', '|I| normalizada'), y: { ...cartesianScales('', '|I| normalizada').y, min: 0, max: 1.08 } } }} /></div>
+          <p>La corriente procede de la circulación del campo magnético alrededor del conductor. La referencia cosenoidal se adapta a la alimentación central o en extremo y no se impone al cálculo.</p>
         </article>
 
         <article className="fdtd-analysis-card fdtd-analysis-wide">
           <div className="fdtd-analysis-heading"><div><span>Integral de radiación</span><h2>Diagrama polar del plano E</h2></div><strong>{analysis.ready ? `${analysis.directivity.toFixed(3)} · ${analysis.directivityDb.toFixed(2)} dBi` : 'Acumulando…'}</strong></div>
           <div className="fdtd-chart fdtd-polar-chart"><Radar data={polarData} options={{ ...commonChartOptions, scales: { r: { min: -40, max: 0, ticks: { color: '#78849a', stepSize: 10, backdropColor: 'transparent' }, grid: { color: 'rgba(120,132,154,.24)' }, angleLines: { color: 'rgba(120,132,154,.18)' }, pointLabels: { color: '#78849a', font: { size: 9 }, callback: (_, index) => index % 9 === 0 ? `${ANGLES[index]}°` : '' } } } }} /></div>
-          <p>Escala de potencia de −40 a 0 dB. El campo lejano integra la corriente compleja de todos los elementos; la Yagi utiliza la distribución inducida calculada por la malla cartesiana 3D.</p>
+          <p>Escala de potencia de −40 a 0 dB. El campo lejano integra la corriente compleja de los conductores. En el patio, esta estimación usa la corriente del hilo y no sustituye una integral de campo lejano que incluya las pérdidas reales del edificio.</p>
         </article>
       </section>
 
       <section className="fdtd-notes">
-        <div><span>01</span><h2>Dos núcleos 3D</h2><p>Dipolos, verticales e hilos rectos usan Er, Ez y Hφ en r–z. La Yagi cambia a Ex, Ey, Ez, Hx, Hy y Hz sobre una malla cartesiana para conservar reflector y directores como varillas.</p></div>
-        <div><span>02</span><h2>Frontera abierta</h2><p>La CPML absorbe en ambos extremos de z y en el radio exterior. r = 0 es el eje de simetría y utiliza la actualización especial del operador cilíndrico.</p></div>
-        <div><span>03</span><h2>Alcance del modelo</h2><p>Los resultados dependen de la resolución, el radio discretizado, el gap y el tiempo. La Yagi es más lenta; el modelo incluye cuatro elementos libres, sin boom conductor, balun, mástil ni suelo real.</p></div>
+        <div><span>01</span><h2>Dos núcleos 3D</h2><p>Dipolos y verticales usan Er, Ez y Hφ en r–z. La Yagi y el patio cambian a Ex, Ey, Ez, Hx, Hy y Hz sobre una malla cartesiana que conserva su geometría completa.</p></div>
+        <div><span>02</span><h2>Frontera abierta</h2><p>La CPML rodea las mallas cartesianas en x, y y z. En la malla axisimétrica absorbe en z y en el radio exterior; r = 0 utiliza la actualización cilíndrica especial.</p></div>
+        <div><span>03</span><h2>Alcance del modelo</h2><p>Los resultados dependen de la resolución, el radio discretizado, el gap y el tiempo. El patio usa paredes y suelo homogéneos con εr = 5, sin conductividad, ventanas, forjados, mobiliario ni terreno estratificado.</p></div>
       </section>
     </div>
   )
