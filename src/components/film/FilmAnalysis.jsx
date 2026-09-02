@@ -101,6 +101,7 @@ export default function FilmAnalysis({ calibration }) {
   const [orientationText, setOrientationText] = useState('')
   const [dicomError, setDicomError] = useState('')
   const intensityBasis = calibration?.responseBasis === RESPONSE_BASIS_INTENSITY
+  const hasLateralCorrection = Boolean(calibration?.lateralCorrection)
 
   useEffect(() => () => workerRef.current?.terminate(), [])
   useEffect(() => {
@@ -240,6 +241,7 @@ export default function FilmAnalysis({ calibration }) {
   const invalidCount = result ? countFlags(result.invalid) : 0
   const outCount = result ? countFlags(result.outOfRange) : 0
   const saturatedCount = result ? countFlags(result.saturated) : 0
+  const lateralCount = result ? countFlags(result.lateralOutOfRange) : 0
   const totalPixels = result ? result.width * result.height : 0
   const methodLabel = FILM_ANALYSIS_METHODS.find((entry) => entry.id === method)?.label
 
@@ -247,8 +249,10 @@ export default function FilmAnalysis({ calibration }) {
     <section className="film-section">
       <div className="film-section-heading">
         <div><h2>Analizar película</h2><p>Calibración activa: <strong>{calibration.name}</strong> · rango {calibration.doseRangeGy[0].toFixed(2)}–{calibration.doseRangeGy[1].toFixed(2)} Gy · {intensityBasis ? 'intensidad RGB' : 'netOD'}.</p></div>
-        <span className={`film-status ${calibration.validation?.valid ? 'ok' : 'warn'}`}>{calibration.validation?.valid ? 'Calibración verificada internamente' : 'Calibración con advertencias'}</span>
+        <span className={`film-status ${calibration.validation?.valid && hasLateralCorrection ? 'ok' : 'warn'}`}>{calibration.validation?.valid && hasLateralCorrection ? `Corrección lateral ${calibration.lateralCorrection.axis.toUpperCase()}` : 'Calibración no utilizable'}</span>
       </div>
+
+      {!hasLateralCorrection && <div className="film-alert error"><i className="bi bi-exclamation-triangle" />Esta calibración es anterior a la corrección lateral obligatoria. Se conserva para poder exportarla o eliminarla, pero no se permite analizar dosis con ella.</div>}
 
       <div className="film-analysis-inputs">
         <div className="film-upload-card">
@@ -275,7 +279,7 @@ export default function FilmAnalysis({ calibration }) {
 
       <div className="film-run-bar">
         <label><span>Método</span><select value={method} onChange={(event) => { setMethod(event.target.value); setResult(null) }}>{FILM_ANALYSIS_METHODS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}</select></label>
-        {busy ? <button type="button" className="film-button danger" onClick={stop}><i className="bi bi-stop-circle" /> Cancelar</button> : <button type="button" className="film-button" onClick={run} disabled={!measurementFiles.length}><i className="bi bi-play-fill" /> Calcular dosis</button>}
+        {busy ? <button type="button" className="film-button danger" onClick={stop}><i className="bi bi-stop-circle" /> Cancelar</button> : <button type="button" className="film-button" onClick={run} disabled={!measurementFiles.length || !hasLateralCorrection}><i className="bi bi-play-fill" /> Calcular dosis</button>}
       </div>
       {busy && <div className="film-progress"><div style={{ width: `${Math.round(progress * 100)}%` }} /><span>{Math.round(progress * 100)} %</span></div>}
       {error && <div className="film-alert error"><i className="bi bi-exclamation-triangle" />{error}</div>}
@@ -289,6 +293,7 @@ export default function FilmAnalysis({ calibration }) {
             <div><span>Rango</span><strong>{finite(result.statistics.minGy)}–{finite(result.statistics.maxGy)} Gy</strong></div>
             <div className={outCount ? 'warn' : ''}><span>Fuera de calibración</span><strong>{outCount.toLocaleString('es-ES')} ({finite(outCount / totalPixels * 100, 1)} %)</strong></div>
             <div className={saturatedCount ? 'warn' : ''}><span>Saturados</span><strong>{saturatedCount.toLocaleString('es-ES')}</strong></div>
+            <div className={lateralCount ? 'warn' : ''}><span>Fuera de corrección lateral</span><strong>{lateralCount.toLocaleString('es-ES')} ({finite(lateralCount / totalPixels * 100, 1)} %)</strong></div>
             <div className={invalidCount ? 'error' : ''}><span>No válidos</span><strong>{invalidCount.toLocaleString('es-ES')}</strong></div>
           </div>
           <div className="film-map-grid">

@@ -30,7 +30,8 @@ export default function FilmDosimetry() {
   const refresh = async (preferredId) => {
     const records = await listFilmCalibrations()
     const storedId = preferredId ?? getActiveCalibrationId()
-    const nextId = records.some((record) => record.id === storedId) ? storedId : (records[0]?.id || '')
+    const usableRecords = records.filter((record) => record.lateralCorrection)
+    const nextId = usableRecords.some((record) => record.id === storedId) ? storedId : (usableRecords[0]?.id || '')
     setCalibrations(records)
     setActiveId(nextId)
     setActiveCalibrationId(nextId)

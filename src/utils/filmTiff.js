@@ -1,4 +1,5 @@
 import { decode } from 'tiff'
+import { correctLateralValue, LATERAL_AXES } from './filmLateralCorrection.js'
 
 const RGB_PHOTOMETRIC = 2
 const UNSIGNED_INTEGER = 1
@@ -199,15 +200,73 @@ export function averageImages(images) {
   }
 }
 
-export function extractRoiRgb(image, roi) {
+export function extractRoiRgb(image, roi, lateralCorrection = null) {
   const area = resolveRoi(image, roi)
   const output = new Float64Array(area.width * area.height * 3)
   let target = 0
   for (let row = 0; row < area.height; row++) {
-    const start = ((area.y + row) * image.width + area.x) * 3
-    for (let index = 0; index < area.width * 3; index++) output[target++] = image.data[start + index]
+    const y = area.y + row
+    for (let column = 0; column < area.width; column++) {
+      const x = area.x + column
+      const start = (y * image.width + x) * 3
+      for (let channel = 0; channel < 3; channel++) {
+        output[target++] = correctLateralValue(image.data[start + channel], channel, x, y, image.width, image.height, lateralCorrection)
+      }
+    }
   }
   return { data: output, roi: area }
+}
+
+function profileCenterMean(samples, channel) {
+  const ordered = samples.slice().sort((left, right) => Math.abs(left.u) - Math.abs(right.u))
+  const selected = ordered.slice(0, Math.max(3, Math.min(9, ordered.length)))
+  return selected.reduce((sum, sample) => sum + sample.rgb[channel], 0) / selected.length
+}
+
+/**
+ * Extrae un perfil RGB sin filtrado. Cada punto es la media ortogonal de la
+ * banda seleccionada y conserva su coordenada absoluta dentro del escaneo.
+ */
+export function extractLateralProfile(image, roi, axis = 'x') {
+  if (!LATERAL_AXES.includes(axis)) throw new Error('El eje lateral debe ser X o Y.')
+  const area = resolveRoi(image, roi)
+  const axisStart = axis === 'x' ? area.x : area.y
+  const axisCount = axis === 'x' ? area.width : area.height
+  const axisLength = axis === 'x' ? image.width : image.height
+  const orthogonalCount = axis === 'x' ? area.height : area.width
+  const samples = []
+
+  for (let offset = 0; offset < axisCount; offset++) {
+    const position = axisStart + offset
+    const sums = [0, 0, 0]
+    for (let cross = 0; cross < orthogonalCount; cross++) {
+      const x = axis === 'x' ? position : area.x + cross
+      const y = axis === 'x' ? area.y + cross : position
+      const source = (y * image.width + x) * 3
+      sums[0] += image.data[source]
+      sums[1] += image.data[source + 1]
+      sums[2] += image.data[source + 2]
+    }
+    samples.push({
+      u: 2 * ((position + 0.5) / axisLength - 0.5),
+      rgb: sums.map((value) => value / orthogonalCount / 65535)
+    })
+  }
+
+  const minimum = samples[0]?.u
+  const maximum = samples.at(-1)?.u
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || minimum >= 0 || maximum <= 0) {
+    throw new Error(`${image.name}: la ROI lateral debe atravesar el centro del escaneo.`)
+  }
+  return {
+    imageName: image.name,
+    axis,
+    axisLength,
+    area,
+    range: [minimum, maximum],
+    samples,
+    centerRgb: [0, 1, 2].map((channel) => profileCenterMean(samples, channel))
+  }
 }
 
 export function rgbStats(interleaved) {
@@ -280,8 +339,8 @@ function finishRgbAccumulator(accumulator) {
   }
 }
 
-function independentRoiStats(images, rois) {
-  const imageStats = images.map((image, index) => rgbStats(extractRoiRgb(image, rois[index]).data))
+function independentRoiStats(images, rois, lateralCorrection = null) {
+  const imageStats = images.map((image, index) => rgbStats(extractRoiRgb(image, rois[index], lateralCorrection).data))
   const mean = [0, 0, 0]
   for (const stats of imageStats) {
     for (let channel = 0; channel < 3; channel++) mean[channel] += stats.mean[channel] / imageStats.length
@@ -308,11 +367,32 @@ function independentRoiStats(images, rois) {
   }
 }
 
-function resolveImageRois(images, roiOrRois) {
+function restrictAreaToLateralRange(image, area, lateralCorrection) {
+  if (!lateralCorrection) return area
+  const axis = lateralCorrection.axis
+  const length = axis === 'x' ? image.width : image.height
+  const areaStart = axis === 'x' ? area.x : area.y
+  const areaCount = axis === 'x' ? area.width : area.height
+  const [minimumU, maximumU] = lateralCorrection.validRangeNormalized
+  const allowedStart = Math.ceil(((minimumU + 1) * length / 2) - 0.5 - 1e-9)
+  const allowedEnd = Math.floor(((maximumU + 1) * length / 2) - 0.5 + 1e-9) + 1
+  const start = Math.max(areaStart, allowedStart)
+  const end = Math.min(areaStart + areaCount, allowedEnd)
+  if (end <= start) throw new Error(`${image.name}: la ROI no contiene píxeles dentro del intervalo de corrección lateral.`)
+  return axis === 'x'
+    ? { ...area, x: start, width: end - start, fullImage: false }
+    : { ...area, y: start, height: end - start, fullImage: false }
+}
+
+function resolveImageRois(images, roiOrRois, lateralCorrection = null) {
   const requested = Array.isArray(roiOrRois)
     ? images.map((_, index) => roiOrRois[index] || null)
     : images.map(() => roiOrRois || null)
-  return requested.map((roi, index) => resolveRoi(images[index], roi))
+  return requested.map((roi, index) => restrictAreaToLateralRange(
+    images[index],
+    resolveRoi(images[index], roi),
+    lateralCorrection
+  ))
 }
 
 function sameRoiDimensions(areas) {
@@ -329,12 +409,12 @@ function normalizedRgbStats(stats) {
   }
 }
 
-export function singleExposureRoi(images, roiOrRois) {
+export function singleExposureRoi(images, roiOrRois, { lateralCorrection = null } = {}) {
   if (!images?.length) throw new Error('No hay escaneos de calibración.')
-  const areas = resolveImageRois(images, roiOrRois)
+  const areas = resolveImageRois(images, roiOrRois, lateralCorrection)
 
   if (!sameRoiDimensions(areas)) {
-    const exposedStats = independentRoiStats(images, areas)
+    const exposedStats = independentRoiStats(images, areas, lateralCorrection)
     return { roi: areas[0], rois: areas, exposed: exposedStats, response: normalizedRgbStats(exposedStats), aggregation: 'equal-image-roi-stats' }
   }
 
@@ -351,9 +431,11 @@ export function singleExposureRoi(images, roiOrRois) {
         const image = images[imageIndex]
         const imageArea = areas[imageIndex]
         const index = ((imageArea.y + row) * image.width + imageArea.x + column) * 3
-        value0 += image.data[index] * imageWeight
-        value1 += image.data[index + 1] * imageWeight
-        value2 += image.data[index + 2] * imageWeight
+        const x = imageArea.x + column
+        const y = imageArea.y + row
+        value0 += correctLateralValue(image.data[index], 0, x, y, image.width, image.height, lateralCorrection) * imageWeight
+        value1 += correctLateralValue(image.data[index + 1], 1, x, y, image.width, image.height, lateralCorrection) * imageWeight
+        value2 += correctLateralValue(image.data[index + 2], 2, x, y, image.width, image.height, lateralCorrection) * imageWeight
       }
       addRgbSample(exposed, value0, value1, value2)
     }
@@ -363,7 +445,7 @@ export function singleExposureRoi(images, roiOrRois) {
   return { roi: area, rois: areas, exposed: exposedStats, response: normalizedRgbStats(exposedStats), aggregation: 'pixelwise-local-roi' }
 }
 
-export function pairedNetOdRoi(baselineImages, exposedImages, roiOrRois) {
+export function pairedNetOdRoi(baselineImages, exposedImages, roiOrRois, { lateralCorrection = null } = {}) {
   if (!baselineImages?.length) throw new Error('No hay escaneos pre.')
   if (!exposedImages?.length) throw new Error('No hay escaneos post.')
   const baselineRois = roiOrRois && !Array.isArray(roiOrRois) && Array.isArray(roiOrRois.baseline)
@@ -372,13 +454,13 @@ export function pairedNetOdRoi(baselineImages, exposedImages, roiOrRois) {
   const exposedRois = roiOrRois && !Array.isArray(roiOrRois) && Array.isArray(roiOrRois.exposed)
     ? roiOrRois.exposed
     : roiOrRois
-  const baselineAreas = resolveImageRois(baselineImages, baselineRois)
-  const exposedAreas = resolveImageRois(exposedImages, exposedRois)
+  const baselineAreas = resolveImageRois(baselineImages, baselineRois, lateralCorrection)
+  const exposedAreas = resolveImageRois(exposedImages, exposedRois, lateralCorrection)
   const allAreas = [...baselineAreas, ...exposedAreas]
 
   if (!sameRoiDimensions(allAreas)) {
-    const baseline = independentRoiStats(baselineImages, baselineAreas)
-    const exposed = independentRoiStats(exposedImages, exposedAreas)
+    const baseline = independentRoiStats(baselineImages, baselineAreas, lateralCorrection)
+    const exposed = independentRoiStats(exposedImages, exposedAreas, lateralCorrection)
     const mean = baseline.mean.map((value, channel) => Math.log10(Math.max(1, value) / Math.max(1, exposed.mean[channel])))
     const covariance = Array.from({ length: 3 }, () => [0, 0, 0])
     const scale = 1 / (Math.LN10 * Math.LN10)
@@ -414,17 +496,21 @@ export function pairedNetOdRoi(baselineImages, exposedImages, roiOrRois) {
         const image = baselineImages[imageIndex]
         const imageArea = baselineAreas[imageIndex]
         const index = ((imageArea.y + row) * image.width + imageArea.x + column) * 3
-        baseline0 += image.data[index] / baselineImages.length
-        baseline1 += image.data[index + 1] / baselineImages.length
-        baseline2 += image.data[index + 2] / baselineImages.length
+        const x = imageArea.x + column
+        const y = imageArea.y + row
+        baseline0 += correctLateralValue(image.data[index], 0, x, y, image.width, image.height, lateralCorrection) / baselineImages.length
+        baseline1 += correctLateralValue(image.data[index + 1], 1, x, y, image.width, image.height, lateralCorrection) / baselineImages.length
+        baseline2 += correctLateralValue(image.data[index + 2], 2, x, y, image.width, image.height, lateralCorrection) / baselineImages.length
       }
       for (let imageIndex = 0; imageIndex < exposedImages.length; imageIndex++) {
         const image = exposedImages[imageIndex]
         const imageArea = exposedAreas[imageIndex]
         const index = ((imageArea.y + row) * image.width + imageArea.x + column) * 3
-        exposed0 += image.data[index] / exposedImages.length
-        exposed1 += image.data[index + 1] / exposedImages.length
-        exposed2 += image.data[index + 2] / exposedImages.length
+        const x = imageArea.x + column
+        const y = imageArea.y + row
+        exposed0 += correctLateralValue(image.data[index], 0, x, y, image.width, image.height, lateralCorrection) / exposedImages.length
+        exposed1 += correctLateralValue(image.data[index + 1], 1, x, y, image.width, image.height, lateralCorrection) / exposedImages.length
+        exposed2 += correctLateralValue(image.data[index + 2], 2, x, y, image.width, image.height, lateralCorrection) / exposedImages.length
       }
       addRgbSample(accumulators[0], baseline0, baseline1, baseline2)
       addRgbSample(accumulators[1], exposed0, exposed1, exposed2)

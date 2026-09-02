@@ -3,7 +3,7 @@ import CalibrationRoiSelector from './CalibrationRoiSelector.jsx'
 
 const DEFAULT_ROI = { mode: 'relative', x: 0.25, y: 0.25, width: 0.5, height: 0.5 }
 
-export default function CalibrationImageRois({ label, files, rois, onChange, copyLabel = '', onCopy }) {
+export default function CalibrationImageRois({ label, files, rois, onChange, copyLabel = '', onCopy, lateralAxis = 'x' }) {
   const [activeIndex, setActiveIndex] = useState(0)
 
   useEffect(() => {
@@ -48,6 +48,7 @@ export default function CalibrationImageRois({ label, files, rois, onChange, cop
         enabled={Boolean(activeRoi)}
         roi={activeRoi || DEFAULT_ROI}
         previewRole="imagen"
+        lateralAxis={lateralAxis}
         onEnabledChange={(enabled) => updateRoi(enabled ? { ...DEFAULT_ROI } : null)}
         onChange={updateRoi}
       />

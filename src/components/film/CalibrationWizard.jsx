@@ -1,7 +1,8 @@
 import { Fragment, useMemo, useRef, useState } from 'react'
 import { buildFilmCalibration, RESPONSE_BASIS_INTENSITY, RESPONSE_BASIS_NET_OD } from '../../utils/filmCalibration.js'
 import { verifyCalibrationPoints } from '../../utils/filmAnalysis.js'
-import { copyCalibrationRoiToPost, pairedNetOdRoi, readRgb16TiffFiles, singleExposureRoi } from '../../utils/filmTiff.js'
+import { fitLateralCorrection } from '../../utils/filmLateralCorrection.js'
+import { copyCalibrationRoiToPost, extractLateralProfile, pairedNetOdRoi, readRgb16TiffFiles, singleExposureRoi } from '../../utils/filmTiff.js'
 import CalibrationImageRois from './CalibrationImageRois.jsx'
 import CalibrationFitChart from './CalibrationFitChart.jsx'
 import CalibrationQualityControl from './CalibrationQualityControl.jsx'
@@ -32,6 +33,7 @@ export default function CalibrationWizard({ onCancel, onSave }) {
   const [delayHours, setDelayHours] = useState('24')
   const [doseUnit, setDoseUnit] = useState('cGy')
   const [protocol, setProtocol] = useState('matched-pre-post')
+  const [lateralAxis, setLateralAxis] = useState('x')
   const [rows, setRows] = useState(DEFAULT_DOSES_CGY.map(newRow))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -94,47 +96,18 @@ export default function CalibrationWizard({ onCancel, onSave }) {
     })))
   }
 
-  const calculateRowSummary = async (row) => {
+  const decodeRow = async (row) => {
     const baselineRois = row.baselineFiles.map((_, index) => row.baselineRois[index] || null)
     const exposedRois = row.exposedFiles.map((_, index) => row.exposedRois[index] || null)
     const exposed = await readRgb16TiffFiles(row.exposedFiles)
+    const baseline = pairedProtocol ? await readRgb16TiffFiles(row.baselineFiles) : []
+    return { row, baseline, exposed, baselineRois, exposedRois }
+  }
+
+  const summarizeDecodedRow = ({ baseline, exposed, baselineRois, exposedRois }, lateralCorrection) => {
     return pairedProtocol
-      ? pairedNetOdRoi(await readRgb16TiffFiles(row.baselineFiles), exposed, { baseline: baselineRois, exposed: exposedRois })
-      : singleExposureRoi(exposed, exposedRois)
-  }
-
-  const processRow = async (row) => {
-    if (!row.exposedFiles.length || (pairedProtocol && !row.baselineFiles.length)) {
-      updateRow(row.id, { error: pairedProtocol ? 'Selecciona TIFF pre y post.' : 'Selecciona al menos un TIFF.', summary: null })
-      return null
-    }
-    const processingRevision = roiRevision.current
-    updateRow(row.id, { busy: true, error: '' })
-    try {
-      const summary = await calculateRowSummary(row)
-      if (processingRevision !== roiRevision.current) {
-        updateRow(row.id, { busy: false, summary: null, error: 'El protocolo o la zona cambió durante el cálculo; vuelve a procesar este punto.' })
-        return null
-      }
-      updateRow(row.id, { busy: false, summary, error: '' })
-      return summary
-    } catch (exception) {
-      updateRow(row.id, { busy: false, summary: null, error: exception.message })
-      return null
-    }
-  }
-
-  const processAll = async () => {
-    setBusy(true)
-    setError('')
-    try {
-      for (const row of rows) {
-        const hasRequiredFiles = row.exposedFiles.length && (!pairedProtocol || row.baselineFiles.length)
-        if (hasRequiredFiles && !row.summary) await processRow(row)
-      }
-    } finally {
-      setBusy(false)
-    }
+      ? pairedNetOdRoi(baseline, exposed, { baseline: baselineRois, exposed: exposedRois }, { lateralCorrection })
+      : singleExposureRoi(exposed, exposedRois, { lateralCorrection })
   }
 
   const fitAndVerify = async () => {
@@ -142,12 +115,12 @@ export default function CalibrationWizard({ onCancel, onSave }) {
     setError('')
     try {
       const processingRevision = roiRevision.current
+      const decodedRows = []
       const processedRows = []
       const failures = []
       for (const row of configuredRows) {
         try {
-          const summary = row.summary || await calculateRowSummary(row)
-          processedRows.push({ ...row, summary, error: '', busy: false })
+          decodedRows.push(await decodeRow(row))
         } catch (exception) {
           failures.push({ id: row.id, message: exception.message })
         }
@@ -155,6 +128,22 @@ export default function CalibrationWizard({ onCancel, onSave }) {
       if (processingRevision !== roiRevision.current) {
         throw new Error('Las ROI cambiaron durante el cálculo; vuelve a ajustar y verificar.')
       }
+      const validDoseCount = new Set(decodedRows.map(({ row }) => doseInGy(row))).size
+      if (validDoseCount < 4) {
+        const detail = failures[0]?.message ? ` Primer error: ${failures[0].message}` : ''
+        throw new Error(`Solo se han podido procesar ${validDoseCount} dosis diferentes; se necesitan al menos cuatro.${detail}`)
+      }
+
+      const lateralProfiles = decodedRows.flatMap(({ baseline, exposed, baselineRois, exposedRois }) => [
+        ...exposed.map((image, index) => extractLateralProfile(image, exposedRois[index], lateralAxis)),
+        ...(pairedProtocol ? baseline.map((image, index) => extractLateralProfile(image, baselineRois[index], lateralAxis)) : [])
+      ])
+      const lateralCorrection = fitLateralCorrection(lateralProfiles, lateralAxis)
+      for (const decoded of decodedRows) {
+        const summary = summarizeDecodedRow(decoded, lateralCorrection)
+        processedRows.push({ ...decoded.row, summary, error: '', busy: false })
+      }
+
       setRows((current) => current.map((row) => {
         const processed = processedRows.find((item) => item.id === row.id)
         const failure = failures.find((item) => item.id === row.id)
@@ -162,11 +151,6 @@ export default function CalibrationWizard({ onCancel, onSave }) {
         if (failure) return { ...row, summary: null, error: failure.message, busy: false }
         return row
       }))
-      const validDoseCount = new Set(processedRows.map(doseInGy)).size
-      if (validDoseCount < 4) {
-        const detail = failures[0]?.message ? ` Primer error: ${failures[0].message}` : ''
-        throw new Error(`Solo se han podido procesar ${validDoseCount} dosis diferentes; se necesitan al menos cuatro.${detail}`)
-      }
       const baseCalibration = buildFilmCalibration({
         name,
         metadata: {
@@ -179,8 +163,10 @@ export default function CalibrationWizard({ onCancel, onSave }) {
           inputDoseUnit: doseUnit,
           protocol,
           responseBasis: pairedProtocol ? RESPONSE_BASIS_NET_OD : RESPONSE_BASIS_INTENSITY,
-          processing: 'per-image-roi'
+          processing: 'unfiltered-lateral-corrected-per-image-roi',
+          lateralAxis
         },
+        lateralCorrection,
         roi: processedRows.some((row) => [...row.baselineRois, ...row.exposedRois].some(Boolean)) ? { mode: 'per-image' } : null,
         points: processedRows.map((row) => ({
           id: row.id,
@@ -265,6 +251,19 @@ export default function CalibrationWizard({ onCancel, onSave }) {
 
       <div className="film-subsection">
         <div className="film-subsection-title">
+          <div><strong>Corrección lateral obligatoria</strong><span>Las ROI deben seguir tiras de dosis uniforme, atravesar el centro y cubrir ambos lados del eje paralelo a la lámpara.</span></div>
+        </div>
+        <div className="film-roi-mode" role="group" aria-label="Eje paralelo a la lámpara del escáner">
+          <button type="button" className={lateralAxis === 'x' ? 'active' : ''} onClick={() => changeSetting(setLateralAxis, 'x')}><i className="bi bi-arrows" /> Horizontal · X</button>
+          <button type="button" className={lateralAxis === 'y' ? 'active' : ''} onClick={() => changeSetting(setLateralAxis, 'y')}><i className="bi bi-arrows-vertical" /> Vertical · Y</button>
+        </div>
+        <div className="film-protocol-note">
+          No se aplican filtros de media ni mediana. La respuesta se corrige a la que tendría en el centro mediante un modelo afín cuadrático dependiente de posición e intensidad. Una tira que quede solo a un lado del centro no permite calcular esta corrección.
+        </div>
+      </div>
+
+      <div className="film-subsection">
+        <div className="film-subsection-title">
           <div><strong>Puntos de calibración</strong><span>Selecciona las repeticiones con Ctrl/Mayús. No se aplica registro automático entre escaneos.</span></div>
           <button type="button" className="film-button secondary" onClick={() => { setCandidateCalibration(null); setRows((current) => [...current, newRow()]) }}><i className="bi bi-plus" /> Punto</button>
         </div>
@@ -284,7 +283,6 @@ export default function CalibrationWizard({ onCancel, onSave }) {
                     ) : row.error ? <span className="film-row-error" title={row.error}>{row.error}</span> : <span className="film-muted">Pendiente</span>}
                   </td>
                   <td className="film-row-actions">
-                    <button type="button" className="film-icon-button" title="Procesar" disabled={row.busy} onClick={() => processRow(row)}><i className="bi bi-calculator" /></button>
                     <button type="button" className="film-icon-button danger" title="Quitar" onClick={() => { setCandidateCalibration(null); setRows((current) => current.filter((item) => item.id !== row.id)) }}><i className="bi bi-x-lg" /></button>
                   </td>
                 </tr>
@@ -296,11 +294,12 @@ export default function CalibrationWizard({ onCancel, onSave }) {
                           label="TIFF pre / velo"
                           files={row.baselineFiles}
                           rois={row.baselineRois}
+                          lateralAxis={lateralAxis}
                           onChange={(next) => updateImageRois(row.id, 'baseline', next)}
                           copyLabel={row.baselineFiles.length === row.exposedFiles.length ? 'Copiar ROI al TIFF post correspondiente' : 'Copiar ROI a todos los TIFF post'}
                           onCopy={row.exposedFiles.length ? (roi, index) => copyPreRoiToPost(row.id, roi, index) : null}
                         />}
-                        <CalibrationImageRois label={pairedProtocol ? 'TIFF post' : 'TIFF'} files={row.exposedFiles} rois={row.exposedRois} onChange={(next) => updateImageRois(row.id, 'exposed', next)} />
+                        <CalibrationImageRois label={pairedProtocol ? 'TIFF post' : 'TIFF'} files={row.exposedFiles} rois={row.exposedRois} lateralAxis={lateralAxis} onChange={(next) => updateImageRois(row.id, 'exposed', next)} />
                       </div>
                     </td>
                   </tr>
@@ -315,6 +314,11 @@ export default function CalibrationWizard({ onCancel, onSave }) {
       {candidateCalibration && (
         <div className="film-subsection film-calibration-fit">
           <CalibrationFitChart calibration={candidateCalibration} />
+          <div className="film-lateral-summary">
+            <strong>Corrección lateral · eje {candidateCalibration.lateralCorrection.axis.toUpperCase()}</strong>
+            <span>Cobertura validada: {candidateCalibration.lateralCorrection.validRangeNormalized.map((value) => `${(value * 50).toFixed(1)} %`).join(' a ')} respecto al centro del eje.</span>
+            <span>RMSE RGB: {candidateCalibration.lateralCorrection.channelFits.map((fit) => (fit.rmseIntensity * 65535).toFixed(1)).join(' / ')} niveles de píxel.</span>
+          </div>
         </div>
       )}
 
@@ -325,11 +329,10 @@ export default function CalibrationWizard({ onCancel, onSave }) {
         <span className={configuredDoseCount < 4 ? 'film-fit-requirement incomplete' : 'film-fit-requirement ready'}>
           {configuredDoseCount < 4
             ? `${configuredDoseCount}/4 dosis con archivos listas. Añade pre/post y una dosis válida en al menos cuatro puntos.`
-            : `${configuredDoseCount} dosis listas · ${processedCount} procesadas. Ajustar y verificar procesará automáticamente las pendientes.`}
+            : `${configuredDoseCount} dosis listas · ${processedCount} corregidas lateralmente. Ajustar y verificar recalculará todos los puntos sin filtros.`}
           {' '}{pairedProtocol ? 'Se añadirá el anclaje 0 Gy, netOD 0.' : 'El rango comenzará en la menor dosis medida.'}
         </span>
         <div>
-          <button type="button" className="film-button secondary" disabled={busy} onClick={processAll}><i className="bi bi-gear" /> Procesar disponibles</button>
           <button type="button" className="film-button secondary" disabled={!canFit || busy} onClick={fitAndVerify}><i className="bi bi-clipboard2-check" /> Ajustar y verificar</button>
           <button type="button" className="film-button" disabled={!candidateCalibration || busy} onClick={save}><i className="bi bi-save" /> Guardar calibración</button>
         </div>

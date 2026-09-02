@@ -11,7 +11,7 @@ function percentage(value) {
   return Math.round(value * 1000) / 10
 }
 
-export default function CalibrationRoiSelector({ file, enabled, roi, previewRole = 'pre', onEnabledChange, onChange }) {
+export default function CalibrationRoiSelector({ file, enabled, roi, previewRole = 'pre', onEnabledChange, onChange, lateralAxis = 'x' }) {
   const canvasRef = useRef(null)
   const dragRef = useRef(null)
   const [preview, setPreview] = useState(null)
@@ -164,6 +164,14 @@ export default function CalibrationRoiSelector({ file, enabled, roi, previewRole
             aria-label="Arrastra sobre la imagen para seleccionar la ROI"
           >
             <canvas ref={canvasRef} />
+            {[25, 50, 75].map((position) => (
+              <div
+                aria-hidden="true"
+                className={`film-lateral-guide axis-${lateralAxis}${position === 50 ? ' center' : ''}`}
+                key={position}
+                style={lateralAxis === 'x' ? { left: `${position}%` } : { top: `${position}%` }}
+              >{position === 50 && <span>Centro {lateralAxis.toUpperCase()}</span>}</div>
+            ))}
             <div
               className="film-roi-box"
               style={{
@@ -174,7 +182,7 @@ export default function CalibrationRoiSelector({ file, enabled, roi, previewRole
               }}
             ><span>ROI</span></div>
           </div>
-          <span className="film-roi-help">Arrastra sobre la previsualización o ajusta las coordenadas. Esta ROI solo se aplica al TIFF seleccionado. El contraste automático solo afecta a la previsualización.</span>
+          <span className="film-roi-help">Arrastra sobre la previsualización o ajusta las coordenadas. La ROI debe incluir las dos guías discontinuas y cruzar el centro del eje {lateralAxis.toUpperCase()}. Esta ROI solo se aplica al TIFF seleccionado; el contraste automático solo afecta a la previsualización.</span>
         </>
       ) : null}
 

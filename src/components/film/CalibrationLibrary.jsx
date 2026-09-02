@@ -64,6 +64,7 @@ export default function CalibrationLibrary({ calibrations, activeId, onUse, onDe
         <div className="film-calibration-grid">
           {calibrations.map((calibration) => {
             const active = calibration.id === activeId
+            const corrected = Boolean(calibration.lateralCorrection)
             return (
               <article key={calibration.id} className={`film-calibration-card${active ? ' active' : ''}`}>
                 <div className="film-calibration-title">
@@ -71,8 +72,8 @@ export default function CalibrationLibrary({ calibrations, activeId, onUse, onDe
                     <strong>{calibration.name}</strong>
                     <span>{calibration.metadata?.filmType || 'EBT3'} · lote {calibration.metadata?.lot || 'no indicado'}</span>
                   </div>
-                  <span className={`film-status ${calibration.validation?.valid ? 'ok' : 'warn'}`}>
-                    {calibration.validation?.valid ? 'Validación interna correcta' : 'Revisar ajuste'}
+                  <span className={`film-status ${calibration.validation?.valid && corrected ? 'ok' : 'warn'}`}>
+                    {calibration.validation?.valid && corrected ? 'Lista para análisis' : corrected ? 'Revisar ajuste' : 'Sin corrección lateral'}
                   </span>
                 </div>
                 <dl className="film-calibration-meta">
@@ -80,6 +81,7 @@ export default function CalibrationLibrary({ calibrations, activeId, onUse, onDe
                   <div><dt>Puntos</dt><dd>{calibration.points?.length || 0}</dd></div>
                   <div><dt>Zona</dt><dd>{calibration.roi?.mode === 'per-image' ? 'ROI por imagen' : calibration.roi ? 'ROI seleccionada' : 'Imagen completa'}</dd></div>
                   <div><dt>Protocolo</dt><dd>{calibration.responseBasis === 'normalized-intensity' ? 'Solo post' : 'Pre/post'}</dd></div>
+                  <div><dt>Corrección lateral</dt><dd>{corrected ? `Eje ${calibration.lateralCorrection.axis.toUpperCase()}` : 'No disponible'}</dd></div>
                   <div><dt>Escáner</dt><dd>{calibration.metadata?.scanner || '—'}</dd></div>
                   <div><dt>Resolución</dt><dd>{calibration.metadata?.dpi ? `${calibration.metadata.dpi} dpi` : '—'}</dd></div>
                   <div><dt>Actualizada</dt><dd>{dateLabel(calibration.updatedAt)}</dd></div>
@@ -93,12 +95,12 @@ export default function CalibrationLibrary({ calibrations, activeId, onUse, onDe
                 </div>
                 {expandedFitId === calibration.id && <CalibrationFitChart calibration={calibration} compact />}
                 <div className="film-card-actions">
-                  <button type="button" className="film-button" onClick={() => onUse(calibration.id)} disabled={active}>
-                    <i className={`bi ${active ? 'bi-check-circle' : 'bi-play-circle'}`} /> {active ? 'En uso' : 'Usar'}
+                  <button type="button" className="film-button" onClick={() => onUse(calibration.id)} disabled={active || !corrected} title={!corrected ? 'No puede usarse porque no contiene corrección lateral.' : ''}>
+                    <i className={`bi ${active ? 'bi-check-circle' : 'bi-play-circle'}`} /> {active ? 'En uso' : corrected ? 'Usar' : 'No utilizable'}
                   </button>
                   <button type="button" className="film-icon-button" title="Exportar" onClick={() => downloadFilmCalibration(calibration)}><i className="bi bi-download" /></button>
                   <button type="button" className="film-icon-button" title={expandedFitId === calibration.id ? 'Ocultar ajuste' : 'Ver ajuste'} onClick={() => setExpandedFitId((current) => current === calibration.id ? '' : calibration.id)}><i className={`bi ${expandedFitId === calibration.id ? 'bi-graph-down' : 'bi-graph-up'}`} /></button>
-                  <button type="button" className="film-icon-button" title="Duplicar" onClick={() => onDuplicate(calibration)}><i className="bi bi-copy" /></button>
+                  <button type="button" className="film-icon-button" title={corrected ? 'Duplicar' : 'No se puede duplicar una calibración sin corrección lateral'} disabled={!corrected} onClick={() => onDuplicate(calibration)}><i className="bi bi-copy" /></button>
                   <button type="button" className="film-icon-button danger" title="Eliminar" onClick={() => onDelete(calibration)}><i className="bi bi-trash" /></button>
                 </div>
               </article>
