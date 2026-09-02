@@ -383,6 +383,7 @@
 }
 
 .fdtd-polar-chart { height: 330px; }
+.fdtd-smith-chart { width: min(100%, 430px); height: 430px; margin-right: auto; margin-left: auto; }
 .fdtd-analysis-wide { grid-column: 1 / -1; }
 .fdtd-analysis-wide .fdtd-polar-chart { max-width: 720px; height: 420px; margin-right: auto; margin-left: auto; }
 
@@ -441,5 +442,5 @@
   .fdtd-result-strip > div:nth-child(odd) { border-left: 0; }
   .fdtd-analysis-heading { flex-direction: column; }
   .fdtd-analysis-heading > strong { text-align: left; }
-  .fdtd-chart, .fdtd-polar-chart { height: 280px; }
+  .fdtd-chart, .fdtd-polar-chart, .fdtd-smith-chart { height: 280px; }
 }

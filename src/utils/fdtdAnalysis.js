@@ -43,10 +43,16 @@ function findReactanceCrossing(ratios, resistance, reactance, valid, nominalInde
 }
 
 export function s11Db(real, imag, referenceOhms = 50) {
-  const denominator = (real + referenceOhms) ** 2 + imag ** 2
-  if (denominator <= 1e-18) return 0
-  const magnitude = Math.sqrt(((real - referenceOhms) ** 2 + imag ** 2) / denominator)
+  const { magnitude } = reflectionCoefficient(real, imag, referenceOhms)
   return 20 * Math.log10(Math.max(1e-8, magnitude))
+}
+
+export function reflectionCoefficient(real, imag, referenceOhms = 50) {
+  const denominator = (real + referenceOhms) ** 2 + imag ** 2
+  if (denominator <= 1e-18) return { real: 1, imag: 0, magnitude: 1 }
+  const gammaReal = (real ** 2 + imag ** 2 - referenceOhms ** 2) / denominator
+  const gammaImag = (2 * referenceOhms * imag) / denominator
+  return { real: gammaReal, imag: gammaImag, magnitude: Math.hypot(gammaReal, gammaImag) }
 }
 
 export function readFdtdAnalysis(simulation, config) {
@@ -58,6 +64,17 @@ export function readFdtdAnalysis(simulation, config) {
   ), 0)
   const frequencyMHz = ratios.map(ratio => ratio * config.frequencyMHz)
   const s11 = resistance.map((real, index) => s11Db(real, reactance[index]))
+  const smith = resistance.map((real, index) => {
+    const gamma = reflectionCoefficient(real, reactance[index])
+    return {
+      x: gamma.real,
+      y: gamma.imag,
+      magnitude: gamma.magnitude,
+      frequencyMHz: frequencyMHz[index],
+      resistance: real,
+      reactance: reactance[index]
+    }
+  })
   const currentSpectrum = typeof simulation.spectrum_current_magnitude === 'function'
     ? Array.from(simulation.spectrum_current_magnitude(), value => Math.max(0, finiteOr(value)))
     : ratios.map(() => 1)
@@ -103,6 +120,7 @@ export function readFdtdAnalysis(simulation, config) {
   const patternDb = linearPattern.map(value => Math.max(PATTERN_FLOOR_DB, 10 * Math.log10(Math.max(1e-4, value))))
   const directivity = finiteOr(simulation.directivity_3d_at(resonanceIndex))
   const directivityDb = directivity > 0 ? 10 * Math.log10(directivity) : 0
+  const resonanceGamma = resonanceAvailable ? reflectionCoefficient(crossing.real, 0) : null
 
   return {
     samples: simulation.measurement_count(),
@@ -114,6 +132,16 @@ export function readFdtdAnalysis(simulation, config) {
     plottedResistance: resistance.map((value, index) => validSpectrum[index] ? value : null),
     plottedReactance: reactance.map((value, index) => validSpectrum[index] ? value : null),
     plottedS11: s11.map((value, index) => validSpectrum[index] ? value : null),
+    smithPoints: smith.filter((_, index) => validSpectrum[index]),
+    smithNominalPoint: ready ? smith[nominalIndex] : null,
+    smithResonancePoint: resonanceAvailable ? {
+      ...resonanceGamma,
+      x: resonanceGamma.real,
+      y: 0,
+      frequencyMHz: config.frequencyMHz * resonanceRatio,
+      resistance: crossing.real,
+      reactance: 0
+    } : null,
     timeNs: indices.map(index => index * timeScaleNs),
     voltage: indices.map(index => normalizedVoltage[index]),
     current: indices.map(index => normalizedCurrent[index]),
@@ -148,6 +176,9 @@ export const EMPTY_FDTD_ANALYSIS = {
   plottedResistance: [],
   plottedReactance: [],
   plottedS11: [],
+  smithPoints: [],
+  smithNominalPoint: null,
+  smithResonancePoint: null,
   timeNs: [],
   voltage: [],
   current: [],

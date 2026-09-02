@@ -5,8 +5,8 @@ export const FDTD_COURTYARD = Object.freeze({
   shortSideMetres: 15,
   wireLengthMetres: 10,
   wireOffsetMetres: 0.4,
-  wireHeightMetres: 20,
-  heightAboveWireMetres: 15,
+  buildingHeightMetres: 20,
+  airAboveRoofMetres: 15,
   wallRelativePermittivity: 5,
   spatialStepMetres: 0.4
 })
@@ -154,12 +154,12 @@ export const FDTD_PRESETS = {
   },
   courtyard: {
     id: 'courtyard',
-    name: 'Patio 30 × 15 m · hilo de 10 m',
-    description: 'Hueco rectangular: hilo horizontal paralelo a A, saliendo de C, a 0,40 m de A y 20 m sobre el suelo; coronación a 35 m.',
+    name: 'Cubierta 30 × 15 m · hilo exterior de 10 m',
+    description: 'Edificio rectangular de 20 m: hilo sobre la cubierta, paralelo a A, alimentado en C y prolongado 10 m hacia fuera, a 0,40 m de A; se calculan 15 m de aire sobre la cubierta.',
     antennaType: 'courtyard',
-    nx: 112,
+    nx: 128,
     depthCells: 72,
-    ny: 120,
+    ny: 112,
     wavelengthCells: 50,
     frequencyMHz: 14.9896229,
     dipoleFraction: 0.5,

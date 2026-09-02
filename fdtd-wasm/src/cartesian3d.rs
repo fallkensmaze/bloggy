@@ -7,9 +7,8 @@ const TRACE_LIMIT: usize = 4096;
 const PATTERN_SAMPLES: usize = 72;
 const COURTYARD_LONG_CELLS: usize = 75;
 const COURTYARD_SHORT_CELLS: usize = 38;
-const COURTYARD_HEIGHT_CELLS: usize = 88;
+const COURTYARD_BUILDING_HEIGHT_CELLS: usize = 50;
 const COURTYARD_WIRE_CELLS: usize = 25;
-const COURTYARD_WIRE_HEIGHT_CELLS: usize = 50;
 const COURTYARD_EPSILON: f32 = 5.0;
 
 struct PmlAxis {
@@ -54,6 +53,7 @@ struct WireElement {
 
 #[wasm_bindgen]
 pub struct FdtdSimulation3d {
+    is_courtyard: bool,
     gx: usize,
     gy: usize,
     gz: usize,
@@ -110,7 +110,7 @@ impl FdtdSimulation3d {
         depth_cells: usize,
     ) -> FdtdSimulation3d {
         let is_courtyard = antenna_kind == 3;
-        let gx = if is_courtyard { nx.clamp(96, 112) } else { nx.clamp(56, 112) };
+        let gx = if is_courtyard { nx.clamp(128, 144) } else { nx.clamp(56, 112) };
         let gy = if is_courtyard { depth_cells.clamp(64, 112) } else { gx };
         let gz = if is_courtyard { nz.clamp(104, 160) } else { nz.clamp(80, 160) };
         let wavelength = wavelength_cells.clamp(14.0, 60.0);
@@ -124,18 +124,17 @@ impl FdtdSimulation3d {
         let len = gx * gy * gz;
         let mut epsilon = vec![1.0; len];
         let (elements, driven_index, source_position, slice_y, scene_geometry) = if is_courtyard {
-            let x0 = (gx - COURTYARD_LONG_CELLS) / 2;
+            let x0 = (gx - COURTYARD_LONG_CELLS - COURTYARD_WIRE_CELLS) / 2;
             let x1 = x0 + COURTYARD_LONG_CELLS;
             let y0 = (gy - COURTYARD_SHORT_CELLS) / 2;
             let y1 = y0 + COURTYARD_SHORT_CELLS;
             let ground = pml_cells + 4;
-            let top = ground + COURTYARD_HEIGHT_CELLS;
-            let wire_start = x0 + 1;
+            let roof = ground + COURTYARD_BUILDING_HEIGHT_CELLS;
+            let wire_start = x1;
             let wire_end = wire_start + COURTYARD_WIRE_CELLS;
             let wire_y = y0 + 1;
-            let wire_z = ground + COURTYARD_WIRE_HEIGHT_CELLS;
-            for x in x0..=x1 { for y in y0..=y1 { epsilon[(ground * gy + y) * gx + x] = COURTYARD_EPSILON; }}
-            for z in ground..=top {
+            let wire_z = roof;
+            for z in ground..=roof {
                 for x in x0..=x1 {
                     epsilon[(z * gy + y0) * gx + x] = COURTYARD_EPSILON;
                     epsilon[(z * gy + y1) * gx + x] = COURTYARD_EPSILON;
@@ -145,12 +144,13 @@ impl FdtdSimulation3d {
                     epsilon[(z * gy + y) * gx + x1] = COURTYARD_EPSILON;
                 }
             }
+            for x in x0..=x1 { for y in y0..=y1 { epsilon[(roof * gy + y) * gx + x] = COURTYARD_EPSILON; }}
             (
                 vec![WireElement { axis: 0, x: 0, y: wire_y, z: wire_z, start: wire_start, end: wire_end, driven: true }],
                 0,
                 wire_start,
-                wire_y,
-                vec![1.0, x0 as f32, x1 as f32, y0 as f32, y1 as f32, ground as f32, top as f32, wire_start as f32, wire_end as f32, wire_y as f32, wire_z as f32, 0.4],
+                roof,
+                vec![2.0, x0 as f32, x1 as f32, y0 as f32, y1 as f32, ground as f32, roof as f32, wire_start as f32, wire_end as f32, wire_y as f32, wire_z as f32, 0.4],
             )
         } else {
             let source_z = gz / 2;
@@ -194,7 +194,7 @@ impl FdtdSimulation3d {
         }
         let ratios = (0..BINS).map(|index| 0.7 + index as f64 * 0.6 / (BINS - 1) as f64).collect::<Vec<_>>();
         FdtdSimulation3d {
-            gx, gy, gz, wavelength, pml_cells,
+            is_courtyard, gx, gy, gz, wavelength, pml_cells,
             source_kind: source_kind.min(1), source_amplitude: source_amplitude.clamp(0.01, 2.0),
             wire_radius, cx, cy, source_position, slice_y, profile_len, steps: 0,
             ex: vec![0.0; len], ey: vec![0.0; len], ez: vec![0.0; len],
@@ -220,15 +220,16 @@ impl FdtdSimulation3d {
     }
 
     pub fn step(&mut self, count: u32) { for _ in 0..count.min(16) { self.single_step(); } }
-    pub fn field_snapshot(&self) -> Vec<f32> { self.slice(&self.hy) }
+    pub fn field_snapshot(&self) -> Vec<f32> { self.slice(if self.is_courtyard { &self.hz } else { &self.hy }) }
     pub fn magnetic_field_snapshot(&self) -> Vec<f32> { self.field_snapshot() }
     pub fn electric_z_snapshot(&self) -> Vec<f32> { self.slice(&self.ez) }
     pub fn electric_r_snapshot(&self) -> Vec<f32> { self.slice(&self.ex) }
     pub fn electric_magnitude_snapshot(&self) -> Vec<f32> {
-        let mut result = vec![0.0; self.gx * self.gz];
-        for z in 0..self.gz { for x in 0..self.gx {
-            let i = self.index(x, self.slice_y, z);
-            result[z * self.gx + x] = (self.ex[i] * self.ex[i] + self.ey[i] * self.ey[i] + self.ez[i] * self.ez[i]).sqrt();
+        let height = if self.is_courtyard { self.gy } else { self.gz };
+        let mut result = vec![0.0; self.gx * height];
+        for vertical in 0..height { for x in 0..self.gx {
+            let i = if self.is_courtyard { self.index(x, vertical, self.slice_y) } else { self.index(x, self.slice_y, vertical) };
+            result[vertical * self.gx + x] = (self.ex[i] * self.ex[i] + self.ey[i] * self.ey[i] + self.ez[i] * self.ez[i]).sqrt();
         }}
         result
     }
@@ -237,7 +238,7 @@ impl FdtdSimulation3d {
             1 => self.ez.clone(),
             2 => self.ex.clone(),
             3 => self.ex.iter().zip(&self.ey).zip(&self.ez).map(|((ex, ey), ez)| (ex * ex + ey * ey + ez * ez).sqrt()).collect(),
-            _ => self.hy.clone(),
+            _ => if self.is_courtyard { self.hz.clone() } else { self.hy.clone() },
         }
     }
     pub fn conductor_points(&self) -> Vec<f32> {
@@ -264,6 +265,8 @@ impl FdtdSimulation3d {
     pub fn nx(&self) -> usize { self.gx }
     pub fn ny(&self) -> usize { self.gz }
     pub fn depth(&self) -> usize { self.gy }
+    pub fn snapshot_width(&self) -> usize { self.gx }
+    pub fn snapshot_height(&self) -> usize { if self.is_courtyard { self.gy } else { self.gz } }
     pub fn time_step(&self) -> f32 { COURANT }
     pub fn wire_start(&self) -> usize { self.elements[self.driven_index].start }
     pub fn wire_end(&self) -> usize { self.elements[self.driven_index].end }
@@ -498,11 +501,21 @@ impl FdtdSimulation3d {
     }
 
     fn slice(&self, source: &[f32]) -> Vec<f32> {
+        if self.is_courtyard {
+            let mut result = vec![0.0; self.gx * self.gy];
+            for y in 0..self.gy { for x in 0..self.gx { result[y * self.gx + x] = source[self.index(x, y, self.slice_y)]; }}
+            return result;
+        }
         let mut result = vec![0.0; self.gx * self.gz];
         for z in 0..self.gz { for x in 0..self.gx { result[z * self.gx + x] = source[self.index(x, self.slice_y, z)]; }}
         result
     }
     fn slice_u8(&self, source: &[u8]) -> Vec<u8> {
+        if self.is_courtyard {
+            let mut result = vec![0; self.gx * self.gy];
+            for y in 0..self.gy { for x in 0..self.gx { result[y * self.gx + x] = source[self.index(x, y, self.slice_y)]; }}
+            return result;
+        }
         let mut result = vec![0; self.gx * self.gz];
         for z in 0..self.gz { for x in 0..self.gx { result[z * self.gx + x] = source[self.index(x, self.slice_y, z)]; }}
         result
@@ -531,14 +544,18 @@ mod tests {
 
     #[test]
     fn courtyard_preserves_building_and_horizontal_wire_geometry() {
-        let mut sim = FdtdSimulation3d::new(96, 104, 50.0, 0.5, 8, 1e-7, 0, 0.6, true, 5.0, 0.05, 1, 3, 64);
+        let mut sim = FdtdSimulation3d::new(128, 112, 50.0, 0.5, 8, 1e-7, 0, 0.6, true, 5.0, 0.05, 1, 3, 72);
         let scene = sim.scene_geometry();
         assert_eq!(scene.len(), 12);
+        assert_eq!(scene[0], 2.0);
         assert!(((scene[2] - scene[1]) * scene[11] - 30.0).abs() < 1e-4);
         assert!(((scene[8] - scene[7]) * scene[11] - 10.0).abs() < 1e-4);
         assert!(((scene[9] - scene[3]) * scene[11] - 0.4).abs() < 1e-4);
-        assert!(((scene[10] - scene[5]) * scene[11] - 20.0).abs() < 1e-4);
-        assert_eq!(sim.depth(), 64);
+        assert!(((scene[6] - scene[5]) * scene[11] - 20.0).abs() < 1e-4);
+        assert_eq!(scene[7], scene[2]);
+        assert!(scene[8] > scene[2]);
+        assert_eq!(sim.depth(), 72);
+        assert_eq!(sim.field_snapshot().len(), sim.nx() * sim.depth());
         assert!(sim.material_snapshot().iter().any(|value| *value == COURTYARD_EPSILON));
         let wire = sim.conductor_points();
         assert_eq!(wire[1], wire[wire.len() - 2]);
