@@ -52,14 +52,15 @@ function drawCartesianFrame(context, frame, size, rotation, zoom) {
   }
 
   const courtyardFaces = []
-  if (sceneGeometry?.length >= 12 && sceneGeometry[0] === 1) {
-    const [, courtyardX0, courtyardX1, courtyardY0, courtyardY1, ground, top] = sceneGeometry
+  if (sceneGeometry?.length >= 12 && (sceneGeometry[0] === 1 || sceneGeometry[0] === 2)) {
+    const [sceneKind, courtyardX0, courtyardX1, courtyardY0, courtyardY1, ground, top] = sceneGeometry
+    const rooftop = sceneKind === 2
     const faceSpecs = [
-      { label: 'Suelo', points: [[courtyardX0, courtyardY0, ground], [courtyardX1, courtyardY0, ground], [courtyardX1, courtyardY1, ground], [courtyardX0, courtyardY1, ground]] },
+      { label: rooftop ? 'Cubierta · 20 m' : 'Suelo', points: [[courtyardX0, courtyardY0, rooftop ? top : ground], [courtyardX1, courtyardY0, rooftop ? top : ground], [courtyardX1, courtyardY1, rooftop ? top : ground], [courtyardX0, courtyardY1, rooftop ? top : ground]] },
       { label: 'A · 30 m', points: [[courtyardX0, courtyardY0, ground], [courtyardX1, courtyardY0, ground], [courtyardX1, courtyardY0, top], [courtyardX0, courtyardY0, top]] },
       { label: 'B · 30 m', points: [[courtyardX0, courtyardY1, ground], [courtyardX1, courtyardY1, ground], [courtyardX1, courtyardY1, top], [courtyardX0, courtyardY1, top]] },
-      { label: 'C · 15 m', points: [[courtyardX0, courtyardY0, ground], [courtyardX0, courtyardY1, ground], [courtyardX0, courtyardY1, top], [courtyardX0, courtyardY0, top]] },
-      { label: 'D · 15 m', points: [[courtyardX1, courtyardY0, ground], [courtyardX1, courtyardY1, ground], [courtyardX1, courtyardY1, top], [courtyardX1, courtyardY0, top]] }
+      { label: 'C · salida', points: [[courtyardX1, courtyardY0, ground], [courtyardX1, courtyardY1, ground], [courtyardX1, courtyardY1, top], [courtyardX1, courtyardY0, top]] },
+      { label: 'D · 15 m', points: [[courtyardX0, courtyardY0, ground], [courtyardX0, courtyardY1, ground], [courtyardX0, courtyardY1, top], [courtyardX0, courtyardY0, top]] }
     ]
     for (const face of faceSpecs) {
       const projected = face.points.map(point => project(world(...point)))
@@ -67,7 +68,7 @@ function drawCartesianFrame(context, frame, size, rotation, zoom) {
     }
     courtyardFaces.sort((a, b) => a.depth - b.depth)
     for (const face of courtyardFaces) {
-      context.fillStyle = face.label === 'Suelo' ? 'rgba(126, 146, 167, .16)' : 'rgba(112, 139, 166, .10)'
+      context.fillStyle = face.label.startsWith('Cubierta') || face.label === 'Suelo' ? 'rgba(126, 146, 167, .18)' : 'rgba(112, 139, 166, .10)'
       context.strokeStyle = 'rgba(169, 196, 218, .42)'
       context.beginPath()
       face.projected.forEach((point, index) => index === 0 ? context.moveTo(point.x, point.y) : context.lineTo(point.x, point.y))
@@ -117,7 +118,7 @@ function drawCartesianFrame(context, frame, size, rotation, zoom) {
   if (courtyardFaces.length) {
     context.fillStyle = '#c7d7e5'
     context.font = '600 11px ui-monospace, monospace'
-    for (const face of courtyardFaces.filter(face => face.label !== 'Suelo')) {
+    for (const face of courtyardFaces.filter(face => face.label !== 'Suelo' && !face.label.startsWith('Cubierta'))) {
       const topEdge = [face.projected[2], face.projected[3]]
       const x = (topEdge[0].x + topEdge[1].x) / 2
       const y = (topEdge[0].y + topEdge[1].y) / 2

@@ -6,9 +6,8 @@ const TRACE_LIMIT = 4096
 const PATTERN_SAMPLES = 72
 const COURTYARD_LONG_CELLS = 75
 const COURTYARD_SHORT_CELLS = 38
-const COURTYARD_HEIGHT_CELLS = 88
+const COURTYARD_BUILDING_HEIGHT_CELLS = 50
 const COURTYARD_WIRE_CELLS = 25
-const COURTYARD_WIRE_HEIGHT_CELLS = 50
 const COURTYARD_EPSILON = 5
 
 function makePmlAxis(length, thickness, stagger, targetReflection, kappaMax, alphaMax) {
@@ -42,7 +41,7 @@ export class FdtdSimulation3dFallback {
     this.antennaKind = Math.round(antennaKind)
     this.isCourtyard = this.antennaKind === 3
     this.gx = this.isCourtyard
-      ? Math.max(96, Math.min(112, Math.round(nx)))
+      ? Math.max(128, Math.min(144, Math.round(nx)))
       : Math.max(56, Math.min(112, Math.round(nx)))
     this.gy = this.isCourtyard
       ? Math.max(64, Math.min(112, Math.round(depthCells)))
@@ -127,24 +126,21 @@ export class FdtdSimulation3dFallback {
   }
 
   buildCourtyardGeometry() {
-    const x0 = Math.floor((this.gx - COURTYARD_LONG_CELLS) / 2)
+    const x0 = Math.floor((this.gx - COURTYARD_LONG_CELLS - COURTYARD_WIRE_CELLS) / 2)
     const x1 = x0 + COURTYARD_LONG_CELLS
     const y0 = Math.floor((this.gy - COURTYARD_SHORT_CELLS) / 2)
     const y1 = y0 + COURTYARD_SHORT_CELLS
     const ground = this.pmlCells + 4
-    const top = ground + COURTYARD_HEIGHT_CELLS
-    const wireStart = x0 + 1
+    const roof = ground + COURTYARD_BUILDING_HEIGHT_CELLS
+    const wireStart = x1
     const wireEnd = wireStart + COURTYARD_WIRE_CELLS
     const wireY = y0 + 1
-    const wireZ = ground + COURTYARD_WIRE_HEIGHT_CELLS
+    const wireZ = roof
     this.sourcePosition = wireStart
-    this.sliceY = wireY
-    this.elements = [{ role: 'Hilo de 10 m', axis: 'x', x: 0, y: wireY, z: wireZ, start: wireStart, end: wireEnd, driven: true }]
+    this.sliceY = roof
+    this.elements = [{ role: 'Hilo exterior de 10 m', axis: 'x', x: 0, y: wireY, z: wireZ, start: wireStart, end: wireEnd, driven: true }]
 
-    for (let x = x0; x <= x1; x += 1) {
-      for (let y = y0; y <= y1; y += 1) this.epsilon[this.index(x, y, ground)] = COURTYARD_EPSILON
-    }
-    for (let z = ground; z <= top; z += 1) {
+    for (let z = ground; z <= roof; z += 1) {
       for (let x = x0; x <= x1; x += 1) {
         this.epsilon[this.index(x, y0, z)] = COURTYARD_EPSILON
         this.epsilon[this.index(x, y1, z)] = COURTYARD_EPSILON
@@ -154,7 +150,10 @@ export class FdtdSimulation3dFallback {
         this.epsilon[this.index(x1, y, z)] = COURTYARD_EPSILON
       }
     }
-    this.sceneGeometry = Float32Array.from([1, x0, x1, y0, y1, ground, top, wireStart, wireEnd, wireY, wireZ, 0.4])
+    for (let x = x0; x <= x1; x += 1) {
+      for (let y = y0; y <= y1; y += 1) this.epsilon[this.index(x, y, roof)] = COURTYARD_EPSILON
+    }
+    this.sceneGeometry = Float32Array.from([2, x0, x1, y0, y1, ground, roof, wireStart, wireEnd, wireY, wireZ, 0.4])
   }
 
   elementPoint(element, coordinate) {
@@ -427,21 +426,26 @@ export class FdtdSimulation3dFallback {
   }
 
   slice(source) {
-    const result = new Float32Array(this.gx * this.gz)
+    const result = new Float32Array(this.gx * (this.isCourtyard ? this.gy : this.gz))
+    if (this.isCourtyard) {
+      for (let y = 0; y < this.gy; y += 1) for (let x = 0; x < this.gx; x += 1) result[y * this.gx + x] = source[this.index(x, y, this.sliceY)]
+      return result
+    }
     for (let z = 0; z < this.gz; z += 1) for (let x = 0; x < this.gx; x += 1) result[z * this.gx + x] = source[this.index(x, this.sliceY, z)]
     return result
   }
 
-  field_snapshot() { return this.slice(this.hy) }
+  field_snapshot() { return this.slice(this.isCourtyard ? this.hz : this.hy) }
   magnetic_field_snapshot() { return this.field_snapshot() }
   electric_z_snapshot() { return this.slice(this.ez) }
   electric_r_snapshot() { return this.slice(this.ex) }
   electric_magnitude_snapshot() {
-    const result = new Float32Array(this.gx * this.gz)
-    for (let z = 0; z < this.gz; z += 1) {
+    const height = this.isCourtyard ? this.gy : this.gz
+    const result = new Float32Array(this.gx * height)
+    for (let vertical = 0; vertical < height; vertical += 1) {
       for (let x = 0; x < this.gx; x += 1) {
-        const i = this.index(x, this.sliceY, z)
-        result[z * this.gx + x] = Math.hypot(this.ex[i], this.ey[i], this.ez[i])
+        const i = this.isCourtyard ? this.index(x, vertical, this.sliceY) : this.index(x, this.sliceY, vertical)
+        result[vertical * this.gx + x] = Math.hypot(this.ex[i], this.ey[i], this.ez[i])
       }
     }
     return result
@@ -454,7 +458,7 @@ export class FdtdSimulation3dFallback {
       for (let i = 0; i < result.length; i += 1) result[i] = Math.hypot(this.ex[i], this.ey[i], this.ez[i])
       return result
     }
-    return this.hy.slice()
+    return (this.isCourtyard ? this.hz : this.hy).slice()
   }
   conductor_points() {
     const points = []
@@ -481,6 +485,8 @@ export class FdtdSimulation3dFallback {
   nx() { return this.gx }
   ny() { return this.gz }
   depth() { return this.gy }
+  snapshot_width() { return this.gx }
+  snapshot_height() { return this.isCourtyard ? this.gy : this.gz }
   time_step() { return COURANT_3D }
   wire_start() { return this.elements[this.drivenIndex].start }
   wire_end() { return this.elements[this.drivenIndex].end }

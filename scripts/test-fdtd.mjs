@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFdtdAnalysis, s11Db } from '../src/utils/fdtdAnalysis.js'
+import { readFdtdAnalysis, reflectionCoefficient, s11Db } from '../src/utils/fdtdAnalysis.js'
 import { FdtdSimulation3dFallback } from '../src/utils/fdtdCartesian3dFallback.js'
 import { FdtdSimulationFallback } from '../src/utils/fdtdFallback.js'
 import { FDTD_COURTYARD, FDTD_PRESETS, parseFdtdConfig, sanitizeFdtdConfig, serializeFdtdConfig } from '../src/utils/fdtdConfig.js'
@@ -63,6 +63,11 @@ assert.ok(analysis.validSpectrum.every(Boolean), 'El pulso debe cubrir toda la b
 assert.ok(Number.isFinite(analysis.directivityDb))
 assert.ok(s11Db(50, 0) <= -150, 'Una carga de 50 Ω debe dar reflexión numéricamente nula')
 assert.equal(Math.round(s11Db(75, 0) * 100) / 100, -13.98)
+assert.deepEqual(reflectionCoefficient(50, 0), { real: 0, imag: 0, magnitude: 0 })
+assert.equal(Math.round(reflectionCoefficient(25, 0).real * 1000) / 1000, -0.333)
+assert.equal(Math.round(reflectionCoefficient(50, 50).imag * 1000) / 1000, 0.4)
+assert.equal(analysis.smithPoints.length, analysis.validSpectrum.filter(Boolean).length)
+assert.ok(analysis.smithPoints.every(point => Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.magnitude)), 'El diagrama de Smith debe contener coeficientes de reflexión finitos')
 
 const pulse = makeSimulation(1)
 let peakEnergy = 0
@@ -159,7 +164,7 @@ assert.ok(Number.isFinite(yagi.directivity_3d_at(yagi.resonance_index())))
 
 const courtyardConfig = sanitizeFdtdConfig(FDTD_PRESETS.courtyard)
 assert.equal(courtyardConfig.antennaType, 'courtyard')
-assert.deepEqual([courtyardConfig.nx, courtyardConfig.depthCells, courtyardConfig.ny], [112, 72, 120])
+assert.deepEqual([courtyardConfig.nx, courtyardConfig.depthCells, courtyardConfig.ny], [128, 72, 112])
 assert.equal(courtyardConfig.frequencyMHz, FDTD_PRESETS.courtyard.frequencyMHz)
 const courtyard = new FdtdSimulation3dFallback(
   courtyardConfig.nx,
@@ -179,13 +184,17 @@ const courtyard = new FdtdSimulation3dFallback(
 )
 const courtyardScene = Array.from(courtyard.scene_geometry())
 const sceneMetres = cells => Math.round(cells * FDTD_COURTYARD.spatialStepMetres * 1e6) / 1e6
-assert.equal(courtyardScene[0], 1)
+assert.equal(courtyardScene[0], 2)
 assert.equal(sceneMetres(courtyardScene[2] - courtyardScene[1]), FDTD_COURTYARD.longSideMetres)
 assert.equal(sceneMetres(courtyardScene[8] - courtyardScene[7]), FDTD_COURTYARD.wireLengthMetres)
 assert.equal(sceneMetres(courtyardScene[9] - courtyardScene[3]), FDTD_COURTYARD.wireOffsetMetres)
-assert.equal(sceneMetres(courtyardScene[10] - courtyardScene[5]), FDTD_COURTYARD.wireHeightMetres)
+assert.equal(sceneMetres(courtyardScene[6] - courtyardScene[5]), FDTD_COURTYARD.buildingHeightMetres)
+assert.equal(courtyardScene[7], courtyardScene[2], 'La alimentación debe quedar en el lado C')
+assert.ok(courtyardScene[8] > courtyardScene[2], 'El hilo debe prolongarse fuera de la planta del edificio')
+assert.ok(sceneMetres(courtyard.ny() - courtyardConfig.absorberCells - courtyardScene[6]) >= FDTD_COURTYARD.airAboveRoofMetres, 'La malla debe incluir 15 m de aire sobre la cubierta')
 assert.equal(courtyard.depth(), courtyardConfig.depthCells)
-assert.ok(courtyard.material_snapshot().some(value => value === FDTD_COURTYARD.wallRelativePermittivity), 'El corte del patio debe contener suelo y paredes dieléctricas')
+assert.equal(courtyard.field_snapshot().length, courtyard.nx() * courtyard.depth(), 'El corte del edificio debe ser horizontal sobre la cubierta')
+assert.ok(courtyard.material_snapshot().some(value => value === FDTD_COURTYARD.wallRelativePermittivity), 'El corte de cubierta debe contener hormigón dieléctrico')
 const courtyardWire = Array.from(courtyard.conductor_points())
 assert.equal(courtyardWire[1], courtyardWire.at(-2), 'El hilo debe ser paralelo al lado A sobre y constante')
 assert.equal(courtyardWire[2], courtyardWire.at(-1), 'El hilo debe permanecer horizontal')
@@ -194,4 +203,4 @@ for (let block = 0; block < 4; block += 1) courtyard.step(4)
 assert.ok(courtyard.energy() > 0 && Number.isFinite(courtyard.energy()), 'El hilo del patio debe excitar un campo finito')
 assert.ok(courtyard.electric_magnitude_snapshot().every(Number.isFinite), 'El campo del patio debe permanecer finito')
 
-console.log('✓ FDTD 3D: campos E/H, CPML, dipolo, monopolo, hilo largo, Yagi y patio cartesiano verificados')
+console.log('✓ FDTD 3D: campos E/H, Smith, CPML, dipolo, monopolo, hilo largo, Yagi y cubierta cartesiana verificados')
