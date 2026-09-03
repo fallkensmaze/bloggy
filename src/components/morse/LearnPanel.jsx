@@ -15,9 +15,13 @@ const INTRO_KEY = 'morse_lcwo_intro'
 const MINUTES_KEY = 'morse_lcwo_minutes'
 const GROUPS_KEY = 'morse_lcwo_groups'
 const ATTEMPTS_KEY = 'morse_lcwo_attempts'
+const START_DELAY_KEY = 'morse_lcwo_start_delay'
+const GROUP_DELAY_KEY = 'morse_lcwo_group_delay'
 
 const MINUTE_OPTIONS = [1, 2, 3, 4, 5]
 const GROUP_OPTIONS = ['fixed', 'random']
+const START_DELAY_OPTIONS = [0, 1, 3, 5]
+const GROUP_DELAY_OPTIONS = [0, 0.5, 1, 2]
 
 const formatTime = (seconds) => {
   const safe = Math.max(0, Math.ceil(seconds || 0))
@@ -40,6 +44,10 @@ function LearnPanel({
   canPlay,
   charWpm,
   effWpm,
+  freq,
+  onCharWpmChange,
+  onEffWpmChange,
+  onFreqChange,
   onAdvance,
   onLessonChange,
   onUseKoch,
@@ -59,6 +67,16 @@ function LearnPanel({
     const stored = readJson(ATTEMPTS_KEY, [])
     return Array.isArray(stored) ? stored : []
   })
+  const [startDelay, setStartDelay] = useState(() => readNumber(START_DELAY_KEY, {
+    min: 0,
+    max: 10,
+    fallback: LCWO_DEFAULTS.startDelay,
+  }))
+  const [extraGroupGap, setExtraGroupGap] = useState(() => readNumber(GROUP_DELAY_KEY, {
+    min: 0,
+    max: 3,
+    fallback: LCWO_DEFAULTS.extraGroupGap,
+  }))
 
   const [session, setSession] = useState(null)
   const [answer, setAnswer] = useState('')
@@ -66,6 +84,7 @@ function LearnPanel({
   const [running, setRunning] = useState(false)
   const [finished, setFinished] = useState(false)
   const [elapsed, setElapsed] = useState(0)
+  const [countdown, setCountdown] = useState(0)
 
   const startedAtRef = useRef(0)
   const answerRef = useRef(null)
@@ -83,15 +102,29 @@ function LearnPanel({
     setRunning(false)
     setFinished(false)
     setElapsed(0)
+    setCountdown(0)
     startedAtRef.current = 0
   }, [stop])
 
-  useEffect(() => resetSession(), [lesson, minutes, groupMode, charWpm, effWpm, resetSession])
+  useEffect(() => resetSession(), [
+    lesson,
+    minutes,
+    groupMode,
+    charWpm,
+    effWpm,
+    extraGroupGap,
+    startDelay,
+    resetSession,
+  ])
   useEffect(() => () => stop(), [stop])
 
   useEffect(() => {
     if (!running) return undefined
-    const update = () => setElapsed((Date.now() - startedAtRef.current) / 1000)
+    const update = () => {
+      const untilStart = (startedAtRef.current - Date.now()) / 1000
+      setCountdown(Math.max(0, untilStart))
+      setElapsed(Math.max(0, -untilStart))
+    }
     update()
     const timer = setInterval(update, 250)
     return () => clearInterval(timer)
@@ -104,7 +137,8 @@ function LearnPanel({
     randomLength: groupMode === 'random',
     wpm: charWpm,
     effWpm,
-  }), [pool, minutes, groupMode, charWpm, effWpm])
+    extraGroupGap,
+  }), [pool, minutes, groupMode, charWpm, effWpm, extraGroupGap])
 
   const startSession = () => {
     const next = session || makeSession()
@@ -113,13 +147,17 @@ function LearnPanel({
     setResult(null)
     setFinished(false)
     setElapsed(0)
-    startedAtRef.current = Date.now()
+    setCountdown(startDelay)
+    startedAtRef.current = Date.now() + startDelay * 1000
     setRunning(true)
     play(next.text, {
+      startDelay,
+      extraWordGap: extraGroupGap,
       onEnd: () => {
         setRunning(false)
         setFinished(true)
         setElapsed(next.seconds)
+        setCountdown(0)
         answerRef.current?.focus()
       },
     })
@@ -131,6 +169,7 @@ function LearnPanel({
     setRunning(false)
     setFinished(false)
     setElapsed(0)
+    setCountdown(0)
     startedAtRef.current = 0
   }
 
@@ -148,6 +187,8 @@ function LearnPanel({
       accuracy: graded.accuracy,
       charWpm,
       effWpm,
+      startDelay,
+      extraGroupGap,
       at: Date.now(),
     }
     setAttempts(previous => {
@@ -165,6 +206,26 @@ function LearnPanel({
   const changeGroupMode = (value) => {
     setGroupMode(value)
     writeValue(GROUPS_KEY, value)
+  }
+
+  const changeStartDelay = (value) => {
+    setStartDelay(value)
+    writeValue(START_DELAY_KEY, value)
+  }
+
+  const changeGroupDelay = (value) => {
+    setExtraGroupGap(value)
+    writeValue(GROUP_DELAY_KEY, value)
+  }
+
+  const resetSettings = () => {
+    onCharWpmChange(LCWO_DEFAULTS.charWpm)
+    onEffWpmChange(LCWO_DEFAULTS.effWpm)
+    onFreqChange(LCWO_DEFAULTS.tone)
+    changeMinutes(LCWO_DEFAULTS.minutes)
+    changeGroupMode('fixed')
+    changeStartDelay(LCWO_DEFAULTS.startDelay)
+    changeGroupDelay(LCWO_DEFAULTS.extraGroupGap)
   }
 
   const preview = (char) => {
@@ -248,53 +309,172 @@ function LearnPanel({
       </div>
       <p className="mr-slider-note">Pulsa un carácter para oírlo diez veces. En el curso no se muestran puntos y rayas.</p>
 
-      <div className="mr-lcwo-settings">
-        <div>
-          <span className="field-label">Duración</span>
-          <div className="mr-chips">
-            {MINUTE_OPTIONS.map(value => (
+      <section className="mr-lcwo-config" aria-labelledby="lcwo-settings-title">
+        <div className="mr-lcwo-config-head">
+          <div>
+            <span className="mr-kicker">Audio y sesión</span>
+            <h3 id="lcwo-settings-title">
+              <i className="bi bi-sliders" aria-hidden="true" /> Configuración de la práctica
+            </h3>
+          </div>
+          <button className="mr-btn mr-btn--sm" onClick={resetSettings} disabled={running}>
+            Restaurar 20/10 PPM
+          </button>
+        </div>
+
+        <div className="mr-lcwo-config-grid">
+          <div className="mr-lcwo-control">
+            <span className="mr-slider-head">
+              <span>Velocidad de carácter</span>
+              <strong>{charWpm} PPM</strong>
+            </span>
+            <input
+              className="mr-slider"
+              type="range"
+              min="5"
+              max="40"
+              step="1"
+              value={charWpm}
+              onChange={event => onCharWpmChange(Number(event.target.value))}
+              disabled={running}
+              aria-label="Velocidad de carácter en palabras por minuto"
+            />
+            <small>Rapidez real de cada letra. LCWO recomienda mantenerla alta.</small>
+          </div>
+
+          <div className="mr-lcwo-control">
+            <span className="mr-slider-head">
+              <span>Velocidad efectiva</span>
+              <strong>{effWpm} PPM</strong>
+            </span>
+            <input
+              className="mr-slider"
+              type="range"
+              min="4"
+              max={charWpm}
+              step="1"
+              value={effWpm}
+              onChange={event => onEffWpmChange(Number(event.target.value))}
+              disabled={running}
+              aria-label="Velocidad efectiva en palabras por minuto"
+            />
+            <small>Controla el retardo Farnsworth entre caracteres y grupos.</small>
+          </div>
+
+          <div className="mr-lcwo-control">
+            <span className="mr-slider-head">
+              <span>Tono</span>
+              <strong>{freq} Hz</strong>
+            </span>
+            <input
+              className="mr-slider"
+              type="range"
+              min="300"
+              max="1000"
+              step="10"
+              value={freq}
+              onChange={event => onFreqChange(Number(event.target.value))}
+              disabled={running}
+              aria-label="Frecuencia del tono en hercios"
+            />
+            <button
+              type="button"
+              className="mr-btn mr-btn--sm mr-lcwo-test-tone"
+              onClick={() => play('V')}
+              disabled={!canPlay || running}
+            >
+              <i className="bi bi-volume-up" aria-hidden="true" /> Probar
+            </button>
+          </div>
+        </div>
+
+        <div className="mr-lcwo-config-grid mr-lcwo-config-grid--session">
+          <div className="mr-lcwo-control">
+            <span className="field-label">Duración</span>
+            <div className="mr-chips">
+              {MINUTE_OPTIONS.map(value => (
+                <button
+                  key={value}
+                  className={`mr-btn mr-btn--sm${minutes === value ? ' mr-btn--active' : ''}`}
+                  onClick={() => changeMinutes(value)}
+                  disabled={running}
+                >
+                  {value} min
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mr-lcwo-control">
+            <span className="field-label">Longitud de grupo</span>
+            <div className="mr-chips">
               <button
-                key={value}
-                className={`mr-btn mr-btn--sm${minutes === value ? ' mr-btn--active' : ''}`}
-                onClick={() => changeMinutes(value)}
+                className={`mr-btn mr-btn--sm${groupMode === 'fixed' ? ' mr-btn--active' : ''}`}
+                onClick={() => changeGroupMode('fixed')}
                 disabled={running}
               >
-                {value} min
+                5 fija
               </button>
-            ))}
+              <button
+                className={`mr-btn mr-btn--sm${groupMode === 'random' ? ' mr-btn--active' : ''}`}
+                onClick={() => changeGroupMode('random')}
+                disabled={running}
+              >
+                2–7 aleatoria
+              </button>
+            </div>
+          </div>
+
+          <div className="mr-lcwo-control">
+            <span className="field-label">Retardo antes de empezar</span>
+            <div className="mr-chips">
+              {START_DELAY_OPTIONS.map(value => (
+                <button
+                  key={value}
+                  className={`mr-btn mr-btn--sm${startDelay === value ? ' mr-btn--active' : ''}`}
+                  onClick={() => changeStartDelay(value)}
+                  disabled={running}
+                >
+                  {value} s
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mr-lcwo-control">
+            <span className="field-label">Pausa extra entre grupos</span>
+            <div className="mr-chips">
+              {GROUP_DELAY_OPTIONS.map(value => (
+                <button
+                  key={value}
+                  className={`mr-btn mr-btn--sm${extraGroupGap === value ? ' mr-btn--active' : ''}`}
+                  onClick={() => changeGroupDelay(value)}
+                  disabled={running}
+                >
+                  {value ? `+${value} s` : 'Ninguna'}
+                </button>
+              ))}
+            </div>
+            <small>Se suma al espaciado Farnsworth; no ralentiza los puntos y rayas.</small>
           </div>
         </div>
-        <div>
-          <span className="field-label">Longitud de grupo</span>
-          <div className="mr-chips">
-            <button
-              className={`mr-btn mr-btn--sm${groupMode === 'fixed' ? ' mr-btn--active' : ''}`}
-              onClick={() => changeGroupMode('fixed')}
-              disabled={running}
-            >
-              5 fija
-            </button>
-            <button
-              className={`mr-btn mr-btn--sm${groupMode === 'random' ? ' mr-btn--active' : ''}`}
-              onClick={() => changeGroupMode('random')}
-              disabled={running}
-            >
-              2–7 aleatoria
-            </button>
-          </div>
+
+        <div className="mr-lcwo-config-summary">
+          <i className="bi bi-soundwave" aria-hidden="true" />
+          {charWpm}/{effWpm} PPM · {freq} Hz · inicio {startDelay} s
+          {extraGroupGap > 0 ? ` · +${extraGroupGap} s entre grupos` : ''}
         </div>
-        <div className="mr-lcwo-parameters">
-          <span className="field-label">Envío</span>
-          <strong>{charWpm}/{effWpm} PPM</strong>
-          <small>carácter / efectiva</small>
-        </div>
-      </div>
+      </section>
 
       <div className="mr-lcwo-console">
         <div className="mr-row-between">
           <span className="field-label" style={{ marginBottom: 0 }}>Texto de práctica</span>
           <span className="mr-lcwo-clock">
-            {running ? 'En curso' : finished ? 'Finalizado' : 'Preparado'} · {formatTime(remaining)}
+            {running && countdown > 0
+              ? `Comienza en ${Math.ceil(countdown)} s`
+              : running
+                ? `En curso · ${formatTime(remaining)}`
+                : `${finished ? 'Finalizado' : 'Preparado'} · ${formatTime(remaining)}`}
           </span>
         </div>
         <div className="mr-bar mr-lcwo-progress" aria-hidden="true">

@@ -93,7 +93,12 @@ function MorseTrainer() {
     setPlaying(false)
   }, [])
 
-  const play = useCallback((text, { onSymbol, onEnd } = {}) => {
+  const play = useCallback((text, {
+    onSymbol,
+    onEnd,
+    startDelay = 0,
+    extraWordGap = 0,
+  } = {}) => {
     if (stopRef.current) stopRef.current()
     resumeAudio()
     setPlaying(true)
@@ -101,6 +106,8 @@ function MorseTrainer() {
       wpm: charWpm,
       effWpm: efectiva,
       freq,
+      startDelay,
+      extraWordGap,
       onSymbol,
       onEnd: () => {
         stopRef.current = null
@@ -376,6 +383,10 @@ function MorseTrainer() {
             lesson={lesson}
             charWpm={charWpm}
             effWpm={efectiva}
+            freq={freq}
+            onCharWpmChange={handleCharWpm}
+            onEffWpmChange={handleEffWpm}
+            onFreqChange={handleFreq}
             onAdvance={() => handleLesson(lesson + 1)}
             onLessonChange={handleLesson}
             onUseKoch={() => handleDeck('koch')}
