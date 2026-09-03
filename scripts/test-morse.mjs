@@ -32,22 +32,20 @@ import {
 } from '../src/utils/morse.js'
 import {
   buildCopyDrill,
+  buildKochSession,
   buildVisualQuestion,
   charsToIntroduce,
-  copyStepPassed,
-  pickRecognition,
-  recognitionOptions,
   deckEntries,
   gradeCopy,
+  gradeKochSession,
   kochChars,
   newestKochChar,
   randomGroup,
   readyToAdvance,
   wordsFor,
   CW_WORDS,
-  COPY_GROUPS_TO_PASS,
+  LCWO_DEFAULTS,
   KOCH_ORDER,
-  LEARN_STEPS,
   MAX_LESSON,
   MIN_LESSON,
   MORSE_CHARS,
@@ -236,6 +234,13 @@ function testKoch() {
 
   check('the Koch order has no repeats',
     new Set(KOCH_ORDER).size === KOCH_ORDER.length, `${KOCH_ORDER.length} characters`)
+
+  check('the course uses the exact LCWO order',
+    KOCH_ORDER.join(' ') === 'K M U R E S N A P T L W I . J Z = F O Y , V G 5 / Q 9 2 H 3 8 B ? 4 7 C 1 D 6 0 X',
+    KOCH_ORDER.join(' '))
+
+  check('LCWO has 40 lessons and 41 characters',
+    MAX_LESSON === 40 && KOCH_ORDER.length === 41)
 
   check('every Koch character exists in the table',
     KOCH_ORDER.every(c => !!MORSE_TABLE[c]))
@@ -458,76 +463,61 @@ async function testSettings() {
     readJson('roto', { vacio: true }).vacio === true)
 
   // Los valores por defecto que ve una pestaña nueva son los de /morse.
-  check('a fresh browser opens at 20/10 wpm, 650 Hz and lesson 1',
-    readNumber('morse_charwpm', { min: 5, max: 40, fallback: 20 }) === 20 &&
-    readNumber('morse_effwpm', { min: 4, max: 40, fallback: 10 }) === 10 &&
-    readNumber('morse_freq', { min: 300, max: 1000, fallback: 650 }) === 650 &&
+  check('a fresh browser opens with the LCWO 20/10 wpm, 600 Hz defaults and lesson 1',
+    readNumber('morse_charwpm', { min: 5, max: 40, fallback: LCWO_DEFAULTS.charWpm }) === 20 &&
+    readNumber('morse_effwpm', { min: 4, max: 40, fallback: LCWO_DEFAULTS.effWpm }) === 10 &&
+    readNumber('morse_freq', { min: 300, max: 1000, fallback: LCWO_DEFAULTS.tone }) === 600 &&
     readNumber('morse_lesson', { min: MIN_LESSON, max: MAX_LESSON, fallback: MIN_LESSON }) === MIN_LESSON &&
     readNumber('morse_copy_size', { min: 3, max: 7, fallback: 5 }) === 5)
 
   delete globalThis.localStorage
 }
 
-// ---- Guided course --------------------------------------------------------
-// Koch assumes somebody introduces the new character before testing you on it.
-// These guard the step that does the introducing, because getting it wrong
-// turns lesson 1 back into noise for a beginner.
+// ---- LCWO course ----------------------------------------------------------
+// The course is made of timed random groups, graded as a complete copy. These
+// checks pin the LCWO character order, active deck and 90% promotion rule.
 
 function testGuidedCourse() {
-  section('Guided course')
-
-  check('the course runs in three steps',
-    LEARN_STEPS.length === 3 && LEARN_STEPS.map(s => s.id).join(' ') === 'conoce reconoce copia')
+  section('LCWO course')
 
   check('lesson 1 introduces both characters, later lessons only the new one',
     charsToIntroduce(MIN_LESSON).join('') === 'KM' &&
     charsToIntroduce(7).length === 1 && charsToIntroduce(7)[0] === KOCH_ORDER[7])
 
   const pool = deckEntries('koch', MIN_LESSON)
+  const fixed = buildKochSession({ pool, minutes: 1, groupLength: 5, wpm: 20, effWpm: 10 })
+  check('a one-minute practice is never cut short',
+    fixed.seconds >= 60 && fixed.seconds < 75,
+    `${fixed.seconds.toFixed(2)} seconds`)
+  check('fixed LCWO groups contain five active-lesson characters',
+    fixed.groups.every(group => group.length === 5 && /^[KM]+$/.test(group)),
+    `${fixed.groups.length} groups`)
 
-  // El caracter nuevo tiene que dominar el sorteo: es el unico que no se sabe.
-  const cuenta = {}
-  for (let i = 0; i < 1000; i++) {
-    const e = pickRecognition({ pool, nuevos: ['M'] })
-    cuenta[e.char] = (cuenta[e.char] || 0) + 1
-  }
-  check('the new character dominates the recognition draw',
-    cuenta.M > cuenta.K && cuenta.K > 0,
-    `M ${cuenta.M} / K ${cuenta.K}`)
+  const random = buildKochSession({ pool, minutes: 1, randomLength: true, wpm: 20, effWpm: 10 })
+  check('random LCWO groups stay between two and seven characters',
+    random.groups.every(group => group.length >= 2 && group.length <= 7))
 
-  // Con dos caracteres, excluir el anterior no puede devolverlo igualmente ni
-  // dejar la pregunta sin sortear.
-  let repetido = 0
-  for (let i = 0; i < 300; i++) {
-    if (pickRecognition({ pool, nuevos: ['M'], exclude: 'M' }).char === 'M') repetido++
-  }
-  check('the excluded character never comes back, even when it is the new one',
-    repetido === 0, `${repetido} of 300`)
+  const empty = buildKochSession({ pool: [], minutes: 5 })
+  check('an empty lesson creates an empty safe session',
+    empty.text === '' && empty.groups.length === 0 && empty.seconds === 0)
 
-  check('an empty deck draws nothing instead of throwing',
-    pickRecognition({ pool: [], nuevos: [] }) === null)
+  const perfect = gradeKochSession('KMUKM UKMKM', 'kmukm ukmkm')
+  check('a complete LCWO copy scores 100%', perfect.accuracy === 100 && perfect.passed)
 
-  const grande = deckEntries('koch', 10)
-  for (const [deck, esperado] of [[pool, 2], [grande, 4]]) {
-    const opts = recognitionOptions(deck[0], deck)
-    check(`a deck of ${deck.length} asks with ${esperado} options`,
-      opts.length === esperado && new Set(opts).size === esperado && opts.includes(deck[0].char),
-      opts.join(' '))
-  }
+  const noSpaces = gradeKochSession('KMUKM UKMKM', 'KMUKMUKMKM')
+  check('the sequence score forgives omitted group spaces',
+    noSpaces.accuracy === 100 && noSpaces.sequenceErrors === 0)
 
-  let fuera = 0
-  for (let i = 0; i < 300; i++) {
-    const entry = pickRecognition({ pool: grande, nuevos: charsToIntroduce(10) })
-    const opts = recognitionOptions(entry, grande)
-    if (!opts.every(o => grande.some(e => e.char === o))) fuera++
-    if (!opts.includes(entry.char)) fuera++
-  }
-  check('recognition never offers a character from outside the lesson', fuera === 0)
+  const ninety = gradeKochSession('KMUKM UKMKM', 'KMUKM UKMKA')
+  check('90% is enough to unlock the next lesson',
+    ninety.accuracy === 90 && ninety.passed)
 
-  check(`the copy step needs ${COPY_GROUPS_TO_PASS} groups above the target`,
-    copyStepPassed([100, 100, 100]) === true &&
-    copyStepPassed([100, 100]) === false &&
-    copyStepPassed([100, 100, 60]) === false)
+  const below = gradeKochSession('KMUKM UKMKM', 'KMUKM UKAAA')
+  check('a copy below 90% stays in the same lesson',
+    below.accuracy < 90 && !below.passed)
+
+  check('LCWO keyboard substitution accepts semicolon for question mark',
+    gradeKochSession('?', ';').accuracy === 100)
 }
 
 const suites = [

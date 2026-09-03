@@ -581,7 +581,8 @@
     font-size: 13.5px;
     color: var(--text-secondary);
 }
-.mr-intro ul { margin: 12px 0 0; padding-left: 20px; }
+.mr-intro ul,
+.mr-intro ol { margin: 12px 0 0; padding-left: 20px; }
 .mr-intro li { margin-bottom: 7px; line-height: 1.55; }
 .mr-intro li:last-child { margin-bottom: 0; }
 
@@ -657,3 +658,211 @@
 .mr-learn-done p { color: var(--text-secondary); font-size: 14px; margin-bottom: 18px; }
 
 .mr-option--char { justify-content: center; padding: 18px 12px; }
+
+/* ── Curso LCWO ── */
+.mr-lcwo-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+.mr-kicker {
+    display: block;
+    color: var(--accent-blue);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+.mr-lcwo-head h2 { margin: 0; font-size: 1.35rem; }
+.mr-lcwo-head p { margin: 5px 0 0; color: var(--text-muted); font-size: 13px; }
+.mr-lesson-select {
+    display: grid;
+    gap: 5px;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.mr-lesson-select select {
+    min-width: 145px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.mr-lcwo-chars {
+    display: flex;
+    align-items: stretch;
+    gap: 7px;
+    overflow-x: auto;
+    padding: 3px 2px 8px;
+    scrollbar-width: thin;
+}
+.mr-lcwo-char {
+    flex: 0 0 42px;
+    min-height: 48px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    border: 1px solid var(--border-sub);
+    border-radius: 9px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+}
+.mr-lcwo-char:hover:not(:disabled) { border-color: var(--accent-blue); color: var(--accent-blue); }
+.mr-lcwo-char--new {
+    flex-basis: 58px;
+    border-color: var(--accent-green);
+    background: rgba(163, 190, 140, 0.1);
+    color: var(--accent-green);
+}
+.mr-lcwo-char small {
+    font-family: inherit;
+    font-size: 8px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.mr-lcwo-settings {
+    display: grid;
+    grid-template-columns: minmax(210px, 1fr) minmax(210px, 1fr) minmax(120px, auto);
+    gap: 18px;
+    align-items: end;
+    margin: 22px 0 18px;
+}
+.mr-lcwo-settings .field-label { margin-bottom: 7px; }
+.mr-lcwo-parameters {
+    display: flex;
+    flex-direction: column;
+    min-height: 55px;
+    justify-content: flex-end;
+}
+.mr-lcwo-parameters strong { color: var(--accent-blue); font-size: 1.05rem; }
+.mr-lcwo-parameters small { color: var(--text-muted); }
+
+.mr-lcwo-console {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-sub);
+    border-radius: 12px;
+    padding: 16px;
+}
+.mr-lcwo-clock {
+    color: var(--accent-blue);
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+}
+.mr-lcwo-progress { height: 5px; margin: 12px 0 14px; }
+.mr-lcwo-answer {
+    width: 100%;
+    min-height: 145px;
+    resize: vertical;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    padding: 14px;
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    line-height: 1.7;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}
+.mr-lcwo-answer:focus { outline: none; border-color: var(--accent-blue); }
+.mr-lcwo-answer:disabled { opacity: 0.72; }
+.mr-lcwo-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+}
+
+.mr-lcwo-result {
+    margin-top: 18px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+}
+.mr-lcwo-result--pass { border-color: var(--accent-green); background: rgba(163, 190, 140, 0.06); }
+.mr-lcwo-result--retry { border-color: var(--accent-orange); background: rgba(235, 203, 139, 0.05); }
+.mr-lcwo-score { display: flex; align-items: center; gap: 14px; }
+.mr-lcwo-score > span {
+    min-width: 88px;
+    color: var(--text-primary);
+    font-size: 1.8rem;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+}
+.mr-lcwo-result--pass .mr-lcwo-score > span { color: var(--accent-green); }
+.mr-lcwo-result--retry .mr-lcwo-score > span { color: var(--accent-orange); }
+.mr-lcwo-score div { display: grid; gap: 3px; }
+.mr-lcwo-score small { color: var(--text-muted); }
+
+.mr-lcwo-groups {
+    max-height: 260px;
+    overflow-y: auto;
+    margin-top: 16px;
+    border: 1px solid var(--border-sub);
+    border-radius: 9px;
+    background: var(--bg-primary);
+}
+.mr-lcwo-group {
+    display: grid;
+    grid-template-columns: 1fr 1fr 70px;
+    gap: 10px;
+    padding: 7px 10px;
+    border-top: 1px solid var(--border-sub);
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+.mr-lcwo-group:first-child { border-top: 0; }
+.mr-lcwo-group span:last-child { text-align: right; }
+.mr-lcwo-group--head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+.mr-lcwo-group--bad { color: var(--accent-red); background: rgba(191, 97, 106, 0.05); }
+.mr-lcwo-complete { color: var(--accent-green); }
+
+.mr-lcwo-history { margin-top: 18px; }
+.mr-lcwo-history > div { display: flex; gap: 8px; flex-wrap: wrap; }
+.mr-lcwo-history > div > span {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    border: 1px solid var(--border-sub);
+    border-radius: 999px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    padding: 5px 10px;
+    font-size: 12px;
+}
+.mr-lcwo-history > div > span.is-pass { border-color: var(--accent-green); color: var(--accent-green); }
+.mr-lcwo-history small { color: var(--text-muted); }
+
+@media (max-width: 720px) {
+    .mr-lcwo-settings { grid-template-columns: 1fr; align-items: start; }
+    .mr-lcwo-parameters { min-height: 0; }
+    .mr-lcwo-actions > .mr-btn { flex: 1 1 180px; }
+}

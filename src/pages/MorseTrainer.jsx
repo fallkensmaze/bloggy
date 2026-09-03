@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { playMorse, morseSupported, resumeAudio } from '../utils/morse'
 import {
   DECKS,
+  LCWO_DEFAULTS,
   MAX_LESSON,
   MIN_LESSON,
   charMasterySummary,
@@ -27,6 +28,8 @@ const EFFWPM_KEY   = 'morse_effwpm'
 const FREQ_KEY     = 'morse_freq'
 const TAB_KEY      = 'morse_tab'
 const MODE_KEY     = 'morse_mode'
+const COURSE_VERSION_KEY = 'morse_course_version'
+const COURSE_VERSION = 'lcwo-1'
 
 const TABS = [
   { id: 'copiar',      label: 'Copiar al oído', icon: 'bi-ear' },
@@ -36,7 +39,7 @@ const TABS = [
 ]
 
 const MODES = [
-  { id: 'curso',    label: 'Curso guiado', icon: 'bi-compass',   hint: 'Empezar de cero, lección a lección' },
+  { id: 'curso',    label: 'Curso LCWO',   icon: 'bi-compass',   hint: 'Koch + Farnsworth, lección a lección' },
   { id: 'avanzado', label: 'Avanzado',     icon: 'bi-sliders',   hint: 'Prácticas sueltas, manipulador, tabla y todos los ajustes' },
 ]
 
@@ -51,11 +54,20 @@ function MorseTrainer() {
   const [modo, setModo]     = useState(() => readChoice(MODE_KEY, MODES.map(m => m.id), 'curso'))
   const [tab, setTab]       = useState(() => readChoice(TAB_KEY, TABS.map(t => t.id), 'copiar'))
   const [deck, setDeck]     = useState(() => readChoice(DECK_KEY, DECKS.map(d => d.id), 'koch'))
-  const [lesson, setLesson] = useState(() => readNumber(LESSON_KEY, { min: MIN_LESSON, max: MAX_LESSON, fallback: MIN_LESSON }))
+  const [lesson, setLesson] = useState(() => {
+    // La secuencia anterior no era la de LCWO y sólo tenía 39 lecciones. No se
+    // puede trasladar una lección antigua sin mezclar caracteres no aprendidos.
+    if (readChoice(COURSE_VERSION_KEY, [COURSE_VERSION], null) !== COURSE_VERSION) {
+      writeValue(COURSE_VERSION_KEY, COURSE_VERSION)
+      writeValue(LESSON_KEY, MIN_LESSON)
+      return MIN_LESSON
+    }
+    return readNumber(LESSON_KEY, { min: MIN_LESSON, max: MAX_LESSON, fallback: MIN_LESSON })
+  })
 
-  const [charWpm, setCharWpm] = useState(() => readNumber(CHARWPM_KEY, { min: 5,   max: 40,   fallback: 20 }))
-  const [effWpm, setEffWpm]   = useState(() => readNumber(EFFWPM_KEY,  { min: 4,   max: 40,   fallback: 10 }))
-  const [freq, setFreq]       = useState(() => readNumber(FREQ_KEY,    { min: 300, max: 1000, fallback: 650 }))
+  const [charWpm, setCharWpm] = useState(() => readNumber(CHARWPM_KEY, { min: 5,   max: 40,   fallback: LCWO_DEFAULTS.charWpm }))
+  const [effWpm, setEffWpm]   = useState(() => readNumber(EFFWPM_KEY,  { min: 4,   max: 40,   fallback: LCWO_DEFAULTS.effWpm }))
+  const [freq, setFreq]       = useState(() => readNumber(FREQ_KEY,    { min: 300, max: 1000, fallback: LCWO_DEFAULTS.tone }))
 
   const [stats, setStats]       = useState(() => ({ ...EMPTY_STATS, ...readJson(STATS_KEY, {}) }))
   const [progress, setProgress] = useState(() => readJson(PROGRESS_KEY, {}))
@@ -179,7 +191,7 @@ function MorseTrainer() {
         <h1 className="page-title">Código Morse</h1>
         <p className="page-subtitle">
           Aprender telegrafía desde cero, al oído y sin contar puntos: curso
-          guiado con el método Koch, manipulador, repaso adaptativo y tabla completa
+          LCWO con Koch y Farnsworth, manipulador, repaso adaptativo y tabla completa
         </p>
       </div>
 
@@ -296,9 +308,8 @@ function MorseTrainer() {
                 </span>
               </div>
               <p className="mr-slider-note">
-                Koch se aprende al oído y a velocidad de carácter alta desde el primer
-                día: se empieza con dos caracteres y sólo se añade el siguiente
-                cuando se copia el {'>'}90 %{nuevo ? ` · el nuevo de esta lección es «${nuevo}»` : ''}.
+                Orden de LCWO: se empieza con K y M, y se añade un carácter
+                cuando se copia al menos el 90 %{nuevo ? ` · el nuevo de esta lección es «${nuevo}»` : ''}.
               </p>
             </>
           )}
@@ -363,7 +374,10 @@ function MorseTrainer() {
             {...panelProps}
             deck={deck}
             lesson={lesson}
+            charWpm={charWpm}
+            effWpm={efectiva}
             onAdvance={() => handleLesson(lesson + 1)}
+            onLessonChange={handleLesson}
             onUseKoch={() => handleDeck('koch')}
           />
         </div>
