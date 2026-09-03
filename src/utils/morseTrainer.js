@@ -12,18 +12,21 @@ import {
   rhythmOf,
   reverseOf,
   oppositeOf,
+  morseTimeline,
 } from './morse.js'
 import { shuffle, pickWeighted, masterySummary as summarize } from './leitner.js'
 
 /**
- * Orden de Koch: los caracteres se introducen por parejas de sonido difícil de
- * confundir, no por el alfabeto. Cada lección añade uno nuevo al conjunto.
+ * Orden usado por el curso de LCWO.net. La lección 1 presenta K y M; las 39
+ * siguientes añaden un carácter cada una, hasta completar 41 caracteres en
+ * 40 lecciones.
  */
 export const KOCH_ORDER = [
-  'K', 'M', 'R', 'S', 'U', 'A', 'P', 'T', 'L', 'O',
-  'W', 'I', '.', 'N', 'J', 'E', 'F', '0', 'Y', ',',
-  'V', 'G', '5', '/', 'Q', '9', 'Z', 'H', '3', '8',
-  'B', '?', '4', '2', '7', 'C', '1', 'D', '6', 'X',
+  'K', 'M', 'U', 'R', 'E', 'S', 'N', 'A', 'P', 'T',
+  'L', 'W', 'I', '.', 'J', 'Z', '=', 'F', 'O', 'Y',
+  ',', 'V', 'G', '5', '/', 'Q', '9', '2', 'H', '3',
+  '8', 'B', '?', '4', '7', 'C', '1', 'D', '6', '0',
+  'X',
 ]
 
 /** La lección 1 arranca con dos caracteres; a partir de ahí, uno por lección. */
@@ -66,7 +69,7 @@ export const PROSIGN_LIST = Object.entries(PROSIGNS).map(([name, p]) => ({
 // ── Mazos ───────────────────────────────────────────────────────────────────
 
 export const DECKS = [
-  { id: 'koch',         label: 'Koch',            hint: 'Progresión clásica: dos caracteres al principio y uno más por lección' },
+  { id: 'koch',         label: 'LCWO / Koch',     hint: 'Orden de LCWO: K, M y un carácter nuevo por lección' },
   { id: 'letras',       label: 'Letras',          hint: 'Las 26 letras del alfabeto' },
   { id: 'numeros',      label: 'Números',         hint: 'Las diez cifras' },
   { id: 'alfanumerico', label: 'Letras y cifras', hint: 'Alfabeto y números, lo que basta para un indicativo' },
@@ -221,6 +224,14 @@ export function gradeCopy(target, typed) {
 export const KOCH_TARGET = 90      // % de acierto para añadir el siguiente carácter
 const KOCH_WINDOW = 5              // grupos recientes que se miran
 
+export const LCWO_DEFAULTS = Object.freeze({
+  charWpm: 20,
+  effWpm: 10,
+  tone: 600,
+  minutes: 1,
+  groupLength: 5,
+})
+
 /** ¿Toca ampliar la lección? Mira los últimos grupos copiados. */
 export function readyToAdvance(history = [], target = KOCH_TARGET, window = KOCH_WINDOW) {
   if (history.length < window) return false
@@ -229,56 +240,125 @@ export function readyToAdvance(history = [], target = KOCH_TARGET, window = KOCH
   return media >= target
 }
 
-// ── Curso guiado ────────────────────────────────────────────────────────────
-// Koch da por sabido que alguien te presenta el carácter nuevo antes de
-// examinarte de él. Sin ese paso, empezar desde cero es oír ruido: el curso lo
-// parte en tres, y no deja pasar al siguiente hasta que el anterior se sostiene.
+// ── Curso LCWO / Koch ──────────────────────────────────────────────────────
 
-export const LEARN_STEPS = [
-  { id: 'conoce',   label: 'Conoce',   icon: 'bi-ear',             hint: 'Escucha el carácter nuevo hasta que lo reconozcas' },
-  { id: 'reconoce', label: 'Reconoce', icon: 'bi-question-circle', hint: 'Distínguelo de los que ya sabes' },
-  { id: 'copia',    label: 'Copia',    icon: 'bi-keyboard',        hint: 'Escribe grupos al oído, como se hace de verdad' },
-]
-
-export const LISTENS_TO_PASS     = 3    // escuchas de cada carácter nuevo
-export const RECOGNITION_STREAK  = 6    // aciertos seguidos para pasar
-export const COPY_GROUPS_TO_PASS = 3    // grupos por encima del objetivo
-
-/**
- * Caracteres que estrena la lección y que hay que presentar: uno normalmente,
- * los dos de la primera lección cuando aún no se ha visto ninguno.
- */
+/** Caracteres que presenta la lección: K y M en la primera; luego sólo uno. */
 export function charsToIntroduce(lesson) {
   const nuevo = newestKochChar(lesson)
   return nuevo ? [nuevo] : kochChars(MIN_LESSON)
 }
 
 /**
- * Sorteo del paso de reconocimiento. El carácter nuevo sale la mitad de las
- * veces: es el único que todavía no se conoce, y alternarlo con los ya sabidos
- * es justo lo que entrena a distinguirlo.
+ * Genera una práctica cronometrada al estilo LCWO. Los grupos contienen sólo
+ * caracteres de la lección activa y el texto dura, como mínimo, los minutos
+ * pedidos a la velocidad efectiva indicada. El último grupo puede rebasar el
+ * tiempo unos segundos para no cortar un grupo a medias.
  */
-export function pickRecognition({ pool, nuevos = [], progress = {}, exclude = null, rng = Math.random } = {}) {
-  if (!pool || pool.length === 0) return null
-  const frescos = pool.filter(e => nuevos.includes(e.char))
-  const elegible = pool.length > 1 ? pool.filter(e => e.char !== exclude) : pool
+export function buildKochSession({
+  pool = [],
+  minutes = LCWO_DEFAULTS.minutes,
+  groupLength = LCWO_DEFAULTS.groupLength,
+  randomLength = false,
+  wpm = LCWO_DEFAULTS.charWpm,
+  effWpm = LCWO_DEFAULTS.effWpm,
+  rng = Math.random,
+} = {}) {
+  const safeMinutes = Math.min(5, Math.max(1, Number(minutes) || LCWO_DEFAULTS.minutes))
+  const safeLength = Math.min(7, Math.max(2, Math.round(Number(groupLength) || LCWO_DEFAULTS.groupLength)))
+  const targetSeconds = safeMinutes * 60
+  const groups = []
+  let seconds = 0
 
-  if (frescos.length > 0 && rng() < 0.5) {
-    const entre = frescos.filter(e => e.char !== exclude)
-    if (entre.length > 0) return entre[Math.floor(rng() * entre.length)]
+  if (!pool.length) return { text: '', groups, seconds, characters: 0, targetSeconds }
+
+  // 5000 grupos es una guarda defensiva muy por encima de cualquier práctica
+  // posible con los límites de la interfaz (5 min, 40 PPM).
+  while (seconds < targetSeconds && groups.length < 5000) {
+    const size = randomLength ? 2 + Math.floor(rng() * 6) : safeLength
+    groups.push(randomGroup({ pool, progress: {}, size, rng }))
+    seconds = morseTimeline(groups.join(' '), { wpm, effWpm }).duration
   }
-  return pickWeighted(elegible, progress, rng, e => e.char)
+
+  return {
+    text: groups.join(' '),
+    groups,
+    seconds,
+    characters: groups.reduce((sum, group) => sum + group.length, 0),
+    targetSeconds,
+  }
 }
 
-/** Opciones del paso de reconocimiento: la respuesta y hasta tres compañeras. */
-export function recognitionOptions(answer, pool, count = 4, rng = Math.random) {
-  const otras = shuffle(pool.filter(e => e.char !== answer.char), rng).slice(0, count - 1)
-  return shuffle([answer, ...otras], rng).map(e => e.char)
+function editDistance(left, right) {
+  const a = String(left)
+  const b = String(right)
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i)
+
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i]
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = Math.min(
+        current[j - 1] + 1,
+        previous[j] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      )
+    }
+    previous = current
+  }
+  return previous[b.length]
 }
 
-/** ¿Superado el paso de copiado del curso? */
-export function copyStepPassed(history) {
-  return readyToAdvance(history, KOCH_TARGET, COPY_GROUPS_TO_PASS)
+const practiceGroups = value => String(value)
+  .toUpperCase()
+  .replace(/;/g, '?')
+  .trim()
+  .split(/\s+/)
+  .filter(Boolean)
+
+const accuracyFrom = (errors, total) => (
+  total === 0 ? 0 : Math.max(0, Math.round((1 - Math.min(errors, total) / total) * 1000) / 10)
+)
+
+/**
+ * Corrige una sesión completa como LCWO: calcula el error grupo a grupo y una
+ * distancia de edición global (útil si se omitió un espacio), y conserva la
+ * mejor de las dos precisiones. Devuelve también el detalle por grupo y los
+ * aciertos por carácter para alimentar el repaso local.
+ */
+export function gradeKochSession(target, typed) {
+  const sent = practiceGroups(target)
+  const received = practiceGroups(typed)
+  const rows = []
+  let groupErrors = 0
+
+  for (let i = 0; i < Math.max(sent.length, received.length); i++) {
+    const expected = sent[i] || ''
+    const got = received[i] || ''
+    const errors = editDistance(expected, got)
+    groupErrors += errors
+    rows.push({ expected, got, errors })
+  }
+
+  const expectedText = sent.join('')
+  const receivedText = received.join('')
+  const total = expectedText.length
+  const sequenceErrors = editDistance(expectedText, receivedText)
+  const groupedAccuracy = accuracyFrom(groupErrors, total)
+  const sequenceAccuracy = accuracyFrom(sequenceErrors, total)
+  const aligned = gradeCopy(expectedText, receivedText)
+
+  return {
+    rows,
+    total,
+    groupErrors,
+    sequenceErrors,
+    groupedAccuracy,
+    sequenceAccuracy,
+    accuracy: Math.max(groupedAccuracy, sequenceAccuracy),
+    passed: Math.max(groupedAccuracy, sequenceAccuracy) >= KOCH_TARGET,
+    characterResults: aligned.cells
+      .filter(cell => cell.expected !== null)
+      .map(cell => ({ char: cell.expected, ok: cell.ok })),
+  }
 }
 
 // ── Quiz visual ─────────────────────────────────────────────────────────────
