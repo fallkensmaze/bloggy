@@ -527,7 +527,8 @@ function testGuidedCourse() {
   check(`the copy step needs ${COPY_GROUPS_TO_PASS} groups above the target`,
     copyStepPassed([100, 100, 100]) === true &&
     copyStepPassed([100, 100]) === false &&
-    copyStepPassed([100, 100, 60]) === false)
+    copyStepPassed([100, 100, 80]) === false &&
+    copyStepPassed([80, 100, 100, 100]) === true)
 }
 
 const suites = [

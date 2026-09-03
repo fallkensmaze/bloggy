@@ -278,7 +278,10 @@ export function recognitionOptions(answer, pool, count = 4, rng = Math.random) {
 
 /** ¿Superado el paso de copiado del curso? */
 export function copyStepPassed(history) {
-  return readyToAdvance(history, KOCH_TARGET, COPY_GROUPS_TO_PASS)
+  if (history.length < COPY_GROUPS_TO_PASS) return false
+  return history
+    .slice(-COPY_GROUPS_TO_PASS)
+    .every(score => score >= KOCH_TARGET)
 }
 
 // ── Quiz visual ─────────────────────────────────────────────────────────────

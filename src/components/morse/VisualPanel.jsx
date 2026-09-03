@@ -116,6 +116,7 @@ function VisualPanel({ pool, progress, progressRef, play, recordChars, canPlay }
             className={`mr-btn mr-btn--sm${mode === m.id ? ' mr-btn--active' : ''}`}
             onClick={() => handleModeChange(m.id)}
             title={m.hint}
+            aria-pressed={mode === m.id}
           >
             {m.label}
           </button>
@@ -181,7 +182,7 @@ function VisualPanel({ pool, progress, progressRef, play, recordChars, canPlay }
 
       {answered && (
         <>
-          <div className={`mr-feedback ${isCorrect ? 'mr-feedback--correct' : 'mr-feedback--wrong'}`} style={{ marginTop: '16px' }}>
+          <div className={`mr-feedback ${isCorrect ? 'mr-feedback--correct' : 'mr-feedback--wrong'}`} style={{ marginTop: '16px' }} role="status" aria-live="polite">
             <i className={`bi ${isCorrect ? 'bi-check-circle' : 'bi-x-circle'}`} style={{ marginRight: '8px' }} />
             {isCorrect
               ? `¡Correcto!${hintsUsed > 0 ? ' (con pista)' : ''}`

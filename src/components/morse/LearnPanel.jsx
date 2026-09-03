@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { prettyMorse, rhythmOf, symbolsFor } from '../../utils/morse'
+import { prettyMorse, resumeAudio, rhythmOf, symbolsFor } from '../../utils/morse'
 import {
   buildCopyDrill,
   charsToIntroduce,
@@ -28,25 +28,38 @@ const INTRO_KEY = 'morse_intro'
  * grupos — y no se añade un carácter nuevo hasta que el anterior se sostiene.
  */
 function LearnPanel({ pool, lesson, deck, progressRef, play, stop, playing, recordChars, canPlay, onAdvance, onUseKoch }) {
-  const guardado = readJson(LEARN_KEY, {})
+  const guardado = useRef(readJson(LEARN_KEY, {})).current
+  const mismaLeccion = guardado.lesson === lesson
   const [paso, setPaso] = useState(() => (
-    guardado.lesson === lesson && LEARN_STEPS.some(s => s.id === guardado.paso) ? guardado.paso : 'conoce'
+    mismaLeccion && (guardado.paso === 'hecho' || LEARN_STEPS.some(s => s.id === guardado.paso))
+      ? guardado.paso
+      : 'conoce'
   ))
   const [intro, setIntro] = useState(() => readJson(INTRO_KEY, {}).visto !== true)
 
-  const [escuchas, setEscuchas]     = useState({})
+  const [escuchas, setEscuchas] = useState(() => (
+    mismaLeccion && guardado.escuchas && typeof guardado.escuchas === 'object'
+      ? guardado.escuchas
+      : {}
+  ))
   const [pregunta, setPregunta]     = useState(null)
   const [elegido, setElegido]       = useState(null)
-  const [racha, setRacha]           = useState(0)
+  const [racha, setRacha] = useState(() => (
+    mismaLeccion && Number.isFinite(guardado.racha) ? Math.max(0, guardado.racha) : 0
+  ))
   const [drill, setDrill]           = useState(null)
   const [respuesta, setRespuesta]   = useState('')
   const [correccion, setCorreccion] = useState(null)
-  const [historial, setHistorial]   = useState([])
+  const [historial, setHistorial] = useState(() => (
+    mismaLeccion && Array.isArray(guardado.historial)
+      ? guardado.historial.filter(n => Number.isFinite(n)).slice(-10)
+      : []
+  ))
   const [lampara, setLampara]       = useState(false)
 
-  const timerRef = useRef(null)
-  const inputRef = useRef(null)
-  const pasoRef  = useRef(paso)
+  const timerRef           = useRef(null)
+  const inputRef           = useRef(null)
+  const lastRecognitionRef = useRef(null)
 
   const nuevos = useMemo(() => (deck === 'koch' ? charsToIntroduce(lesson) : []), [deck, lesson])
   const sonar = useCallback((texto) => {
@@ -59,6 +72,7 @@ function LearnPanel({ pool, lesson, deck, progressRef, play, stop, playing, reco
   // se salta el reinicio: ahí manda el paso que se recuperó de localStorage.
   const primeraRef = useRef(true)
   useEffect(() => {
+    if (primeraRef.current) { primeraRef.current = false; return }
     clearTimeout(timerRef.current)
     setEscuchas({})
     setRacha(0)
@@ -68,20 +82,33 @@ function LearnPanel({ pool, lesson, deck, progressRef, play, stop, playing, reco
     setDrill(null)
     setRespuesta('')
     setCorreccion(null)
-    if (primeraRef.current) { primeraRef.current = false; return }
-    pasoRef.current = 'conoce'
+    lastRecognitionRef.current = null
     setPaso('conoce')
-    writeValue(LEARN_KEY, { lesson, paso: 'conoce' })
   }, [lesson])
+
+  // Conservar el avance dentro de la lección evita perder escuchas, racha y
+  // grupos buenos al recargar o volver más tarde. Los ejercicios concretos no
+  // se guardan: al regresar se genera uno nuevo con el mismo progreso.
+  useEffect(() => {
+    writeValue(LEARN_KEY, {
+      version: 2,
+      lesson,
+      paso,
+      escuchas,
+      racha,
+      historial: historial.slice(-10),
+    })
+  }, [paso, escuchas, racha, historial]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const irA = useCallback((siguiente) => {
     clearTimeout(timerRef.current)
     stop()
+    // Los pasos siguientes reproducen automáticamente su primer ejercicio.
+    // Despertar el contexto dentro del clic evita el bloqueo de autoplay.
+    if (siguiente === 'reconoce' || siguiente === 'copia') resumeAudio()
     setLampara(false)
-    pasoRef.current = siguiente
     setPaso(siguiente)
-    writeValue(LEARN_KEY, { lesson, paso: siguiente })
-  }, [lesson, stop])
+  }, [stop])
 
   // ── 1. Conoce ──
   const escuchar = (char) => {
@@ -97,28 +124,59 @@ function LearnPanel({ pool, lesson, deck, progressRef, play, stop, playing, reco
       pool,
       nuevos,
       progress: progressRef.current,
-      exclude: pregunta?.entry.char ?? null,
+      exclude: lastRecognitionRef.current,
     })
     if (!entry) return
+    lastRecognitionRef.current = entry.char
     const q = { entry, options: recognitionOptions(entry, pool) }
     setPregunta(q)
     setElegido(null)
     sonar(entry.char)
-  // `pregunta` sólo se lee para no repetir el carácter anterior.
-  }, [pool, nuevos, progressRef, sonar])   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pool, nuevos, progressRef, sonar])
 
   useEffect(() => {
     if (paso === 'reconoce' && !pregunta) nuevaPregunta()
   }, [paso, pregunta, nuevaPregunta])
 
-  const responder = (char) => {
+  const responder = useCallback((char) => {
     if (!pregunta || elegido) return
     setElegido(char)
     const ok = char === pregunta.entry.char
     recordChars([{ char: pregunta.entry.char, ok }])
     setRacha(r => (ok ? r + 1 : 0))
     if (ok) timerRef.current = setTimeout(nuevaPregunta, 850)
-  }
+  }, [pregunta, elegido, recordChars, nuevaPregunta])
+
+  // Responder con la propia tecla entrena la asociación sonido-caracter sin
+  // obligar a perseguir botones. 1-4 sirve igual; espacio repite el sonido.
+  useEffect(() => {
+    if (paso !== 'reconoce' || !pregunta) return
+    const onKey = (e) => {
+      const tag = e.target.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if (e.ctrlKey || e.altKey || e.metaKey) return
+
+      if (e.code === 'Space') {
+        e.preventDefault()
+        sonar(pregunta.entry.char)
+        return
+      }
+      if (elegido) {
+        if (e.key === 'Enter') { e.preventDefault(); nuevaPregunta() }
+        return
+      }
+
+      const num = Number.parseInt(e.key, 10)
+      if (num >= 1 && num <= pregunta.options.length) {
+        responder(pregunta.options[num - 1])
+        return
+      }
+      const typed = e.key.toUpperCase()
+      if (pregunta.options.includes(typed)) responder(typed)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [paso, pregunta, elegido, sonar, responder, nuevaPregunta])
 
   // ── 3. Copia ──
   const nuevoGrupo = useCallback(() => {
@@ -210,7 +268,10 @@ function LearnPanel({ pool, lesson, deck, progressRef, play, stop, playing, reco
 
   const paso2 = pregunta && (
     <>
-      <p className="mr-prompt">¿Qué carácter ha sonado?</p>
+      <div className="mr-question-head">
+        <p className="mr-prompt">¿Qué carácter ha sonado?</p>
+        <span className="mr-key-help">Tecla del carácter o 1-{pregunta.options.length} · espacio repite</span>
+      </div>
 
       <div className="mr-drill">
         <div className={`mr-lamp${lampara ? ' mr-lamp--on' : ''}`} />
@@ -229,7 +290,13 @@ function LearnPanel({ pool, lesson, deck, progressRef, play, stop, playing, reco
             else clase += ' mr-option--dim'
           }
           return (
-            <button key={char} className={clase} disabled={!!elegido} onClick={() => responder(char)}>
+            <button
+              key={char}
+              className={clase}
+              disabled={!!elegido}
+              onClick={() => responder(char)}
+              aria-label={`Responder ${char}`}
+            >
               <span className="mr-option-text" style={{ fontSize: '1.4rem', textAlign: 'center' }}>{char}</span>
             </button>
           )
@@ -238,7 +305,7 @@ function LearnPanel({ pool, lesson, deck, progressRef, play, stop, playing, reco
 
       {elegido && elegido !== pregunta.entry.char && (
         <>
-          <div className="mr-feedback mr-feedback--wrong" style={{ marginTop: '14px' }}>
+          <div className="mr-feedback mr-feedback--wrong" style={{ marginTop: '14px' }} role="status" aria-live="polite">
             <i className="bi bi-x-circle" style={{ marginRight: '8px' }} />
             Era «{pregunta.entry.char}» ({prettyMorse(pregunta.entry.morse)}), que suena «{rhythmOf(pregunta.entry.morse)}».
           </div>
@@ -248,9 +315,16 @@ function LearnPanel({ pool, lesson, deck, progressRef, play, stop, playing, reco
         </>
       )}
 
-      <div className="mr-learn-streak">
+      <div className="mr-learn-streak" aria-live="polite">
         <span>Aciertos seguidos: {Math.min(racha, RECOGNITION_STREAK)} de {RECOGNITION_STREAK}</span>
-        <div className="mr-bar">
+        <div
+          className="mr-bar"
+          role="progressbar"
+          aria-label="Aciertos seguidos"
+          aria-valuemin="0"
+          aria-valuemax={RECOGNITION_STREAK}
+          aria-valuenow={Math.min(racha, RECOGNITION_STREAK)}
+        >
           <span
             className="mr-bar-seg"
             style={{ width: `${Math.min(racha / RECOGNITION_STREAK, 1) * 100}%`, background: 'var(--accent-green)' }}
@@ -303,7 +377,7 @@ function LearnPanel({ pool, lesson, deck, progressRef, play, stop, playing, reco
               </div>
             ))}
           </div>
-          <div className={`mr-feedback ${correccion.perfect ? 'mr-feedback--correct' : 'mr-feedback--wrong'}`}>
+          <div className={`mr-feedback ${correccion.perfect ? 'mr-feedback--correct' : 'mr-feedback--wrong'}`} role="status" aria-live="polite">
             <i className={`bi ${correccion.perfect ? 'bi-check-circle' : 'bi-x-circle'}`} style={{ marginRight: '8px' }} />
             {correccion.correct} de {correccion.total} · era «{drill.text}»
           </div>
@@ -360,7 +434,7 @@ function LearnPanel({ pool, lesson, deck, progressRef, play, stop, playing, reco
             <li>Sólo hay dos sonidos: uno corto, <em>dit</em> (·), y uno largo, <em>dah</em> (–). La K es «dah-di-dah».</li>
             <li><strong>No cuentes los puntos.</strong> Si te da tiempo a contarlos vas por mal camino. Por eso cada carácter suena rápido y lo que se alarga es el silencio entre ellos.</li>
             <li>Se avanza de uno en uno: empiezas con dos caracteres y añades el siguiente cuando copias el 90 %. Son 40 en total.</li>
-            <li>PPM son palabras por minuto. Los ajustes están más abajo, pero puedes dejarlos como vienen.</li>
+            <li>PPM son palabras por minuto. Puedes dejar los valores iniciales o abrir «Ajustes de audio» encima del curso.</li>
           </ul>
         </div>
       )}
@@ -372,6 +446,8 @@ function LearnPanel({ pool, lesson, deck, progressRef, play, stop, playing, reco
             className={`mr-step${paso === s.id ? ' mr-step--active' : ''}${i < indice ? ' mr-step--done' : ''}`}
             onClick={() => irA(s.id)}
             title={s.hint}
+            disabled={i > indice}
+            aria-current={paso === s.id ? 'step' : undefined}
           >
             <i className={`bi ${i < indice ? 'bi-check-circle-fill' : s.icon}`} />
             <span>{i + 1}. {s.label}</span>

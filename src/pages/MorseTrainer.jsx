@@ -16,6 +16,7 @@ import CopyPanel from '../components/morse/CopyPanel'
 import KeyPanel from '../components/morse/KeyPanel'
 import VisualPanel from '../components/morse/VisualPanel'
 import ReferencePanel from '../components/morse/ReferencePanel'
+import AudioSettings from '../components/morse/AudioSettings'
 import '../styles/morse.css'
 
 const STATS_KEY    = 'morse_stats'
@@ -191,6 +192,7 @@ function MorseTrainer() {
             className={`mr-btn${modo === m.id ? ' mr-btn--active' : ''}`}
             onClick={() => handleModo(m.id)}
             title={m.hint}
+            aria-pressed={modo === m.id}
           >
             <i className={`bi ${m.icon}`} style={{ marginRight: '8px' }} />
             {m.label}
@@ -216,7 +218,7 @@ function MorseTrainer() {
           )}
         </div>
 
-        <div className="mr-stats-grid">
+        <div className="mr-stats-grid" aria-label="Resumen de progreso">
           <div className="mr-stat">
             <span className="mr-stat-value mr-stat-value--green">{stats.correct}</span>
             <span className="mr-stat-label">Aciertos{stats.hinted > 0 ? ` (${stats.hinted} con pista)` : ''}</span>
@@ -247,7 +249,14 @@ function MorseTrainer() {
               ))}
             </span>
           </div>
-          <div className="mr-bar">
+          <div
+            className="mr-bar"
+            role="progressbar"
+            aria-label="Caracteres dominados"
+            aria-valuemin="0"
+            aria-valuemax={summary.total}
+            aria-valuenow={summary.dominado}
+          >
             {['dominado', 'progreso', 'flojo'].map(k => summary[k] > 0 && (
               <span
                 key={k}
@@ -259,8 +268,7 @@ function MorseTrainer() {
         </div>
       </div>
 
-      {/* ── Ajustes: sólo en modo avanzado, para no recibir a nadie con una
-           pared de deslizadores el primer día ── */}
+      {/* ── Ajustes y selección libre del mazo en modo avanzado ── */}
       {modo === 'avanzado' && (
         <div className="calc-card mr-card">
           <span className="field-label">Mazo</span>
@@ -271,6 +279,7 @@ function MorseTrainer() {
                 className={`mr-btn mr-btn--sm${deck === d.id ? ' mr-btn--active' : ''}`}
                 onClick={() => handleDeck(d.id)}
                 title={d.hint}
+                aria-pressed={deck === d.id}
               >
                 {d.label} ({deckEntries(d.id, lesson).length})
               </button>
@@ -280,13 +289,23 @@ function MorseTrainer() {
           {deck === 'koch' && (
             <>
               <div className="mr-lesson">
-                <button className="mr-btn mr-btn--sm" onClick={() => handleLesson(lesson - 1)} disabled={lesson <= MIN_LESSON}>
+                <button
+                  className="mr-btn mr-btn--sm"
+                  onClick={() => handleLesson(lesson - 1)}
+                  disabled={lesson <= MIN_LESSON}
+                  aria-label="Lección anterior"
+                >
                   <i className="bi bi-dash-lg" />
                 </button>
                 <span style={{ fontSize: '13.5px', color: 'var(--text-secondary)' }}>
                   Lección {lesson} de {MAX_LESSON}
                 </span>
-                <button className="mr-btn mr-btn--sm" onClick={() => handleLesson(lesson + 1)} disabled={lesson >= MAX_LESSON}>
+                <button
+                  className="mr-btn mr-btn--sm"
+                  onClick={() => handleLesson(lesson + 1)}
+                  disabled={lesson >= MAX_LESSON}
+                  aria-label="Lección siguiente"
+                >
                   <i className="bi bi-plus-lg" />
                 </button>
                 <span className="mr-lesson-chars">
@@ -303,81 +322,64 @@ function MorseTrainer() {
             </>
           )}
 
-          <div className="mr-sliders">
-            <div>
-              <div className="mr-slider-head">
-                <span>Velocidad de carácter</span>
-                <span className="mr-slider-value">{charWpm} PPM</span>
-              </div>
-              <input
-                className="mr-slider"
-                type="range" min="5" max="40" step="1"
-                value={charWpm}
-                onChange={e => handleCharWpm(Number(e.target.value))}
-              />
-              <p className="mr-slider-note">A qué ritmo suena cada carácter por dentro. Conviene no bajar de 18.</p>
-            </div>
-
-            <div>
-              <div className="mr-slider-head">
-                <span>Velocidad efectiva</span>
-                <span className="mr-slider-value">{efectiva} PPM</span>
-              </div>
-              <input
-                className="mr-slider"
-                type="range" min="4" max={charWpm} step="1"
-                value={efectiva}
-                onChange={e => handleEffWpm(Number(e.target.value))}
-              />
-              <p className="mr-slider-note">
-                {efectiva < charWpm
-                  ? 'Farnsworth: mismos caracteres, más silencio entre ellos para poder pensar.'
-                  : 'Al igualar las dos velocidades desaparece el respiro de Farnsworth.'}
-              </p>
-            </div>
-
-            <div>
-              <div className="mr-slider-head">
-                <span>Tono</span>
-                <span className="mr-slider-value">{freq} Hz</span>
-              </div>
-              <input
-                className="mr-slider"
-                type="range" min="300" max="1000" step="10"
-                value={freq}
-                onChange={e => handleFreq(Number(e.target.value))}
-              />
-              <button className="mr-btn mr-btn--sm" style={{ marginTop: '6px' }} onClick={() => play('V')} disabled={!canPlay}>
-                <i className="bi bi-volume-up" style={{ marginRight: '6px' }} />
-                Probar el tono
-              </button>
-            </div>
-          </div>
+          <AudioSettings
+            charWpm={charWpm}
+            effectiveWpm={efectiva}
+            freq={freq}
+            canPlay={canPlay}
+            onCharWpm={handleCharWpm}
+            onEffectiveWpm={handleEffWpm}
+            onFreq={handleFreq}
+            onTestTone={() => play('V')}
+          />
         </div>
       )}
 
       {/* ── Curso guiado ── */}
       {modo === 'curso' && (
-        <div className="calc-card">
-          <LearnPanel
-            {...panelProps}
-            deck={deck}
-            lesson={lesson}
-            onAdvance={() => handleLesson(lesson + 1)}
-            onUseKoch={() => handleDeck('koch')}
-          />
-        </div>
+        <>
+          <details className="calc-card mr-card mr-course-settings">
+            <summary>
+              <span><i className="bi bi-volume-up" /> Ajustes de audio</span>
+              <span className="mr-course-settings-value">{charWpm}/{efectiva} PPM · {freq} Hz</span>
+            </summary>
+            <AudioSettings
+              charWpm={charWpm}
+              effectiveWpm={efectiva}
+              freq={freq}
+              canPlay={canPlay}
+              onCharWpm={handleCharWpm}
+              onEffectiveWpm={handleEffWpm}
+              onFreq={handleFreq}
+              onTestTone={() => play('V')}
+            />
+          </details>
+
+          <div className="calc-card">
+            <LearnPanel
+              {...panelProps}
+              deck={deck}
+              lesson={lesson}
+              onAdvance={() => handleLesson(lesson + 1)}
+              onUseKoch={() => handleDeck('koch')}
+            />
+          </div>
+        </>
       )}
 
       {/* ── Práctica suelta ── */}
       {modo === 'avanzado' && (
         <div className="calc-card">
-          <div className="mr-tabs">
+          <div className="mr-tabs" role="tablist" aria-label="Prácticas de Morse">
             {TABS.map(t => (
               <button
                 key={t.id}
+                id={`morse-tab-${t.id}`}
                 className={`mr-tab${tab === t.id ? ' mr-tab--active' : ''}`}
                 onClick={() => handleTab(t.id)}
+                role="tab"
+                aria-selected={tab === t.id}
+                aria-controls={`morse-panel-${t.id}`}
               >
                 <i className={`bi ${t.icon}`} style={{ marginRight: '7px' }} />
                 {t.label}
@@ -385,17 +387,23 @@ function MorseTrainer() {
             ))}
           </div>
 
-          {tab === 'copiar' && (
-            <CopyPanel
-              {...panelProps}
-              deck={deck}
-              lesson={lesson}
-              onAdvance={() => handleLesson(lesson + 1)}
-            />
-          )}
-          {tab === 'manipular'  && <KeyPanel {...panelProps} charWpm={charWpm} freq={freq} />}
-          {tab === 'visual'     && <VisualPanel {...panelProps} />}
-          {tab === 'referencia' && <ReferencePanel {...panelProps} />}
+          <div
+            id={`morse-panel-${tab}`}
+            role="tabpanel"
+            aria-labelledby={`morse-tab-${tab}`}
+          >
+            {tab === 'copiar' && (
+              <CopyPanel
+                {...panelProps}
+                deck={deck}
+                lesson={lesson}
+                onAdvance={() => handleLesson(lesson + 1)}
+              />
+            )}
+            {tab === 'manipular'  && <KeyPanel {...panelProps} charWpm={charWpm} freq={freq} />}
+            {tab === 'visual'     && <VisualPanel {...panelProps} />}
+            {tab === 'referencia' && <ReferencePanel {...panelProps} />}
+          </div>
         </div>
       )}
 
