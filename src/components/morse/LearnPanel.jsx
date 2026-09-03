@@ -1,353 +1,199 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { prettyMorse, rhythmOf, symbolsFor } from '../../utils/morse'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  buildCopyDrill,
+  buildKochSession,
   charsToIntroduce,
-  copyStepPassed,
-  gradeCopy,
+  gradeKochSession,
   kochChars,
-  pickRecognition,
-  recognitionOptions,
-  COPY_GROUPS_TO_PASS,
-  LEARN_STEPS,
-  LISTENS_TO_PASS,
+  LCWO_DEFAULTS,
+  KOCH_TARGET,
   MAX_LESSON,
-  RECOGNITION_STREAK,
+  MIN_LESSON,
 } from '../../utils/morseTrainer'
-import { readJson, writeValue } from '../../utils/localSettings'
+import { readChoice, readJson, readNumber, writeValue } from '../../utils/localSettings'
 
-const LEARN_KEY = 'morse_learn'
-const INTRO_KEY = 'morse_intro'
+const INTRO_KEY = 'morse_lcwo_intro'
+const MINUTES_KEY = 'morse_lcwo_minutes'
+const GROUPS_KEY = 'morse_lcwo_groups'
+const ATTEMPTS_KEY = 'morse_lcwo_attempts'
+
+const MINUTE_OPTIONS = [1, 2, 3, 4, 5]
+const GROUP_OPTIONS = ['fixed', 'random']
+
+const formatTime = (seconds) => {
+  const safe = Math.max(0, Math.ceil(seconds || 0))
+  return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, '0')}`
+}
 
 /**
- * Curso guiado para empezar de cero.
- *
- * Koch da por sabido que alguien te presenta el carácter antes de examinarte:
- * sin ese paso, la primera lección es oír ruido. Aquí cada lección va en tres
- * tiempos — conocer el sonido, distinguirlo de los ya sabidos y copiarlo en
- * grupos — y no se añade un carácter nuevo hasta que el anterior se sostiene.
+ * Curso de recepción que reproduce el flujo de LCWO.net: escuchar el carácter
+ * nuevo, copiar durante 1–5 minutos grupos aleatorios de la lección activa y
+ * añadir el siguiente al alcanzar el 90 %.
  */
-function LearnPanel({ pool, lesson, deck, progressRef, play, stop, playing, recordChars, canPlay, onAdvance, onUseKoch }) {
-  const guardado = readJson(LEARN_KEY, {})
-  const [paso, setPaso] = useState(() => (
-    guardado.lesson === lesson && LEARN_STEPS.some(s => s.id === guardado.paso) ? guardado.paso : 'conoce'
-  ))
+function LearnPanel({
+  pool,
+  lesson,
+  deck,
+  play,
+  stop,
+  playing,
+  recordChars,
+  canPlay,
+  charWpm,
+  effWpm,
+  onAdvance,
+  onLessonChange,
+  onUseKoch,
+}) {
   const [intro, setIntro] = useState(() => readJson(INTRO_KEY, {}).visto !== true)
+  const [minutes, setMinutes] = useState(() => readNumber(MINUTES_KEY, {
+    min: 1,
+    max: 5,
+    fallback: LCWO_DEFAULTS.minutes,
+  }))
+  const [groupMode, setGroupMode] = useState(() => readChoice(
+    GROUPS_KEY,
+    GROUP_OPTIONS,
+    'fixed',
+  ))
+  const [attempts, setAttempts] = useState(() => {
+    const stored = readJson(ATTEMPTS_KEY, [])
+    return Array.isArray(stored) ? stored : []
+  })
 
-  const [escuchas, setEscuchas]     = useState({})
-  const [pregunta, setPregunta]     = useState(null)
-  const [elegido, setElegido]       = useState(null)
-  const [racha, setRacha]           = useState(0)
-  const [drill, setDrill]           = useState(null)
-  const [respuesta, setRespuesta]   = useState('')
-  const [correccion, setCorreccion] = useState(null)
-  const [historial, setHistorial]   = useState([])
-  const [lampara, setLampara]       = useState(false)
+  const [session, setSession] = useState(null)
+  const [answer, setAnswer] = useState('')
+  const [result, setResult] = useState(null)
+  const [running, setRunning] = useState(false)
+  const [finished, setFinished] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
 
-  const timerRef = useRef(null)
-  const inputRef = useRef(null)
-  const pasoRef  = useRef(paso)
+  const startedAtRef = useRef(0)
+  const answerRef = useRef(null)
+  const newChars = useMemo(() => (deck === 'koch' ? charsToIntroduce(lesson) : []), [deck, lesson])
+  const lessonAttempts = useMemo(
+    () => attempts.filter(item => item.lesson === lesson).slice(-5).reverse(),
+    [attempts, lesson],
+  )
 
-  const nuevos = useMemo(() => (deck === 'koch' ? charsToIntroduce(lesson) : []), [deck, lesson])
-  const sonar = useCallback((texto) => {
-    play(texto, { onSymbol: ({ on }) => setLampara(on), onEnd: () => setLampara(false) })
-  }, [play])
-
-  useEffect(() => () => { clearTimeout(timerRef.current); stop() }, [stop])
-
-  // Cambiar de lección devuelve el curso a su primer tiempo. El primer montaje
-  // se salta el reinicio: ahí manda el paso que se recuperó de localStorage.
-  const primeraRef = useRef(true)
-  useEffect(() => {
-    clearTimeout(timerRef.current)
-    setEscuchas({})
-    setRacha(0)
-    setHistorial([])
-    setPregunta(null)
-    setElegido(null)
-    setDrill(null)
-    setRespuesta('')
-    setCorreccion(null)
-    if (primeraRef.current) { primeraRef.current = false; return }
-    pasoRef.current = 'conoce'
-    setPaso('conoce')
-    writeValue(LEARN_KEY, { lesson, paso: 'conoce' })
-  }, [lesson])
-
-  const irA = useCallback((siguiente) => {
-    clearTimeout(timerRef.current)
+  const resetSession = useCallback(() => {
     stop()
-    setLampara(false)
-    pasoRef.current = siguiente
-    setPaso(siguiente)
-    writeValue(LEARN_KEY, { lesson, paso: siguiente })
-  }, [lesson, stop])
+    setSession(null)
+    setAnswer('')
+    setResult(null)
+    setRunning(false)
+    setFinished(false)
+    setElapsed(0)
+    startedAtRef.current = 0
+  }, [stop])
 
-  // ── 1. Conoce ──
-  const escuchar = (char) => {
-    setEscuchas(e => ({ ...e, [char]: (e[char] || 0) + 1 }))
-    sonar(char)
-  }
-  const conocidos = nuevos.every(c => (escuchas[c] || 0) >= LISTENS_TO_PASS)
+  useEffect(() => resetSession(), [lesson, minutes, groupMode, charWpm, effWpm, resetSession])
+  useEffect(() => () => stop(), [stop])
 
-  // ── 2. Reconoce ──
-  const nuevaPregunta = useCallback(() => {
-    clearTimeout(timerRef.current)
-    const entry = pickRecognition({
-      pool,
-      nuevos,
-      progress: progressRef.current,
-      exclude: pregunta?.entry.char ?? null,
+  useEffect(() => {
+    if (!running) return undefined
+    const update = () => setElapsed((Date.now() - startedAtRef.current) / 1000)
+    update()
+    const timer = setInterval(update, 250)
+    return () => clearInterval(timer)
+  }, [running])
+
+  const makeSession = useCallback(() => buildKochSession({
+    pool,
+    minutes,
+    groupLength: LCWO_DEFAULTS.groupLength,
+    randomLength: groupMode === 'random',
+    wpm: charWpm,
+    effWpm,
+  }), [pool, minutes, groupMode, charWpm, effWpm])
+
+  const startSession = () => {
+    const next = session || makeSession()
+    if (!next.text) return
+    if (!session) setSession(next)
+    setResult(null)
+    setFinished(false)
+    setElapsed(0)
+    startedAtRef.current = Date.now()
+    setRunning(true)
+    play(next.text, {
+      onEnd: () => {
+        setRunning(false)
+        setFinished(true)
+        setElapsed(next.seconds)
+        answerRef.current?.focus()
+      },
     })
-    if (!entry) return
-    const q = { entry, options: recognitionOptions(entry, pool) }
-    setPregunta(q)
-    setElegido(null)
-    sonar(entry.char)
-  // `pregunta` sólo se lee para no repetir el carácter anterior.
-  }, [pool, nuevos, progressRef, sonar])   // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (paso === 'reconoce' && !pregunta) nuevaPregunta()
-  }, [paso, pregunta, nuevaPregunta])
-
-  const responder = (char) => {
-    if (!pregunta || elegido) return
-    setElegido(char)
-    const ok = char === pregunta.entry.char
-    recordChars([{ char: pregunta.entry.char, ok }])
-    setRacha(r => (ok ? r + 1 : 0))
-    if (ok) timerRef.current = setTimeout(nuevaPregunta, 850)
+    answerRef.current?.focus()
   }
 
-  // ── 3. Copia ──
-  const nuevoGrupo = useCallback(() => {
-    setDrill(buildCopyDrill({ pool, progress: progressRef.current, mode: 'grupo', size: 5 }))
-    setRespuesta('')
-    setCorreccion(null)
-  }, [pool, progressRef])
-
-  useEffect(() => {
-    if (paso === 'copia' && !drill) nuevoGrupo()
-  }, [paso, drill, nuevoGrupo])
-
-  useEffect(() => {
-    if (paso === 'copia' && drill && !correccion) {
-      sonar(drill.text)
-      inputRef.current?.focus()
-    }
-  // Suena una vez por grupo; repetir es cosa del botón.
-  }, [paso, drill])   // eslint-disable-line react-hooks/exhaustive-deps
-
-  const corregir = () => {
-    if (!drill || correccion) return
+  const stopSession = () => {
     stop()
-    setLampara(false)
-    const g = gradeCopy(drill.text, respuesta)
-    setCorreccion(g)
-    recordChars(g.cells.filter(c => c.expected !== null).map(c => ({ char: c.expected, ok: c.ok })))
-    setHistorial(h => [...h, g.total === 0 ? 0 : Math.round((g.correct / g.total) * 100)].slice(-10))
+    setRunning(false)
+    setFinished(false)
+    setElapsed(0)
+    startedAtRef.current = 0
   }
 
-  const superado = {
-    conoce:   conocidos,
-    reconoce: racha >= RECOGNITION_STREAK,
-    copia:    copyStepPassed(historial),
+  const submitSession = () => {
+    if (!session || result) return
+    stop()
+    setRunning(false)
+    setFinished(true)
+    const graded = gradeKochSession(session.text, answer)
+    setResult(graded)
+    recordChars(graded.characterResults)
+
+    const attempt = {
+      lesson,
+      accuracy: graded.accuracy,
+      charWpm,
+      effWpm,
+      at: Date.now(),
+    }
+    setAttempts(previous => {
+      const next = [...previous, attempt].slice(-80)
+      writeValue(ATTEMPTS_KEY, next)
+      return next
+    })
   }
 
-  // ── Interfaz ──
+  const changeMinutes = (value) => {
+    setMinutes(value)
+    writeValue(MINUTES_KEY, value)
+  }
+
+  const changeGroupMode = (value) => {
+    setGroupMode(value)
+    writeValue(GROUPS_KEY, value)
+  }
+
+  const preview = (char) => {
+    if (running) return
+    play(char.repeat(10))
+  }
+
   if (deck !== 'koch') {
     return (
       <div className="mr-feedback mr-feedback--info" style={{ fontWeight: 400 }}>
         <i className="bi bi-info-circle" style={{ marginRight: '8px' }} />
-        El curso va por lecciones de Koch, que es la progresión pensada para
-        empezar de cero. Ahora tienes elegido otro mazo.{' '}
+        El curso LCWO usa su propia progresión Koch. Ahora tienes elegido otro mazo.{' '}
         <button className="mr-btn mr-btn--sm" style={{ marginLeft: '8px' }} onClick={onUseKoch}>
-          Volver al mazo Koch
+          Volver a LCWO / Koch
         </button>
       </div>
     )
   }
 
-  const paso1 = (
-    <>
-      <p className="mr-prompt">
-        {nuevos.length > 1
-          ? 'Estos son tus dos primeros caracteres. Escucha cada uno hasta que puedas tararearlo.'
-          : `La lección ${lesson} estrena un carácter. Escúchalo hasta que lo reconozcas sin mirar.`}
-      </p>
-
-      <div className="mr-learn-cards">
-        {nuevos.map(char => {
-          const morse = symbolsFor(char)
-          const veces = escuchas[char] || 0
-          return (
-            <div key={char} className={`mr-learn-card${veces >= LISTENS_TO_PASS ? ' mr-learn-card--done' : ''}`}>
-              <span className="mr-stage-char">{char}</span>
-              <span className="mr-pattern mr-pattern--lg">{prettyMorse(morse)}</span>
-              <span className="mr-rhythm">«{rhythmOf(morse)}»</span>
-              <button className="mr-btn mr-btn--primary" onClick={() => escuchar(char)} disabled={!canPlay}>
-                <i className="bi bi-volume-up" style={{ marginRight: '8px' }} />
-                Escuchar
-              </button>
-              <span className="mr-learn-count">
-                {veces >= LISTENS_TO_PASS
-                  ? <><i className="bi bi-check-circle" /> Escuchado</>
-                  : `${veces} de ${LISTENS_TO_PASS} escuchas`}
-              </span>
-            </div>
-          )
-        })}
-      </div>
-
-      {lesson > 1 && (
-        <p className="mr-slider-note">
-          Ya sabes: <span className="mr-lesson-chars">{kochChars(lesson - 1).join(' ')}</span>
-        </p>
-      )}
-    </>
-  )
-
-  const paso2 = pregunta && (
-    <>
-      <p className="mr-prompt">¿Qué carácter ha sonado?</p>
-
-      <div className="mr-drill">
-        <div className={`mr-lamp${lampara ? ' mr-lamp--on' : ''}`} />
-        <button className="mr-btn" style={{ marginTop: '16px' }} onClick={() => sonar(pregunta.entry.char)} disabled={!canPlay}>
-          <i className={`bi ${playing ? 'bi-soundwave' : 'bi-arrow-repeat'}`} style={{ marginRight: '6px' }} />
-          Repetir
-        </button>
-      </div>
-
-      <div className="mr-options">
-        {pregunta.options.map(char => {
-          let clase = 'mr-option mr-option--char'
-          if (elegido) {
-            if (char === pregunta.entry.char) clase += ' mr-option--correct'
-            else if (char === elegido) clase += ' mr-option--wrong'
-            else clase += ' mr-option--dim'
-          }
-          return (
-            <button key={char} className={clase} disabled={!!elegido} onClick={() => responder(char)}>
-              <span className="mr-option-text" style={{ fontSize: '1.4rem', textAlign: 'center' }}>{char}</span>
-            </button>
-          )
-        })}
-      </div>
-
-      {elegido && elegido !== pregunta.entry.char && (
-        <>
-          <div className="mr-feedback mr-feedback--wrong" style={{ marginTop: '14px' }}>
-            <i className="bi bi-x-circle" style={{ marginRight: '8px' }} />
-            Era «{pregunta.entry.char}» ({prettyMorse(pregunta.entry.morse)}), que suena «{rhythmOf(pregunta.entry.morse)}».
-          </div>
-          <button className="mr-btn mr-btn--primary" style={{ width: '100%', marginTop: '12px', padding: '12px' }} onClick={nuevaPregunta}>
-            Otra vez
-          </button>
-        </>
-      )}
-
-      <div className="mr-learn-streak">
-        <span>Aciertos seguidos: {Math.min(racha, RECOGNITION_STREAK)} de {RECOGNITION_STREAK}</span>
-        <div className="mr-bar">
-          <span
-            className="mr-bar-seg"
-            style={{ width: `${Math.min(racha / RECOGNITION_STREAK, 1) * 100}%`, background: 'var(--accent-green)' }}
-          />
-        </div>
-      </div>
-    </>
-  )
-
-  const paso3 = (
-    <>
-      <p className="mr-prompt">
-        Suenan cinco caracteres seguidos. Escribe los que cojas y no te pares en
-        el que se te escape: perder uno y seguir es justo lo que hay que aprender.
-      </p>
-
-      <div className="mr-drill">
-        <div className={`mr-lamp${lampara ? ' mr-lamp--on' : ''}`} />
-        <button className="mr-btn" style={{ marginTop: '16px' }} onClick={() => drill && sonar(drill.text)} disabled={!canPlay || !drill}>
-          <i className={`bi ${playing ? 'bi-soundwave' : 'bi-arrow-repeat'}`} style={{ marginRight: '6px' }} />
-          Repetir
-        </button>
-      </div>
-
-      <input
-        ref={inputRef}
-        className="mr-answer"
-        value={respuesta}
-        onChange={e => setRespuesta(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); correccion ? nuevoGrupo() : corregir() } }}
-        disabled={!!correccion}
-        placeholder="· · ·"
-        autoComplete="off"
-        spellCheck="false"
-        aria-label="Lo que has copiado"
-      />
-
-      {!correccion ? (
-        <button className="mr-btn mr-btn--primary" style={{ width: '100%', marginTop: '14px', padding: '13px' }} onClick={corregir} disabled={!drill}>
-          Comprobar (Intro)
-        </button>
-      ) : (
-        <>
-          <div className="mr-cells">
-            {correccion.cells.map((c, i) => (
-              <div key={i} className={`mr-cell ${c.ok ? 'mr-cell--ok' : 'mr-cell--bad'}`}>
-                <span className="mr-cell-char">{c.expected ?? '–'}</span>
-                <span className="mr-cell-got">{!c.ok && c.got ? c.got : ''}</span>
-                <span className="mr-cell-pattern">{c.expected ? prettyMorse(symbolsFor(c.expected) || '') : ''}</span>
-              </div>
-            ))}
-          </div>
-          <div className={`mr-feedback ${correccion.perfect ? 'mr-feedback--correct' : 'mr-feedback--wrong'}`}>
-            <i className={`bi ${correccion.perfect ? 'bi-check-circle' : 'bi-x-circle'}`} style={{ marginRight: '8px' }} />
-            {correccion.correct} de {correccion.total} · era «{drill.text}»
-          </div>
-          <button className="mr-btn mr-btn--primary" style={{ width: '100%', marginTop: '14px', padding: '13px' }} onClick={nuevoGrupo}>
-            Otro grupo (Intro)
-          </button>
-        </>
-      )}
-
-      <div className="mr-learn-streak">
-        <span>
-          Grupos por encima del 90 %: {historial.slice(-COPY_GROUPS_TO_PASS).filter(n => n >= 90).length} de {COPY_GROUPS_TO_PASS}
-        </span>
-      </div>
-    </>
-  )
-
-  const fin = (
-    <div className="mr-learn-done">
-      <i className="bi bi-mortarboard" />
-      <h3>Lección {lesson} superada</h3>
-      <p>
-        Ya distingues <span className="mr-lesson-chars">{kochChars(lesson).join(' ')}</span> al oído.
-      </p>
-      {lesson < MAX_LESSON ? (
-        <button className="mr-btn mr-btn--primary" style={{ padding: '13px 22px' }} onClick={() => { onAdvance(); irA('conoce') }}>
-          <i className="bi bi-plus-circle" style={{ marginRight: '8px' }} />
-          Añadir «{kochChars(lesson + 1).slice(-1)[0]}» y seguir
-        </button>
-      ) : (
-        <p>Has llegado al final del curso: los 40 caracteres de la progresión de Koch.</p>
-      )}
-    </div>
-  )
-
-  const indice = paso === 'hecho' ? LEARN_STEPS.length : LEARN_STEPS.findIndex(s => s.id === paso)
-  const actual = LEARN_STEPS[indice]
+  const remaining = session ? Math.max(0, session.seconds - elapsed) : minutes * 60
+  const progress = session?.seconds ? Math.min(100, (elapsed / session.seconds) * 100) : 0
+  const activeChars = kochChars(lesson)
 
   return (
     <>
       {intro && (
         <div className="mr-intro">
           <div className="mr-row-between">
-            <strong><i className="bi bi-compass" style={{ marginRight: '8px' }} />Empezar de cero</strong>
+            <strong><i className="bi bi-headphones" style={{ marginRight: '8px' }} />Método LCWO</strong>
             <button
               className="mr-btn mr-btn--sm"
               onClick={() => { setIntro(false); writeValue(INTRO_KEY, { visto: true }) }}
@@ -355,46 +201,196 @@ function LearnPanel({ pool, lesson, deck, progressRef, play, stop, playing, reco
               Entendido
             </button>
           </div>
-          <ul>
-            <li>El Morse <strong>se aprende de oído</strong>. Verás los puntos y rayas como apoyo, pero lo que hay que memorizar es el sonido, no el dibujo.</li>
-            <li>Sólo hay dos sonidos: uno corto, <em>dit</em> (·), y uno largo, <em>dah</em> (–). La K es «dah-di-dah».</li>
-            <li><strong>No cuentes los puntos.</strong> Si te da tiempo a contarlos vas por mal camino. Por eso cada carácter suena rápido y lo que se alarga es el silencio entre ellos.</li>
-            <li>Se avanza de uno en uno: empiezas con dos caracteres y añades el siguiente cuando copias el 90 %. Son 40 en total.</li>
-            <li>PPM son palabras por minuto. Los ajustes están más abajo, pero puedes dejarlos como vienen.</li>
-          </ul>
+          <ol>
+            <li>Empiezas sólo con <strong>K y M</strong>; cada lección añade un carácter en el orden de LCWO.</li>
+            <li>Los caracteres suenan rápidos ({charWpm} PPM) y el espaciado baja el conjunto a {effWpm} PPM: es temporización Farnsworth.</li>
+            <li>Copias grupos aleatorios sin detenerte si pierdes uno. No cuentes puntos y rayas: reconoce el sonido completo.</li>
+            <li>Con <strong>{KOCH_TARGET} % o más</strong> puedes pasar a la siguiente lección. El curso tiene 40 lecciones y 41 caracteres.</li>
+          </ol>
         </div>
       )}
 
-      <div className="mr-steps">
-        {LEARN_STEPS.map((s, i) => (
+      <div className="mr-lcwo-head">
+        <div>
+          <span className="mr-kicker">Curso LCWO / Koch</span>
+          <h2>Lección {lesson} de {MAX_LESSON}</h2>
+          <p>
+            {lesson === MIN_LESSON
+              ? 'Primeros sonidos: K y M'
+              : `Carácter nuevo: ${newChars[0]}`}
+          </p>
+        </div>
+        <label className="mr-lesson-select">
+          <span>Ir a la lección</span>
+          <select value={lesson} onChange={event => onLessonChange(Number(event.target.value))} disabled={running}>
+            {Array.from({ length: MAX_LESSON }, (_, index) => index + 1).map(value => (
+              <option key={value} value={value}>
+                {value}{value === 1 ? ' · K M' : ` · +${kochChars(value).at(-1)}`}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="mr-lcwo-chars" aria-label="Caracteres de la lección">
+        {activeChars.map(char => (
           <button
-            key={s.id}
-            className={`mr-step${paso === s.id ? ' mr-step--active' : ''}${i < indice ? ' mr-step--done' : ''}`}
-            onClick={() => irA(s.id)}
-            title={s.hint}
+            key={char}
+            className={`mr-lcwo-char${newChars.includes(char) ? ' mr-lcwo-char--new' : ''}`}
+            onClick={() => preview(char)}
+            disabled={!canPlay || running}
+            title={`Escuchar ${char}`}
           >
-            <i className={`bi ${i < indice ? 'bi-check-circle-fill' : s.icon}`} />
-            <span>{i + 1}. {s.label}</span>
+            <span>{char}</span>
+            {newChars.includes(char) && <small>nuevo</small>}
           </button>
         ))}
       </div>
+      <p className="mr-slider-note">Pulsa un carácter para oírlo diez veces. En el curso no se muestran puntos y rayas.</p>
 
-      {paso === 'conoce'   && paso1}
-      {paso === 'reconoce' && paso2}
-      {paso === 'copia'    && paso3}
-      {paso === 'hecho'    && fin}
+      <div className="mr-lcwo-settings">
+        <div>
+          <span className="field-label">Duración</span>
+          <div className="mr-chips">
+            {MINUTE_OPTIONS.map(value => (
+              <button
+                key={value}
+                className={`mr-btn mr-btn--sm${minutes === value ? ' mr-btn--active' : ''}`}
+                onClick={() => changeMinutes(value)}
+                disabled={running}
+              >
+                {value} min
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <span className="field-label">Longitud de grupo</span>
+          <div className="mr-chips">
+            <button
+              className={`mr-btn mr-btn--sm${groupMode === 'fixed' ? ' mr-btn--active' : ''}`}
+              onClick={() => changeGroupMode('fixed')}
+              disabled={running}
+            >
+              5 fija
+            </button>
+            <button
+              className={`mr-btn mr-btn--sm${groupMode === 'random' ? ' mr-btn--active' : ''}`}
+              onClick={() => changeGroupMode('random')}
+              disabled={running}
+            >
+              2–7 aleatoria
+            </button>
+          </div>
+        </div>
+        <div className="mr-lcwo-parameters">
+          <span className="field-label">Envío</span>
+          <strong>{charWpm}/{effWpm} PPM</strong>
+          <small>carácter / efectiva</small>
+        </div>
+      </div>
 
-      {paso !== 'hecho' && (
-        <div className="mr-learn-next">
-          <span className="mr-slider-note" style={{ margin: 0 }}>{actual?.hint}</span>
-          <button
-            className="mr-btn mr-btn--primary"
-            onClick={() => irA(indice === LEARN_STEPS.length - 1 ? 'hecho' : LEARN_STEPS[indice + 1].id)}
-            disabled={!superado[paso]}
-          >
-            {superado[paso] ? 'Continuar' : 'Termina este paso'}
-            <i className="bi bi-arrow-right" style={{ marginLeft: '8px' }} />
-          </button>
+      <div className="mr-lcwo-console">
+        <div className="mr-row-between">
+          <span className="field-label" style={{ marginBottom: 0 }}>Texto de práctica</span>
+          <span className="mr-lcwo-clock">
+            {running ? 'En curso' : finished ? 'Finalizado' : 'Preparado'} · {formatTime(remaining)}
+          </span>
+        </div>
+        <div className="mr-bar mr-lcwo-progress" aria-hidden="true">
+          <span className="mr-bar-seg" style={{ width: `${progress}%`, background: 'var(--accent-blue)' }} />
+        </div>
+
+        <textarea
+          ref={answerRef}
+          className="mr-lcwo-answer"
+          value={answer}
+          onChange={event => setAnswer(event.target.value.toUpperCase())}
+          disabled={!!result}
+          placeholder="Escribe lo que oigas, separando los grupos con espacios…"
+          spellCheck="false"
+          autoCapitalize="characters"
+          autoCorrect="off"
+          autoComplete="off"
+          aria-label="Texto copiado al oído"
+        />
+
+        <div className="mr-lcwo-actions">
+          {!running && !finished && !result && (
+            <button className="mr-btn mr-btn--primary" onClick={startSession} disabled={!canPlay}>
+              <i className={`bi ${playing ? 'bi-soundwave' : 'bi-play-circle'}`} style={{ marginRight: '8px' }} />
+              {session ? 'Reiniciar audio' : 'Comenzar práctica'}
+            </button>
+          )}
+          {running && (
+            <button className="mr-btn" onClick={stopSession}>
+              <i className="bi bi-stop-circle" style={{ marginRight: '8px' }} />
+              Detener y reiniciar
+            </button>
+          )}
+          {session && !result && (
+            <button className="mr-btn mr-btn--primary" onClick={submitSession} disabled={running}>
+              <i className="bi bi-check2-square" style={{ marginRight: '8px' }} />
+              Corregir copia
+            </button>
+          )}
+        </div>
+        {!canPlay && <p className="mr-slider-note">Este navegador no admite Web Audio; no puede reproducir la práctica.</p>}
+      </div>
+
+      {result && (
+        <div className={`mr-lcwo-result ${result.passed ? 'mr-lcwo-result--pass' : 'mr-lcwo-result--retry'}`}>
+          <div className="mr-lcwo-score">
+            <span>{result.accuracy}%</span>
+            <div>
+              <strong>{result.passed ? 'Lección superada' : 'Repite esta lección'}</strong>
+              <small>
+                {result.groupErrors} errores por grupos · {result.sequenceErrors} por secuencia · {result.total} caracteres
+              </small>
+            </div>
+          </div>
+
+          <div className="mr-lcwo-groups" role="table" aria-label="Corrección por grupos">
+            <div className="mr-lcwo-group mr-lcwo-group--head" role="row">
+              <span>Enviado</span><span>Copiado</span><span>Errores</span>
+            </div>
+            {result.rows.map((row, index) => (
+              <div key={index} className={`mr-lcwo-group${row.errors ? ' mr-lcwo-group--bad' : ''}`} role="row">
+                <span>{row.expected || '—'}</span>
+                <span>{row.got || '—'}</span>
+                <span>{row.errors}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="mr-lcwo-actions">
+            <button className="mr-btn" onClick={resetSession}>
+              <i className="bi bi-arrow-repeat" style={{ marginRight: '8px' }} />
+              Nueva práctica
+            </button>
+            {result.passed && lesson < MAX_LESSON && (
+              <button className="mr-btn mr-btn--primary" onClick={onAdvance}>
+                Añadir «{kochChars(lesson + 1).at(-1)}»
+                <i className="bi bi-arrow-right" style={{ marginLeft: '8px' }} />
+              </button>
+            )}
+            {result.passed && lesson === MAX_LESSON && (
+              <strong className="mr-lcwo-complete">Curso completo: 40 lecciones</strong>
+            )}
+          </div>
+        </div>
+      )}
+
+      {lessonAttempts.length > 0 && (
+        <div className="mr-lcwo-history">
+          <span className="field-label">Últimos intentos de esta lección</span>
+          <div>
+            {lessonAttempts.map(item => (
+              <span key={item.at} className={item.accuracy >= KOCH_TARGET ? 'is-pass' : undefined}>
+                {item.accuracy}% <small>{item.charWpm}/{item.effWpm}</small>
+              </span>
+            ))}
+          </div>
         </div>
       )}
     </>
