@@ -734,22 +734,70 @@
     text-transform: uppercase;
 }
 
-.mr-lcwo-settings {
-    display: grid;
-    grid-template-columns: minmax(210px, 1fr) minmax(210px, 1fr) minmax(120px, auto);
-    gap: 18px;
-    align-items: end;
+.mr-lcwo-config {
     margin: 22px 0 18px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-tertiary);
+    padding: 16px;
 }
-.mr-lcwo-settings .field-label { margin-bottom: 7px; }
-.mr-lcwo-parameters {
+.mr-lcwo-config-head {
     display: flex;
-    flex-direction: column;
-    min-height: 55px;
-    justify-content: flex-end;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
 }
-.mr-lcwo-parameters strong { color: var(--accent-blue); font-size: 1.05rem; }
-.mr-lcwo-parameters small { color: var(--text-muted); }
+.mr-lcwo-config-head h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 1rem;
+}
+.mr-lcwo-config-head h3 i { margin-right: 6px; color: var(--accent-blue); }
+.mr-lcwo-config-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+}
+.mr-lcwo-config-grid--session {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border-sub);
+}
+.mr-lcwo-control {
+    display: block;
+    min-width: 0;
+}
+.mr-lcwo-control .mr-slider-head { margin-bottom: 7px; }
+.mr-lcwo-control .mr-slider-head strong {
+    color: var(--accent-blue);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+.mr-lcwo-control > small {
+    display: block;
+    margin-top: 7px;
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.4;
+}
+.mr-lcwo-test-tone { margin-top: 8px; }
+.mr-lcwo-test-tone i { margin-right: 5px; }
+.mr-lcwo-config-summary {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 16px;
+    padding: 9px 11px;
+    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+}
+.mr-lcwo-config-summary i { color: var(--accent-green); }
 
 .mr-lcwo-console {
     background: var(--bg-tertiary);
@@ -862,7 +910,7 @@
 .mr-lcwo-history small { color: var(--text-muted); }
 
 @media (max-width: 720px) {
-    .mr-lcwo-settings { grid-template-columns: 1fr; align-items: start; }
-    .mr-lcwo-parameters { min-height: 0; }
+    .mr-lcwo-config-grid,
+    .mr-lcwo-config-grid--session { grid-template-columns: 1fr; }
     .mr-lcwo-actions > .mr-btn { flex: 1 1 180px; }
 }

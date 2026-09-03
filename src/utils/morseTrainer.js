@@ -230,6 +230,8 @@ export const LCWO_DEFAULTS = Object.freeze({
   tone: 600,
   minutes: 1,
   groupLength: 5,
+  startDelay: 3,
+  extraGroupGap: 0,
 })
 
 /** ¿Toca ampliar la lección? Mira los últimos grupos copiados. */
@@ -261,6 +263,7 @@ export function buildKochSession({
   randomLength = false,
   wpm = LCWO_DEFAULTS.charWpm,
   effWpm = LCWO_DEFAULTS.effWpm,
+  extraGroupGap = LCWO_DEFAULTS.extraGroupGap,
   rng = Math.random,
 } = {}) {
   const safeMinutes = Math.min(5, Math.max(1, Number(minutes) || LCWO_DEFAULTS.minutes))
@@ -276,7 +279,11 @@ export function buildKochSession({
   while (seconds < targetSeconds && groups.length < 5000) {
     const size = randomLength ? 2 + Math.floor(rng() * 6) : safeLength
     groups.push(randomGroup({ pool, progress: {}, size, rng }))
-    seconds = morseTimeline(groups.join(' '), { wpm, effWpm }).duration
+    seconds = morseTimeline(groups.join(' '), {
+      wpm,
+      effWpm,
+      extraWordGap: extraGroupGap,
+    }).duration
   }
 
   return {

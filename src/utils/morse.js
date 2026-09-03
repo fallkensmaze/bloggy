@@ -172,8 +172,9 @@ export function farnsworthGaps(charWpm, effWpm = charWpm) {
  * `index` es la posición del carácter dentro del texto ya tokenizado, para que
  * la interfaz pueda resaltar lo que está sonando.
  */
-export function morseTimeline(text, { wpm = 16, effWpm = wpm } = {}) {
+export function morseTimeline(text, { wpm = 16, effWpm = wpm, extraWordGap = 0 } = {}) {
   const { unit, charGap, wordGap } = farnsworthGaps(wpm, effWpm)
+  const groupGap = wordGap + Math.max(0, Number(extraWordGap) || 0)
   const events = []
   let t = 0
   let index = -1
@@ -182,7 +183,7 @@ export function morseTimeline(text, { wpm = 16, effWpm = wpm } = {}) {
   words.forEach((word) => {
     const tokens = tokenize(word)
     if (tokens.length === 0) return
-    if (index >= 0) t += wordGap          // no hay hueco antes del primer sonido
+    if (index >= 0) t += groupGap         // no hay hueco antes del primer sonido
     tokens.forEach((token, ti) => {
       if (ti > 0) t += charGap
       index++
@@ -227,13 +228,29 @@ const RAMP = 0.004   // rampas cortas para evitar los clics de conmutación
  *   wpm      — velocidad de carácter (PARIS): punto = 1.2 / wpm segundos
  *   effWpm   — velocidad efectiva Farnsworth (por defecto, la misma)
  *   freq     — tono en Hz
+ *   startDelay — espera previa en segundos antes del primer tono
+ *   extraWordGap — pausa adicional entre palabras o grupos, en segundos
  *   onSymbol — ({ on, char, index }) para iluminar lo que suena
  *   onEnd    — al terminar
  * Devuelve una función para cortar la reproducción antes de tiempo.
  */
-export function playMorse(text, { wpm = 16, effWpm, freq = 650, volume = 0.18, onSymbol, onEnd } = {}) {
+export function playMorse(text, {
+  wpm = 16,
+  effWpm,
+  freq = 650,
+  volume = 0.18,
+  startDelay = 0,
+  extraWordGap = 0,
+  onSymbol,
+  onEnd,
+} = {}) {
   const ctx = getContext()
-  const { events, duration } = morseTimeline(text, { wpm, effWpm: effWpm ?? wpm })
+  const delay = Math.max(0, Number(startDelay) || 0)
+  const { events, duration } = morseTimeline(text, {
+    wpm,
+    effWpm: effWpm ?? wpm,
+    extraWordGap,
+  })
 
   if (!ctx || events.length === 0) {
     // Sin audio no suena nada, pero el llamante sigue esperando su aviso.
@@ -250,7 +267,7 @@ export function playMorse(text, { wpm = 16, effWpm, freq = 650, volume = 0.18, o
   osc.frequency.value = freq
   osc.connect(gain)
 
-  const t0 = ctx.currentTime + 0.06
+  const t0 = ctx.currentTime + 0.06 + delay
   for (const ev of events) {
     const on = t0 + ev.start
     const off = on + ev.dur
@@ -269,8 +286,8 @@ export function playMorse(text, { wpm = 16, effWpm, freq = 650, volume = 0.18, o
         () => onSymbol({ on, char: ev.char, index: ev.index, symbol: ev.symbol }),
         delay * 1000,
       ))
-      mark(true, 0.06 + ev.start)
-      mark(false, 0.06 + ev.start + ev.dur)
+      mark(true, 0.06 + delay + ev.start)
+      mark(false, 0.06 + delay + ev.start + ev.dur)
     }
   }
 

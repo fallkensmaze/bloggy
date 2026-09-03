@@ -207,6 +207,16 @@ function testTiming() {
   const dash = morseTimeline('T', { wpm: 20 })
   check('a dash is three dots long', near(dash.events[0].dur, 3 * dash.unit))
 
+  const normalGroups = morseTimeline('E E', { wpm: 20, effWpm: 20 })
+  const delayedGroups = morseTimeline('E E', { wpm: 20, effWpm: 20, extraWordGap: 0.75 })
+  check('an extra group delay is added only between groups',
+    near(delayedGroups.events[0].start, normalGroups.events[0].start) &&
+    near(delayedGroups.events[1].start - normalGroups.events[1].start, 0.75) &&
+    near(delayedGroups.duration - normalGroups.duration, 0.75))
+
+  const negativeDelay = morseTimeline('E E', { wpm: 20, extraWordGap: -5 })
+  check('a negative group delay is safely ignored', near(negativeDelay.duration, normalGroups.duration))
+
   check('an empty text produces no events',
     morseTimeline('', { wpm: 20 }).events.length === 0)
 }
@@ -467,6 +477,8 @@ async function testSettings() {
     readNumber('morse_charwpm', { min: 5, max: 40, fallback: LCWO_DEFAULTS.charWpm }) === 20 &&
     readNumber('morse_effwpm', { min: 4, max: 40, fallback: LCWO_DEFAULTS.effWpm }) === 10 &&
     readNumber('morse_freq', { min: 300, max: 1000, fallback: LCWO_DEFAULTS.tone }) === 600 &&
+    readNumber('morse_lcwo_start_delay', { min: 0, max: 10, fallback: LCWO_DEFAULTS.startDelay }) === 3 &&
+    readNumber('morse_lcwo_group_delay', { min: 0, max: 3, fallback: LCWO_DEFAULTS.extraGroupGap }) === 0 &&
     readNumber('morse_lesson', { min: MIN_LESSON, max: MAX_LESSON, fallback: MIN_LESSON }) === MIN_LESSON &&
     readNumber('morse_copy_size', { min: 3, max: 7, fallback: 5 }) === 5)
 
@@ -496,6 +508,27 @@ function testGuidedCourse() {
   const random = buildKochSession({ pool, minutes: 1, randomLength: true, wpm: 20, effWpm: 10 })
   check('random LCWO groups stay between two and seven characters',
     random.groups.every(group => group.length >= 2 && group.length <= 7))
+
+  const delayed = buildKochSession({
+    pool,
+    minutes: 1,
+    groupLength: 5,
+    wpm: 20,
+    effWpm: 10,
+    extraGroupGap: 2,
+    rng: () => 0.5,
+  })
+  const undelayed = buildKochSession({
+    pool,
+    minutes: 1,
+    groupLength: 5,
+    wpm: 20,
+    effWpm: 10,
+    rng: () => 0.5,
+  })
+  check('extra pauses count towards the selected practice duration',
+    delayed.seconds >= 60 && delayed.groups.length < undelayed.groups.length,
+    `${delayed.groups.length} delayed / ${undelayed.groups.length} normal groups`)
 
   const empty = buildKochSession({ pool: [], minutes: 5 })
   check('an empty lesson creates an empty safe session',
