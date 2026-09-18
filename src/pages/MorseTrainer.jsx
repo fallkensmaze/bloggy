@@ -5,12 +5,12 @@ import {
   LCWO_DEFAULTS,
   MAX_LESSON,
   MIN_LESSON,
-  charMasterySummary,
   deckEntries,
   kochChars,
   newestKochChar,
 } from '../utils/morseTrainer'
-import { MASTERY, accuracy, updateProgress } from '../utils/leitner'
+import { accuracy } from '../utils/leitner'
+import { LEARNING_KEY, SKILLS, MORSE_MASTERY as MASTERY, emptyLearning, readLearning, recordAttempt, morseSummary } from '../utils/morseProgress'
 import { readChoice, readJson, readNumber, writeValue } from '../utils/localSettings'
 import LearnPanel from '../components/morse/LearnPanel'
 import CopyPanel from '../components/morse/CopyPanel'
@@ -19,8 +19,7 @@ import VisualPanel from '../components/morse/VisualPanel'
 import ReferencePanel from '../components/morse/ReferencePanel'
 import '../styles/morse.css'
 
-const STATS_KEY    = 'morse_stats'
-const PROGRESS_KEY = 'morse_progress'
+const LEGACY_STATS_KEY = 'morse_stats'
 const DECK_KEY     = 'morse_deck'
 const LESSON_KEY   = 'morse_lesson'
 const CHARWPM_KEY  = 'morse_charwpm'
@@ -33,6 +32,7 @@ const COURSE_VERSION = 'lcwo-1'
 
 const TABS = [
   { id: 'copiar',      label: 'Copiar al oído', icon: 'bi-ear' },
+  { id: 'repasar',     label: 'Repasar errores', icon: 'bi-arrow-repeat' },
   { id: 'manipular',   label: 'Manipular',      icon: 'bi-broadcast' },
   { id: 'visual',      label: 'Ver el patrón',  icon: 'bi-eye' },
   { id: 'referencia',  label: 'Tabla y traductor', icon: 'bi-table' },
@@ -43,11 +43,9 @@ const MODES = [
   { id: 'avanzado', label: 'Avanzado',     icon: 'bi-sliders',   hint: 'Prácticas sueltas, manipulador, tabla y todos los ajustes' },
 ]
 
-const EMPTY_STATS = { correct: 0, wrong: 0, hinted: 0, streak: 0, best: 0 }
-
 /**
  * Entrenador de código Morse. La página lleva los ajustes comunes (mazo,
- * velocidades, tono), el marcador, el progreso de Leitner y un único
+ * velocidades, tono), el marcador, el progreso independiente por modalidad y un único
  * reproductor de audio; cada pestaña pone su ejercicio.
  */
 function MorseTrainer() {
@@ -69,18 +67,28 @@ function MorseTrainer() {
   const [effWpm, setEffWpm]   = useState(() => readNumber(EFFWPM_KEY,  { min: 4,   max: 40,   fallback: LCWO_DEFAULTS.effWpm }))
   const [freq, setFreq]       = useState(() => readNumber(FREQ_KEY,    { min: 300, max: 1000, fallback: LCWO_DEFAULTS.tone }))
 
-  const [stats, setStats]       = useState(() => ({ ...EMPTY_STATS, ...readJson(STATS_KEY, {}) }))
-  const [progress, setProgress] = useState(() => readJson(PROGRESS_KEY, {}))
+  const [learning, setLearning] = useState(() => readLearning(readJson(LEARNING_KEY, null)))
+  const [legacyStats] = useState(() => readJson(LEGACY_STATS_KEY, null))
+  const [resetEpoch, setResetEpoch] = useState(0)
+  const [reviewTime, setReviewTime] = useState(Date.now)
+  useEffect(() => {
+    const refresh = () => setReviewTime(Date.now())
+    const timer = setInterval(refresh, 60000)
+    window.addEventListener('focus', refresh)
+    return () => { clearInterval(timer); window.removeEventListener('focus', refresh) }
+  }, [])
+  const skill = modo === 'curso' || tab === 'copiar' || tab === 'repasar' || tab === 'referencia' ? 'reception' : tab === 'manipular' ? 'transmission' : 'visual'
+  const { stats, progress } = learning.skills[skill]
   const [playing, setPlaying]   = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
 
   const progressRef = useRef(progress)
+  progressRef.current = progress
   const stopRef     = useRef(null)
 
   const canPlay = morseSupported()
   const pool    = useMemo(() => deckEntries(deck, lesson), [deck, lesson])
-  const summary = useMemo(() => charMasterySummary(pool, progress), [pool, progress])
-  const total   = stats.correct + stats.wrong
+  const summary = useMemo(() => morseSummary(pool, progress, reviewTime), [pool, progress, reviewTime])
 
   // La velocidad efectiva nunca supera a la de carácter: por encima, Farnsworth
   // no tiene nada que estirar.
@@ -133,36 +141,15 @@ function MorseTrainer() {
   }
 
   // ── Marcador y repaso ──
-  const recordChars = useCallback((results) => {
-    if (!results || results.length === 0) return
-    setProgress(prev => {
-      let next = prev
-      for (const r of results) next = updateProgress(next, r.char, r.ok, r.hinted)
-      progressRef.current = next
-      return next
-    })
-    setStats(s => {
-      let { correct, wrong, hinted, streak, best } = s
-      for (const r of results) {
-        if (r.ok) {
-          correct++
-          if (r.hinted) hinted++
-          // Una pista no rompe la racha, pero tampoco la hace crecer.
-          if (!r.hinted) streak++
-        } else {
-          wrong++
-          streak = 0
-        }
-        best = Math.max(best, streak)
-      }
-      return { correct, wrong, hinted, streak, best }
-    })
-  }, [])
+  const recordChars = useCallback((results, options = {}) => {
+    setLearning(previous => recordAttempt(previous, skill, results, options))
+  }, [skill])
 
   const resetAll = () => {
-    setStats({ ...EMPTY_STATS })
-    setProgress({})
-    progressRef.current = {}
+    stop()
+    setLearning(emptyLearning())
+    writeValue('morse_lcwo_attempts', [])
+    setResetEpoch(n => n + 1)
     setConfirmReset(false)
   }
 
@@ -185,8 +172,7 @@ function MorseTrainer() {
   const handleFreq    = (n) => { setFreq(n);    writeValue(FREQ_KEY, n) }
 
   // ── Persistencia ──
-  useEffect(() => { writeValue(STATS_KEY, stats) }, [stats])
-  useEffect(() => { writeValue(PROGRESS_KEY, progress) }, [progress])
+  useEffect(() => { writeValue(LEARNING_KEY, learning) }, [learning])
 
   const nuevo = deck === 'koch' ? newestKochChar(lesson) : null
   const panelProps = { pool, progress, progressRef, play, stop, playing, recordChars, canPlay }
@@ -218,17 +204,18 @@ function MorseTrainer() {
       </div>
 
       {/* ── Marcador ── */}
-      <div className="calc-card mr-card">
+      <details className="calc-card mr-card mr-progress-details">
+        <summary>Tu progreso · {SKILLS[skill]} · {accuracy(stats)} %</summary>
         <div className="mr-row-between" style={{ marginBottom: '14px' }}>
-          <span className="field-label" style={{ marginBottom: 0 }}>Tu progreso</span>
+          <span className="field-label" style={{ marginBottom: 0 }}>Marcador · {SKILLS[skill]}</span>
           {confirmReset ? (
             <span style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>¿Borrar marcador y repaso?</span>
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>¿Borrar progreso de las tres modalidades e intentos del curso?</span>
               <button className="mr-btn mr-btn--sm mr-btn--danger" onClick={resetAll}>Sí</button>
               <button className="mr-btn mr-btn--sm" onClick={() => setConfirmReset(false)}>No</button>
             </span>
           ) : (
-            <button className="mr-btn mr-btn--sm" onClick={() => setConfirmReset(true)} disabled={total === 0}>
+            <button className="mr-btn mr-btn--sm" onClick={() => setConfirmReset(true)} disabled={Object.values(learning.skills).every(s => s.stats.correct + s.stats.wrong === 0)}>
               <i className="bi bi-arrow-counterclockwise" style={{ marginRight: '6px' }} />
               Reiniciar
             </button>
@@ -256,7 +243,7 @@ function MorseTrainer() {
 
         <div className="mr-mastery">
           <div className="mr-mastery-head">
-            <span>Dominio del mazo · {summary.dominado} de {summary.total} caracteres</span>
+            <span>Consolidación del mazo · {summary.dominado} de {summary.total} caracteres</span>
             <span className="mr-mastery-legend">
               {['dominado', 'progreso', 'flojo', 'nuevo'].map(k => (
                 <span key={k}>
@@ -276,7 +263,15 @@ function MorseTrainer() {
             ))}
           </div>
         </div>
-      </div>
+
+      {legacyStats && (legacyStats.correct > 0 || legacyStats.wrong > 0) && (
+        <p className="mr-slider-note">
+          Historial anterior conservado: {legacyStats.correct || 0} aciertos y {legacyStats.wrong || 0} fallos.
+          Los nuevos resultados se miden por separado en recepción, transmisión y reconocimiento visual.
+        </p>
+      )}
+      <p className="mr-slider-note">Consolidado: tres repasos sin ayuda en días distintos, respetando los intervalos. Los repasos vencidos vuelven a «Repasar».</p>
+      </details>
 
       {/* ── Ajustes: sólo en modo avanzado, para no recibir a nadie con una
            pared de deslizadores el primer día ── */}
@@ -316,7 +311,7 @@ function MorseTrainer() {
               </div>
               <p className="mr-slider-note">
                 Orden de LCWO: se empieza con K y M, y se añade un carácter
-                cuando se copia al menos el 90 %{nuevo ? ` · el nuevo de esta lección es «${nuevo}»` : ''}.
+                tras prácticas al oído con al menos el 90 %{nuevo ? ` · el nuevo de esta lección es «${nuevo}»` : ''}.
               </p>
             </>
           )}
@@ -378,6 +373,7 @@ function MorseTrainer() {
       {modo === 'curso' && (
         <div className="calc-card">
           <LearnPanel
+            key={`curso-${resetEpoch}`}
             {...panelProps}
             deck={deck}
             lesson={lesson}
@@ -387,6 +383,7 @@ function MorseTrainer() {
             onCharWpmChange={handleCharWpm}
             onEffWpmChange={handleEffWpm}
             onFreqChange={handleFreq}
+            onReview={() => { handleModo('avanzado'); handleTab('repasar') }}
             onAdvance={() => handleLesson(lesson + 1)}
             onLessonChange={handleLesson}
             onUseKoch={() => handleDeck('koch')}
@@ -410,16 +407,18 @@ function MorseTrainer() {
             ))}
           </div>
 
-          {tab === 'copiar' && (
+          {(tab === 'copiar' || tab === 'repasar') && (
             <CopyPanel
+              key={`copia-${tab}-${deck}-${lesson}-${charWpm}-${efectiva}-${resetEpoch}`}
               {...panelProps}
+              reviewOnly={tab === 'repasar'}
               deck={deck}
               lesson={lesson}
               onAdvance={() => handleLesson(lesson + 1)}
             />
           )}
-          {tab === 'manipular'  && <KeyPanel {...panelProps} charWpm={charWpm} freq={freq} />}
-          {tab === 'visual'     && <VisualPanel {...panelProps} />}
+          {tab === 'manipular'  && <KeyPanel key={`key-${resetEpoch}`} {...panelProps} charWpm={charWpm} freq={freq} />}
+          {tab === 'visual'     && <VisualPanel key={`visual-${resetEpoch}`} {...panelProps} />}
           {tab === 'referencia' && <ReferencePanel {...panelProps} />}
         </div>
       )}

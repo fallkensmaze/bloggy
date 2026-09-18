@@ -42,6 +42,9 @@ jobs:
       - name: Test FDTD core
         run: cargo test --manifest-path fdtd-wasm/Cargo.toml && npm run test:fdtd
       
+      - name: Test Morse learning
+        run: npm run test:morse
+
       - name: Build
         run: npm run build
       

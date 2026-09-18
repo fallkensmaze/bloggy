@@ -41,6 +41,8 @@ function KeyPanel({ pool, progressRef, charWpm, freq, recordChars, canPlay }) {
   const textRef   = useRef('')
   const timerRef  = useRef(null)
   const unitRef   = useRef(1200 / charWpm)
+  const hintedRef = useRef(false)
+  const countedRef = useRef(false)
 
   useEffect(() => { unitRef.current = 1200 / charWpm }, [charWpm])
   useEffect(() => { toneRef.current?.setFreq(freq) }, [freq])
@@ -48,8 +50,35 @@ function KeyPanel({ pool, progressRef, charWpm, freq, recordChars, canPlay }) {
 
   const libre = mode === 'libre'
 
+  // Un keyup puede perderse al cambiar de ventana: cancelar el tono y el
+  // elemento incompleto sin convertirlo en una raya de varios segundos.
+  const cancelPress = useCallback(() => {
+    toneRef.current?.up()
+    downRef.current = false
+    setDown(false)
+    clearTimeout(timerRef.current)
+    lastUpRef.current = null
+    bufRef.current = ''
+    setBuffer('')
+  }, [])
+  useEffect(() => {
+    const hidden = () => { if (document.hidden) cancelPress() }
+    window.addEventListener('blur', cancelPress)
+    document.addEventListener('visibilitychange', hidden)
+    return () => {
+      window.removeEventListener('blur', cancelPress)
+      document.removeEventListener('visibilitychange', hidden)
+    }
+  }, [cancelPress])
+
+  useEffect(() => { cancelPress() }, [charWpm, cancelPress])
+
   // ── Objetivo ──
   const nextTarget = useCallback((over = {}) => {
+    cancelPress()
+    hintedRef.current = false
+    countedRef.current = false
+    setCheat(false)
     const m = over.mode ?? mode
     clearTimeout(timerRef.current)
     bufRef.current = ''
@@ -61,7 +90,7 @@ function KeyPanel({ pool, progressRef, charWpm, freq, recordChars, canPlay }) {
     setTarget(m === 'libre'
       ? null
       : buildCopyDrill({ pool, progress: progressRef.current, mode: m, size: 5 }))
-  }, [pool, mode, progressRef])
+  }, [pool, mode, progressRef, cancelPress])
 
   useEffect(() => { nextTarget() }, [nextTarget])
 
@@ -148,16 +177,20 @@ function KeyPanel({ pool, progressRef, charWpm, freq, recordChars, canPlay }) {
 
   // ── Corrección ──
   const check = useCallback(() => {
-    if (!target || grade) return
+    if (!target || grade || downRef.current) return
     clearTimeout(timerRef.current)
     commitChar()
     const enviado = (textRef.current || '').trim()
     const g = gradeCopy(target.text, enviado)
     setGrade(g)
-    recordChars(g.cells.filter(c => c.expected !== null).map(c => ({ char: c.expected, ok: c.ok })))
+    if (!countedRef.current) {
+      countedRef.current = true
+      recordChars(g.characterResults, { assisted: hintedRef.current })
+    }
   }, [target, grade, commitChar, recordChars])
 
   const clear = () => {
+    cancelPress()
     clearTimeout(timerRef.current)
     bufRef.current = ''
     textRef.current = ''
@@ -206,7 +239,7 @@ function KeyPanel({ pool, progressRef, charWpm, freq, recordChars, canPlay }) {
               {target.text.split('').map(c => prettyMorse(symbolsFor(c) || '')).join('   ')}
             </p>
           )}
-          <button className="mr-btn mr-btn--sm" style={{ marginTop: '12px' }} onClick={() => setCheat(v => !v)}>
+          <button className="mr-btn mr-btn--sm" style={{ marginTop: '12px' }} onClick={() => { hintedRef.current = true; setCheat(v => !v) }}>
             <i className={`bi bi-eye${cheat ? '-slash' : ''}`} style={{ marginRight: '6px' }} />
             {cheat ? 'Ocultar la chuleta' : 'Ver la chuleta'}
           </button>
@@ -216,10 +249,10 @@ function KeyPanel({ pool, progressRef, charWpm, freq, recordChars, canPlay }) {
       <button
         type="button"
         className={`mr-key-pad${down ? ' mr-key-pad--down' : ''}`}
-        onPointerDown={(e) => { e.preventDefault(); keyDown() }}
+        onPointerDown={(e) => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); keyDown() }}
         onPointerUp={keyUp}
-        onPointerLeave={keyUp}
-        onPointerCancel={keyUp}
+        onPointerCancel={cancelPress}
+        onLostPointerCapture={() => { if (downRef.current) cancelPress() }}
         onContextMenu={(e) => e.preventDefault()}
         aria-label="Pletina del manipulador"
       >
@@ -241,7 +274,7 @@ function KeyPanel({ pool, progressRef, charWpm, freq, recordChars, canPlay }) {
           Borrar
         </button>
         {!libre && !grade && (
-          <button className="mr-btn mr-btn--primary" style={{ flex: 1 }} onClick={check} disabled={!text && !buffer}>
+          <button className="mr-btn mr-btn--primary" style={{ flex: 1 }} onClick={check} disabled={down || (!text && !buffer)}>
             <i className="bi bi-check2-square" style={{ marginRight: '8px' }} />
             Comprobar
           </button>
@@ -270,8 +303,8 @@ function KeyPanel({ pool, progressRef, charWpm, freq, recordChars, canPlay }) {
           <div className={`mr-feedback ${grade.perfect ? 'mr-feedback--correct' : 'mr-feedback--wrong'}`}>
             <i className={`bi ${grade.perfect ? 'bi-check-circle' : 'bi-x-circle'}`} style={{ marginRight: '8px' }} />
             {grade.perfect
-              ? '¡Manipulado limpio!'
-              : `${grade.correct} de ${grade.total} — se leyó «${textRef.current.trim() || '—'}»`}
+              ? `¡Texto correcto!${hintedRef.current ? ' (con chuleta)' : ''}`
+              : `${grade.accuracy}% · ${grade.errors} errores — se leyó «${textRef.current.trim() || '—'}»`}
           </div>
         </>
       )}

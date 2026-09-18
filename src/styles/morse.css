@@ -914,3 +914,14 @@
     .mr-lcwo-config-grid--session { grid-template-columns: 1fr; }
     .mr-lcwo-actions > .mr-btn { flex: 1 1 180px; }
 }
+
+/* Course controls stay out of the way while listening. */
+.mr-lcwo-config > summary { cursor: pointer; color: var(--text-primary); font-weight: 600; }
+.mr-lcwo-config[open] > summary { margin-bottom: 18px; }
+.mr-lcwo-result > .mr-cells { max-height: 320px; overflow-y: auto; justify-content: flex-start; }
+.mr-lcwo-result details > summary { cursor: pointer; color: var(--text-secondary); margin: 12px 0; }
+.mr-lcwo-group span { min-width: 0; overflow-wrap: anywhere; }
+.mr-key-pad { touch-action: none; user-select: none; }
+
+.mr-progress-details > summary { cursor: pointer; font-weight: 600; color: var(--accent-blue); }
+.mr-progress-details[open] > summary { margin-bottom: 18px; }

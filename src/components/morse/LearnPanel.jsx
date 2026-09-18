@@ -9,6 +9,7 @@ import {
   MAX_LESSON,
   MIN_LESSON,
 } from '../../utils/morseTrainer'
+import { courseReady } from '../../utils/morseProgress'
 import { readChoice, readJson, readNumber, writeValue } from '../../utils/localSettings'
 
 const INTRO_KEY = 'morse_lcwo_intro'
@@ -49,6 +50,7 @@ function LearnPanel({
   onEffWpmChange,
   onFreqChange,
   onAdvance,
+  onReview,
   onLessonChange,
   onUseKoch,
 }) {
@@ -86,6 +88,8 @@ function LearnPanel({
   const [elapsed, setElapsed] = useState(0)
   const [countdown, setCountdown] = useState(0)
 
+  const submittedRef = useRef(false)
+  const playsRef = useRef(0)
   const startedAtRef = useRef(0)
   const answerRef = useRef(null)
   const newChars = useMemo(() => (deck === 'koch' ? charsToIntroduce(lesson) : []), [deck, lesson])
@@ -104,6 +108,8 @@ function LearnPanel({
     setElapsed(0)
     setCountdown(0)
     startedAtRef.current = 0
+    submittedRef.current = false
+    playsRef.current = 0
   }, [stop])
 
   useEffect(() => resetSession(), [
@@ -141,9 +147,10 @@ function LearnPanel({
   }), [pool, minutes, groupMode, charWpm, effWpm, extraGroupGap])
 
   const startSession = () => {
-    const next = session || makeSession()
+    const next = session || { ...makeSession(), id: crypto.randomUUID() }
     if (!next.text) return
     if (!session) setSession(next)
+    playsRef.current++
     setResult(null)
     setFinished(false)
     setElapsed(0)
@@ -174,15 +181,26 @@ function LearnPanel({
   }
 
   const submitSession = () => {
-    if (!session || result) return
+    if (!session || result || submittedRef.current || !finished || running) return
+    submittedRef.current = true
     stop()
     setRunning(false)
     setFinished(true)
     const graded = gradeKochSession(session.text, answer)
     setResult(graded)
-    recordChars(graded.characterResults)
+    const assisted = playsRef.current > 1
+    recordChars(graded.characterResults, { assisted })
+    const introduced = newChars.map(char => graded.characterResults.filter(r => r.char === char))
 
     const attempt = {
+      version: 2,
+      sessionId: session.id,
+      assisted,
+      completed: finished,
+      minutes,
+      groupMode,
+      newCharTotal: Math.min(...introduced.map(rows => rows.length)),
+      newCharAccuracy: Math.min(...introduced.map(rows => rows.length ? 100 * rows.filter(r => r.ok).length / rows.length : 0)),
       lesson,
       accuracy: graded.accuracy,
       charWpm,
@@ -248,6 +266,7 @@ function LearnPanel({
   const remaining = session ? Math.max(0, session.seconds - elapsed) : minutes * 60
   const progress = session?.seconds ? Math.min(100, (elapsed / session.seconds) * 100) : 0
   const activeChars = kochChars(lesson)
+  const recommended = courseReady(attempts, { lesson, charWpm, effWpm, minutes, groupMode, extraGroupGap })
 
   return (
     <>
@@ -266,7 +285,7 @@ function LearnPanel({
             <li>Empiezas sólo con <strong>K y M</strong>; cada lección añade un carácter en el orden de LCWO.</li>
             <li>Los caracteres suenan rápidos ({charWpm} PPM) y el espaciado baja el conjunto a {effWpm} PPM: es temporización Farnsworth.</li>
             <li>Copias grupos aleatorios sin detenerte si pierdes uno. No cuentes puntos y rayas: reconoce el sonido completo.</li>
-            <li>Con <strong>{KOCH_TARGET} % o más</strong> puedes pasar a la siguiente lección. El curso tiene 40 lecciones y 41 caracteres.</li>
+            <li>Recomendamos avanzar tras tres prácticas nuevas sin repetir el audio, con <strong>{KOCH_TARGET} % o más</strong> global y en los caracteres nuevos (al menos tres apariciones de cada uno). Puedes elegir una lección manualmente.</li>
           </ol>
         </div>
       )}
@@ -309,7 +328,8 @@ function LearnPanel({
       </div>
       <p className="mr-slider-note">Pulsa un carácter para oírlo diez veces. En el curso no se muestran puntos y rayas.</p>
 
-      <section className="mr-lcwo-config" aria-labelledby="lcwo-settings-title">
+      <details className="mr-lcwo-config">
+        <summary>Configurar práctica · {charWpm}/{effWpm} PPM · {minutes} min · {freq} Hz</summary>
         <div className="mr-lcwo-config-head">
           <div>
             <span className="mr-kicker">Audio y sesión</span>
@@ -464,7 +484,7 @@ function LearnPanel({
           {charWpm}/{effWpm} PPM · {freq} Hz · inicio {startDelay} s
           {extraGroupGap > 0 ? ` · +${extraGroupGap} s entre grupos` : ''}
         </div>
-      </section>
+      </details>
 
       <div className="mr-lcwo-console">
         <div className="mr-row-between">
@@ -488,6 +508,7 @@ function LearnPanel({
           onChange={event => setAnswer(event.target.value.toUpperCase())}
           disabled={!!result}
           placeholder="Escribe lo que oigas, separando los grupos con espacios…"
+          maxLength={10000}
           spellCheck="false"
           autoCapitalize="characters"
           autoCorrect="off"
@@ -499,7 +520,7 @@ function LearnPanel({
           {!running && !finished && !result && (
             <button className="mr-btn mr-btn--primary" onClick={startSession} disabled={!canPlay}>
               <i className={`bi ${playing ? 'bi-soundwave' : 'bi-play-circle'}`} style={{ marginRight: '8px' }} />
-              {session ? 'Reiniciar audio' : 'Comenzar práctica'}
+              {session ? 'Reiniciar audio (con ayuda)' : 'Continuar entrenamiento'}
             </button>
           )}
           {running && (
@@ -509,7 +530,7 @@ function LearnPanel({
             </button>
           )}
           {session && !result && (
-            <button className="mr-btn mr-btn--primary" onClick={submitSession} disabled={running}>
+            <button className="mr-btn mr-btn--primary" onClick={submitSession} disabled={running || !finished}>
               <i className="bi bi-check2-square" style={{ marginRight: '8px' }} />
               Corregir copia
             </button>
@@ -523,13 +544,23 @@ function LearnPanel({
           <div className="mr-lcwo-score">
             <span>{result.accuracy}%</span>
             <div>
-              <strong>{result.passed ? 'Lección superada' : 'Repite esta lección'}</strong>
+              <strong>{recommended ? 'Preparado para avanzar' : result.passed ? 'Buen resultado: sigue consolidando' : 'Refuerza los errores y vuelve a practicar'}</strong>
               <small>
-                {result.groupErrors} errores por grupos · {result.sequenceErrors} por secuencia · {result.total} caracteres
+                {result.sequenceErrors} errores · {result.total} caracteres · {playsRef.current > 1 ? 'Con repetición de audio' : 'Primera escucha'}
               </small>
             </div>
           </div>
 
+          <p className="mr-slider-note">La nota ignora los espacios y cuenta sustituciones, omisiones e inserciones. El detalle alineado evita desplazar los aciertos tras un error.</p>
+          <div className="mr-cells" aria-label="Corrección alineada">
+            {result.cells.map((cell, index) => (
+              <div key={index} className={`mr-cell ${cell.ok ? 'mr-cell--ok' : 'mr-cell--bad'}`} title={cell.expected === null ? 'Carácter sobrante' : cell.got === null ? 'Carácter omitido' : cell.ok ? 'Correcto' : 'Sustitución'}>
+                <span className="mr-cell-char">{cell.expected ?? '—'}</span>
+                <span className="mr-cell-got">{!cell.ok ? (cell.got ?? '∅') : '✓'}</span>
+              </div>
+            ))}
+          </div>
+          <details><summary>Comparación por grupos (diagnóstico de espacios)</summary>
           <div className="mr-lcwo-groups" role="table" aria-label="Corrección por grupos">
             <div className="mr-lcwo-group mr-lcwo-group--head" role="row">
               <span>Enviado</span><span>Copiado</span><span>Errores</span>
@@ -543,18 +574,21 @@ function LearnPanel({
             ))}
           </div>
 
+          </details>
+          <p className="mr-slider-note">Para recomendar el avance: tres prácticas nuevas sin ayuda, ≥90 % global y en los caracteres nuevos, con la misma configuración.</p>
           <div className="mr-lcwo-actions">
+            <button className="mr-btn" onClick={onReview}>Repasar errores al oído</button>
             <button className="mr-btn" onClick={resetSession}>
               <i className="bi bi-arrow-repeat" style={{ marginRight: '8px' }} />
               Nueva práctica
             </button>
-            {result.passed && lesson < MAX_LESSON && (
+            {recommended && lesson < MAX_LESSON && (
               <button className="mr-btn mr-btn--primary" onClick={onAdvance}>
                 Añadir «{kochChars(lesson + 1).at(-1)}»
                 <i className="bi bi-arrow-right" style={{ marginLeft: '8px' }} />
               </button>
             )}
-            {result.passed && lesson === MAX_LESSON && (
+            {recommended && lesson === MAX_LESSON && (
               <strong className="mr-lcwo-complete">Curso completo: 40 lecciones</strong>
             )}
           </div>
@@ -567,7 +601,7 @@ function LearnPanel({
           <div>
             {lessonAttempts.map(item => (
               <span key={item.at} className={item.accuracy >= KOCH_TARGET ? 'is-pass' : undefined}>
-                {item.accuracy}% <small>{item.charWpm}/{item.effWpm}</small>
+                {item.accuracy}% <small>{item.charWpm}/{item.effWpm}{item.assisted ? ' · ayuda' : ''}{item.version !== 2 ? ' · anterior' : ''}</small>
               </span>
             ))}
           </div>
