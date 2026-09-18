@@ -8,12 +8,9 @@ import {
   detectLimitProfile,
   getLimitProfile
 } from '../utils/nemaAlgorithms'
-import { STATES, evaluateAcquisition } from '../utils/nemaAcquisition'
+import { STATES, createAcquisitionDeclaration, evaluateAcquisition } from '../utils/nemaAcquisition'
 import { renderCanvas } from '../utils/canvasRenderer'
-import { readJson, writeValue } from '../utils/localSettings'
 import '../styles/uniformidad.css'
-
-const DECLARATION_KEY = 'unif_declaracion_fisico'
 
 const RESOLUTION_OPTIONS = [
   { value: '78', label: 'Bloque hacia 78 x 78 px' },
@@ -22,17 +19,6 @@ const RESOLUTION_OPTIONS = [
   { value: '128', label: 'Bloque hacia 128 x 128 px' },
   { value: '0', label: 'Sin remuestreo' }
 ]
-
-const EMPTY_DECLARATION = {
-  radionuclide: '',
-  energyWindow: '',
-  sourceDistanceCm: '',
-  distanceConfirmed: false,
-  countRateCps: '',
-  uniformityCorrection: '',
-  collimatorRemoved: '',
-  deviations: ''
-}
 
 function formatPercent(value) {
   return Number.isFinite(value) ? `${value.toFixed(2)} %` : 'Sin dato'
@@ -117,23 +103,15 @@ function UniformidadGamma() {
   const [targetSize, setTargetSize] = useState('78')
   const [profileChoice, setProfileChoice] = useState('auto')
   const [fovOrder, setFovOrder] = useState('auto')
-  const [declaration, setDeclaration] = useState(EMPTY_DECLARATION)
+  const [declaration, setDeclaration] = useState(createAcquisitionDeclaration)
   const [status, setStatus] = useState('Carga un archivo DICOM de flood intrinseco para comenzar')
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState(null)
 
   const fileInputRef = useRef()
 
-  useEffect(() => {
-    setDeclaration({ ...EMPTY_DECLARATION, ...readJson(DECLARATION_KEY, {}) })
-  }, [])
-
   const updateDeclaration = (patch) => {
-    setDeclaration((previous) => {
-      const next = { ...previous, ...patch }
-      writeValue(DECLARATION_KEY, next)
-      return next
-    })
+    setDeclaration((previous) => ({ ...previous, ...patch }))
     setResults(null)
   }
 
@@ -178,6 +156,7 @@ function UniformidadGamma() {
       try {
         setBuffer(e.target.result)
         readBuffer(e.target.result, file.name, fovOrder)
+        setDeclaration(createAcquisitionDeclaration())
       } catch (err) {
         setBuffer(null)
         setParsedDICOM(null)
@@ -250,7 +229,7 @@ function UniformidadGamma() {
       <div className="page-header">
         <div className="page-icon"><i className="bi bi-grid-1x2-fill"></i></div>
         <h1 className="page-title">Uniformidad Intrinseca NEMA</h1>
-        <p className="page-subtitle">NEMA NU 1-2007 y aproximacion Pylinac/IAEA para flood intrinseco de gammacamara</p>
+        <p className="page-subtitle">NEMA NU 1-2007 y aproximacion Pylinac para flood intrinseco de gammacamara</p>
       </div>
 
       <div className="calc-card" style={{ marginBottom: '20px' }}>
@@ -394,7 +373,7 @@ function UniformidadGamma() {
         </div>
 
         <details className="unif-declaration" style={{ marginTop: '18px' }}>
-          <summary>Declaracion del fisico (lo que el DICOM no dice)</summary>
+          <summary>Verificar adquisicion y ventana energetica</summary>
           <div className="unif-grid">
             <label>
               <span className="field-label">Radionucleido</span>
@@ -406,13 +385,33 @@ function UniformidadGamma() {
               />
             </label>
             <label>
-              <span className="field-label">Ventana energetica</span>
+              <span className="field-label">Ventana: limite inferior (keV)</span>
               <input
                 className="dark-input"
-                value={declaration.energyWindow}
-                placeholder={parsedDICOM?.frameInfo?.[0]?.energyWindowName || '140 keV +-15 %'}
-                onChange={(e) => updateDeclaration({ energyWindow: e.target.value })}
+                inputMode="decimal"
+                value={declaration.energyWindowLowerKev}
+                placeholder="Solo si falta en el DICOM"
+                onChange={(e) => updateDeclaration({ energyWindowLowerKev: e.target.value })}
               />
+            </label>
+            <label>
+              <span className="field-label">Ventana: limite superior (keV)</span>
+              <input
+                className="dark-input"
+                inputMode="decimal"
+                value={declaration.energyWindowUpperKev}
+                placeholder="Solo si falta en el DICOM"
+                onChange={(e) => updateDeclaration({ energyWindowUpperKev: e.target.value })}
+              />
+            </label>
+            <label>
+              <span className="field-label">Ventanas de todos los frames</span>
+              <select className="dark-select" value={declaration.energyWindowConfirmed}
+                onChange={(e) => updateDeclaration({ energyWindowConfirmed: e.target.value })}>
+                <option value="">Sin verificar fotopeak y protocolo</option>
+                <option value="si">Verificadas para este radionucleido y protocolo</option>
+                <option value="no">Alguna no corresponde al protocolo</option>
+              </select>
             </label>
             <label>
               <span className="field-label">Distancia fuente-detector (cm)</span>
@@ -472,10 +471,22 @@ function UniformidadGamma() {
               />
             </label>
           </div>
+          {parsedDICOM && (
+            <p>
+              Ventanas DICOM: {parsedDICOM.frameInfo.map((info) => (
+                `frame ${info.frameIndex + 1}, detector ${info.detectorNumber ?? '?'}: `
+                + (Number.isFinite(info.energyWindowLowerLimit) && Number.isFinite(info.energyWindowUpperLimit)
+                  ? `${info.energyWindowLowerLimit.toFixed(1)}-${info.energyWindowUpperLimit.toFixed(1)} keV`
+                  : 'limites incompletos')
+              )).join(' | ')}.
+              Los limites manuales solo se usan cuando el DICOM no contiene ninguno de los dos;
+              se aplican a todos los frames sin rango.
+            </p>
+          )}
           <p>
-            Se guarda en este navegador para no repetirla en cada flood. Solo se usa para las
-            comprobaciones que el DICOM no permite resolver; los campos que si vienen en el
-            fichero se leen de el y no hace falta rellenarlos.
+            La declaracion corresponde a este archivo y se limpia al cargar otro. Los datos
+            disponibles en el DICOM tienen prioridad; confirma la ventana del protocolo despues
+            de revisar los rangos de todos los frames.
           </p>
         </details>
 
@@ -496,7 +507,7 @@ function UniformidadGamma() {
       {results?.length > 0 && (
         <div className="unif-copy-row">
           <CopyButton label="Copiar NEMA geometrico" build={() => buildTable(results, 'geometric')} />
-          <CopyButton label="Copiar Pylinac/IAEA" build={() => buildTable(results, 'pylinac')} />
+          <CopyButton label="Copiar Pylinac" build={() => buildTable(results, 'pylinac')} />
           <CopyButton
             label="Copiar trazabilidad"
             build={() => buildTraceability(results, parsedDICOM)}
@@ -571,13 +582,17 @@ function CalculationMethodDetails() {
             <li>
               <strong>Campos de visión.</strong> El UFOV se centra usando sus dimensiones físicas.
               El CFOV ocupa el 75 % central de cada dimensión del UFOV geométrico, sin redefinirlo
-              a partir de un borde defectuoso.
+              a partir de un borde defectuoso. Se incluye cada píxel con al menos el 50 % de su
+              área dentro del campo, también en las esquinas.
             </li>
             <li>
               <strong>Regla de borde.</strong> Sobre los datos sin suavizar se calcula la media del
               CFOV. En una única pasada se excluyen los píxeles exteriores por debajo del 75 % de
-              esa media, los píxeles originalmente a cero y sus cuatro vecinos directos. Si un
-              bloque sumado contenía un cero, conserva esa marca para no reintroducirlo.
+              esa media, los píxeles de análisis a cero y sus cuatro vecinos directos. Los bloques
+              que tocan fondo a cero conectado al exterior conservan esa exclusión para evitar
+              bordes parcialmente llenos. Un cero aislado dentro de un bloque con cuentas no lo
+              elimina. Un píxel de análisis completamente a cero en el interior impide declarar
+              conformidad, aunque se excluya del cálculo.
             </li>
             <li>
               <strong>Suavizado.</strong> Se aplica una vez el núcleo NEMA de nueve puntos
@@ -590,12 +605,17 @@ function CalculationMethodDetails() {
               y vertical, tanto en UFOV como en CFOV.
             </li>
           </ol>
+          <p className="unif-methodology-note">
+            Referencia del método: NU 1-2007 y descripción del OIEA, HHS 6, apartado 2.3.3.
+            La propagación del fondo exterior durante la suma es una extensión documentada de
+            esta herramienta. No se ha verificado conformidad con la edición NU 1-2023.
+          </p>
         </article>
 
         <article className="unif-methodology-card">
           <div className="unif-methodology-card-head">
             <span>Vía de contraste</span>
-            <h3>Aproximación Pylinac/IAEA</h3>
+            <h3>Aproximación Pylinac</h3>
           </div>
           <ol>
             <li>
@@ -644,7 +664,7 @@ function CalculationMethodDetails() {
             <tr>
               <th>Aspecto</th>
               <th>NEMA geométrico</th>
-              <th>Aproximación Pylinac/IAEA</th>
+              <th>Aproximación Pylinac</th>
             </tr>
           </thead>
           <tbody>
@@ -710,6 +730,8 @@ function buildTraceability(results, parsedDICOM) {
     lines.push(`  UFOV: ${metadata.ufovSource} ${formatBBox(metadata.ufovBBoxInitial)}`)
     lines.push(`  CFOV: ${formatBBox(metadata.cfovBBoxFinal)}`)
     lines.push(`  Pixeles eliminados: umbral ${metadata.nRemovedByThreshold}, cero o contaminado ${metadata.nRemovedZeroOrContaminated}, vecindad ${metadata.nRemovedByNeighbour}`)
+    lines.push(`  Exclusiones: fondo exterior ${metadata.nExteriorPaddingInUfov}, ceros interiores ${metadata.nInteriorZeroInUfov}, intrusion del exterior ${metadata.nPaddingIntrusionInUfov}`)
+    lines.push(`  Tratamiento de ceros: ${metadata.zeroPolicy}`)
     lines.push(`  Pixeles validos: UFOV ${metadata.nUfovPixelsValid}, CFOV ${metadata.nCfovPixelsValid}`)
     lines.push(`  Ventana: ${info.energyWindowName || 'sin dato'}`)
 
@@ -844,7 +866,7 @@ function NemaResults({ result, evaluation }) {
     <div className="calc-card" style={{ marginBottom: '20px' }}>
       <div className="unif-method-head">
         <div>
-          <h3>Metodo NEMA NU 1-2007 estricto</h3>
+          <h3>Metodo NEMA NU 1-2007 geometrico</h3>
           <p>
             {formatShape(result.rows, result.cols)} - bloque {metadata.blockSize?.join(' x ')} - pixel{' '}
             {metadata.pixelSpacingResampledMm?.map((v) => v.toFixed(2)).join(' x ')} mm - UFOV {metadata.ufovSource}
@@ -896,7 +918,7 @@ function NemaResults({ result, evaluation }) {
                   </td>
                   <td>
                     <span className={`unif-pill ${within === null ? 'unif-state-none' : within ? 'unif-state-ok' : 'unif-state-fail'}`}>
-                      {within === null ? 'Sin limite' : within ? 'Dentro' : 'Fuera'}
+                      {within === null ? (Number.isFinite(row.value) ? 'Sin limite' : 'No calculable') : within ? 'Dentro' : 'Fuera'}
                     </span>
                   </td>
                 </tr>
@@ -958,13 +980,20 @@ function TraceabilityPanel({ info, comparison, evaluation, parsedDICOM }) {
     ['UFOV geometrico', formatBBox(metadata.ufovBBoxInitial)],
     ['UFOV valido', formatBBox(metadata.ufovBBoxFinal)],
     ['CFOV', formatBBox(metadata.cfovBBoxFinal)],
-    ['FOV almacenado', parsedDICOM.fov ? `${parsedDICOM.fov.raw.join(' x ')} mm, orden ${parsedDICOM.fov.order === 'swapped' ? 'invertido' : 'estandar'}` : 'Sin dato'],
+    ['FOV almacenado', info.fov ? `${info.fov.raw.join(' x ')} mm, orden ${info.fov.order === 'swapped' ? 'invertido' : 'estandar'}` : 'Sin dato'],
+    ['Inclusion de pixeles', 'Al menos el 50 % del area dentro del campo fisico'],
     ['Umbral de borde', `${formatCount(metadata.edgeThreshold)} cuentas (75 % de ${formatCount(metadata.cfovMeanRaw)})`],
     ['Eliminados por umbral', formatCount(metadata.nRemovedByThreshold)],
     ['Eliminados por cero o bloque contaminado', formatCount(metadata.nRemovedZeroOrContaminated)],
     ['Eliminados por vecindad', formatCount(metadata.nRemovedByNeighbour)],
     ['Bloques contaminados en el UFOV', formatCount(metadata.nZeroContaminatedInUfov)],
+    ['Bloques con fondo exterior', formatCount(metadata.nExteriorPaddingInUfov)],
+    ['Pixeles de analisis interiores a cero', formatCount(metadata.nInteriorZeroInUfov)],
+    ['Fondo exterior dentro del UFOV', formatCount(metadata.nPaddingIntrusionInUfov)],
+    ['Tratamiento de ceros', metadata.zeroPolicy || 'Sin dato'],
     ['Pixeles validos UFOV / CFOV', `${formatCount(metadata.nUfovPixelsValid)} / ${formatCount(metadata.nCfovPixelsValid)}`],
+    ['Ventanas DU UFOV (vertical / horizontal)', `${formatCount(metadata.validDuWindows?.ufovVertical)} / ${formatCount(metadata.validDuWindows?.ufovHorizontal)}`],
+    ['Ventanas DU CFOV (vertical / horizontal)', `${formatCount(metadata.validDuWindows?.cfovVertical)} / ${formatCount(metadata.validDuWindows?.cfovHorizontal)}`],
     ['Cuentas pixel central', formatCount(metadata.centerCountResampled)],
     ['Cuentas maximas en CFOV', formatCount(metadata.maxCountCfov)],
     ['Detector y ventana', `${info.detectorNumber != null ? `Detector ${info.detectorNumber}` : 'Sin identificar'} - ${info.energyWindowName || 'sin ventana'}`],
@@ -1004,7 +1033,7 @@ function PylinacResults({ result }) {
     <div className="calc-card" style={{ marginBottom: '20px' }}>
       <div className="unif-method-head">
         <div>
-          <h3>Aproximacion Pylinac/IAEA</h3>
+          <h3>Aproximacion Pylinac</h3>
           <p>
             Segunda via de contraste. No implementa la geometria de NU 1-2007: halla el campo por
             umbral y erosion isotropica en vez de por el UFOV declarado, y no aplica la regla de

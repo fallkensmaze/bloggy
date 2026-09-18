@@ -25,6 +25,15 @@ export const STATES = {
   NO_VERIFICADA: 'Conforme numericamente, adquisicion no verificada'
 }
 
+// Acquisition facts are never inherited from an earlier file or localStorage.
+export function createAcquisitionDeclaration() {
+  return {
+    radionuclide: '', energyWindowLowerKev: '', energyWindowUpperKev: '',
+    energyWindowConfirmed: '', sourceDistanceCm: '', distanceConfirmed: false,
+    countRateCps: '', uniformityCorrection: '', collimatorRemoved: '', deviations: ''
+  }
+}
+
 const OK = 'ok'
 const FAIL = 'fail'
 const UNKNOWN = 'unknown'
@@ -39,7 +48,7 @@ function isBlank(value) {
 }
 
 function toNumber(value) {
-  if (value == null) return Number.NaN
+  if (isBlank(value)) return Number.NaN
   const parsed = Number(String(value).replace(',', '.'))
   return Number.isFinite(parsed) ? parsed : Number.NaN
 }
@@ -57,6 +66,10 @@ function squarePixelCheck(pixelSpacing) {
   }
 
   const [rowMm, colMm] = pixelSpacing
+  if (![rowMm, colMm].every((value) => Number.isFinite(value) && value > 0)) {
+    return check('square_pixel', 'Pixel cuadrado', FAIL, 'PixelSpacing invalido',
+      'Las dos distancias deben ser positivas y finitas.', 'blocking')
+  }
   const largest = Math.max(rowMm, colMm)
   const deviation = Math.abs(rowMm - colMm) / largest
   const square = deviation <= PIXEL_SQUARE_TOLERANCE
@@ -148,9 +161,9 @@ function countRateCheck(parsed, frameCounts, declaration) {
   return check(
     'count_rate',
     'Tasa de cuentas',
-    cps <= NEMA_MAX_COUNT_RATE_CPS ? OK : FAIL,
+    cps > 0 && cps <= NEMA_MAX_COUNT_RATE_CPS ? OK : FAIL,
     `${Math.round(cps).toLocaleString('es-ES')} cps`,
-    `${origin} NEMA limita a ${NEMA_MAX_COUNT_RATE_CPS.toLocaleString('es-ES')} cps.`
+    `${origin} Debe ser positiva. NEMA limita a ${NEMA_MAX_COUNT_RATE_CPS.toLocaleString('es-ES')} cps.`
   )
 }
 
@@ -161,7 +174,7 @@ function collimatorCheck(frame, declaration) {
     return check('collimator', 'Colimador', OK, 'NONE',
       'El DICOM confirma adquisicion intrinseca, sin colimador.')
   }
-  if (type) {
+  if (type && type !== 'UNKN') {
     return check('collimator', 'Colimador', FAIL, type,
       'La uniformidad intrinseca se mide sin colimador.')
   }
@@ -178,7 +191,9 @@ function collimatorCheck(frame, declaration) {
 }
 
 function sourceDistanceCheck(ufovSizeMm, declaration) {
-  const largestMm = Array.isArray(ufovSizeMm) ? Math.max(...ufovSizeMm) : Number.NaN
+  const largestMm = Array.isArray(ufovSizeMm) && ufovSizeMm.length === 2
+    && ufovSizeMm.every((value) => Number.isFinite(value) && value > 0)
+    ? Math.max(...ufovSizeMm) : Number.NaN
   const requiredCm = Number.isFinite(largestMm)
     ? largestMm * NEMA_SOURCE_DISTANCE_FACTOR / 10
     : Number.NaN
@@ -188,7 +203,7 @@ function sourceDistanceCheck(ufovSizeMm, declaration) {
     : 'No se conoce la dimension mayor del UFOV.'
 
   if (!Number.isFinite(declared)) {
-    if (declaration?.distanceConfirmed) {
+    if (declaration?.distanceConfirmed && Number.isFinite(requiredCm)) {
       return check('source_distance', 'Distancia fuente-detector', OK, 'Confirmada',
         `${requiredText} Confirmada por el fisico sin anotar el valor.`)
     }
@@ -206,6 +221,65 @@ function sourceDistanceCheck(ufovSizeMm, declaration) {
     `${declared} cm`,
     requiredText
   )
+}
+
+function energyWindowCheck(frame, declaration) {
+  const dicomLower = frame?.energyWindowLowerLimit
+  const dicomUpper = frame?.energyWindowUpperLimit
+  const fromDicom = Number.isFinite(dicomLower) || Number.isFinite(dicomUpper)
+  // Never silently override an invalid or incomplete DICOM range with manual
+  // input. A manual pair is used only when the DICOM has neither limit.
+  const lower = fromDicom ? dicomLower : toNumber(declaration?.energyWindowLowerKev)
+  const upper = fromDicom ? dicomUpper : toNumber(declaration?.energyWindowUpperKev)
+  const origin = fromDicom ? 'DICOM' : 'Declaracion manual'
+  const valid = Number.isFinite(lower) && Number.isFinite(upper) && lower > 0 && upper > lower
+  const value = valid ? `${lower.toFixed(1)}-${upper.toFixed(1)} keV (${origin})` : 'Rango sin verificar'
+  const knownInvalid = (Number.isFinite(lower) && lower <= 0)
+    || (Number.isFinite(upper) && upper <= 0)
+    || (Number.isFinite(lower) && Number.isFinite(upper) && upper <= lower)
+  if (knownInvalid || declaration?.energyWindowConfirmed === 'no') {
+    return check('energy_window', 'Ventana energetica', FAIL, value,
+      knownInvalid ? 'Los limites deben ser positivos y estar ordenados.'
+        : 'Se ha declarado que la ventana no corresponde al protocolo de uniformidad.')
+  }
+  if (!valid) {
+    return check('energy_window', 'Ventana energetica', UNKNOWN, value,
+      'Se requieren ambos limites en keV. Un nombre de ventana o identificar el detector no verifica la ventana.')
+  }
+  if (declaration?.energyWindowConfirmed !== 'si') {
+    return check('energy_window', 'Ventana energetica', UNKNOWN, value,
+      'Confirma para este archivo que la ventana corresponde al fotopeak y al protocolo del radionucleido. No se impone un ancho universal.')
+  }
+  return check('energy_window', 'Ventana energetica', OK, value,
+    'Limites disponibles; correspondencia con el fotopeak y el protocolo confirmada para esta adquisicion.')
+}
+
+function metricsCheck(result) {
+  const names = ['IUufov', 'IUcfov', 'DUvertUfov', 'DUhorizUfov', 'DUvertCfov', 'DUhorizCfov']
+  const missing = names.filter((name) => !Number.isFinite(result?.[name])
+    || result[name] < 0 || result[name] > 100)
+  const windows = result?.metadata?.validDuWindows
+  const enoughWindows = windows && ['ufovVertical', 'ufovHorizontal', 'cfovVertical', 'cfovHorizontal']
+    .every((name) => Number.isInteger(windows[name]) && windows[name] > 0)
+  const ok = missing.length === 0 && enoughWindows
+  return check('metrics', 'IU y DU calculables', ok ? OK : FAIL,
+    ok ? 'Seis medidas validas' : 'Medidas incompletas',
+    ok ? 'Hay ventanas de cinco pixeles en ambas direcciones de UFOV y CFOV.'
+      : `No se puede emitir conformidad sin las seis medidas finitas y ventanas validas en ambas direcciones.${missing.length ? ` Faltan: ${missing.join(', ')}.` : ''}`,
+    'blocking')
+}
+
+function geometryCheck(metadata, frame) {
+  if (metadata?.ufovTruncated) {
+    return check('ufov_geometry', 'Geometria del UFOV', FAIL, 'UFOV truncado',
+      'El campo fisico declarado no cabe completo en la matriz de analisis.', 'blocking')
+  }
+  const estimated = metadata?.ufovFromImage || metadata?.fallbackReason
+    || !metadata?.ufovSource || (frame?.fov?.deviation >= 0.10)
+  return check('ufov_geometry', 'Geometria del UFOV', estimated ? UNKNOWN : OK,
+    metadata?.ufovSource || 'Sin dato', estimated
+      ? 'La geometria se ha estimado o no concuerda con la imagen; no se declara conformidad con un UFOV sin verificar.'
+      : 'Se usan las dimensiones fisicas del campo declarado y la regla de inclusion por area.')
 }
 
 function uniformityCorrectionCheck(parsed, declaration) {
@@ -272,20 +346,30 @@ export function evaluateAcquisition({ parsed, frame, result, profile, declaratio
 
   checks.push(check(
     'frame_identified',
-    'Frame identificado',
+    'Detector identificado',
     frame?.detectorKnown ? OK : UNKNOWN,
     frame?.detectorNumber != null ? `Detector ${frame.detectorNumber}` : 'Sin identificar',
-    frame?.energyWindowName
-      ? `Ventana ${frame.energyWindowName} (${frame.energyWindowLowerLimit.toFixed(1)}-${frame.energyWindowUpperLimit.toFixed(1)} keV).`
-      : 'No se ha podido asociar el frame a un detector y una ventana energetica.'
+    frame?.detectorKnown ? 'El frame esta asociado a un detector del DICOM.'
+      : 'No se ha podido asociar el frame a un detector.'
   ))
 
+  checks.push(metricsCheck(result))
+  checks.push(geometryCheck(metadata, frame))
+  const interiorZeros = metadata.nInteriorZeroInUfov
+  const paddingIntrusion = metadata.nPaddingIntrusionInUfov
+  checks.push(check('interior_zeros', 'Exclusiones interiores',
+    interiorZeros === 0 && paddingIntrusion === 0 ? OK : FAIL,
+    Number.isInteger(interiorZeros) && Number.isInteger(paddingIntrusion)
+      ? `${interiorZeros} a cero; ${paddingIntrusion} bloques con fondo exterior` : 'Sin dato',
+    'Control de integridad de la herramienta: un pixel interior completamente a cero o fondo exterior que penetra en el UFOV requiere revisar el flood y su geometria; excluirlo no demuestra uniformidad.',
+    'blocking'))
+  checks.push(energyWindowCheck(frame, declaration))
   checks.push(squarePixelCheck(parsed?.pixelSpacing))
   checks.push(effectivePixelCheck(metadata))
   checks.push(countsCheck(metadata))
   checks.push(countRateCheck(parsed, frame?.totalCounts, declaration))
   checks.push(collimatorCheck(frame, declaration))
-  checks.push(sourceDistanceCheck(frame?.ufovSizeMm || parsed?.ufovSizeMm, declaration))
+  checks.push(sourceDistanceCheck(metadata.ufovSizeMm || frame?.ufovSizeMm || parsed?.ufovSizeMm, declaration))
   checks.push(uniformityCorrectionCheck(parsed, declaration))
 
   const radionuclide = parsed?.radionuclide || declaration?.radionuclide
@@ -311,6 +395,8 @@ export function evaluateAcquisition({ parsed, frame, result, profile, declaratio
   const specs = profile?.specs || null
   const comparison = specs && result?.available ? limitRows(result, specs) : []
   const exceeded = comparison.filter((row) => Number.isFinite(row.value) && row.value > row.limit)
+  const comparisonComplete = comparison.length === 4
+    && comparison.every((row) => Number.isFinite(row.value) && Number.isFinite(row.limit) && row.limit >= 0)
 
   let state
   let reason
@@ -327,6 +413,9 @@ export function evaluateAcquisition({ parsed, frame, result, profile, declaratio
   } else if (!specs) {
     state = STATES.NO_EVALUABLE
     reason = 'No hay un perfil de limites aplicable a este equipo: se informan los valores NEMA sin veredicto de conformidad.'
+  } else if (!comparisonComplete) {
+    state = STATES.NO_EVALUABLE
+    reason = 'La comparacion con los limites esta incompleta; no se puede emitir conformidad.'
   } else if (exceeded.length) {
     state = STATES.NO_CONFORME
     reason = `Fuera de limites: ${exceeded.map((row) => row.label).join(', ')}.`
@@ -345,6 +434,7 @@ export function evaluateAcquisition({ parsed, frame, result, profile, declaratio
     state,
     reason,
     profile: profile || null,
-    numericallyWithinLimits: Boolean(specs) && exceeded.length === 0
+    numericallyWithinLimits: Boolean(result?.available && comparisonComplete)
+      && checks.find((item) => item.id === 'metrics').status === OK && exceeded.length === 0
   }
 }

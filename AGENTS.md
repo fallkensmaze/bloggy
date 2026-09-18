@@ -58,16 +58,26 @@ always produced: nothing throws, the masks render, and the badge turns green or 
 The expected values are derived in the file from NU 1-2007 §2.4 and written beside each case, so
 they can be checked by hand rather than trusted.
 
-The case worth knowing about is the last one. The UFOV this camera declares (386 × 532 mm) is,
+One important regression concerns padding. The UFOV this camera declares (386 × 532 mm) is,
 within 0.2 %, the physical extent of its crystal, so summing 0.5994 mm pixels into the 7.79 mm
-ones NEMA asks for leaves the outermost row of blocks straddling the edge: ten active raw rows
+analysis pixels leaves the outermost row of blocks straddling the edge: ten active raw rows
 out of thirteen. Those blocks come out at 76.9 % of the CFOV mean, the 75 % edge rule of the
 standard lets them through by less than two points, and they used to drag IU UFOV from 3.1 % to
-10.8 % — reporting a conforming detector as failing, on a real flood. NEMA already says to exclude
-pixels that held zero counts in the original image; the fix is that the exclusion has to survive
-the summation, so `safeBlockReduce()` flags any summed pixel whose block touched a zero. Do not
-try to fix it by aligning the block grid instead: 645 active rows admit only 49 complete 13-row
-blocks, so a 50th block straddles the edge under every alignment.
+10.8 % on a real flood. `safeBlockReduce()` preserves the exclusion only for zero padding
+connected to the matrix exterior, a documented extension through binning. An isolated raw zero
+inside a nonzero summed pixel must remain in the sum: excluding its entire block used to hide a
+cold defect (13.8 % IU became 0 %). Entirely zero interior analysis pixels and exterior padding
+penetrating the geometric UFOV prevent a conformity verdict even when excluded from the number.
+Do not replace the edge-block protection by alignment alone: 645 active raw rows cannot tile
+fifty complete 13-row blocks. See `NEMA_UNIFORMITY.md` for method scope and limitations.
+
+UFOV and CFOV use continuous physical boundaries and at least 50 % pixel-area overlap, including
+corners. Do not round dimensions first or derive the CFOV from the eroded UFOV. For a 100-pixel
+field, the 75 % interval is [12,87], so both boundary rows count at mid-column; their four corner
+intersections have only 25 % area and are excluded. The old asymmetric 12..86 test was wrong.
+Conformity requires six finite IU/DU values, valid five-pixel windows in both directions, and a
+verified energy range/protocol. Blank strings are unknown, never zero. Acquisition declarations
+are per-file and must not be restored from localStorage or carried to another flood.
 
 The PET NEMA loader has `scripts/test-pet-nema.mjs` (`npm run test:pet`); run it after
 touching `src/utils/petNemaDicom.js`. It builds synthetic PET DICOM in memory and pins
@@ -151,7 +161,7 @@ Firestore collections:
 ### Main modules
 
 - `src/pages/Blog.jsx` - paginated Firestore feed. Renders Markdown, code highlighting and math.
-- `src/pages/UniformidadGamma.jsx` - DICOM flood upload, NEMA NU 1-2007 calculation, Pylinac/IAEA
+- `src/pages/UniformidadGamma.jsx` - DICOM flood upload, NEMA NU 1-2007 calculation, Pylinac-like
   cross-check and canvas rendering. It keeps apart three things that used to be a single green
   badge: the NEMA number, the validity of the acquisition, and the comparison against the limits of
   one camera. The resolution selector reports what each option really produces on the loaded file

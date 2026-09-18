@@ -19,7 +19,7 @@ import {
   describeResolution,
   detectLimitProfile
 } from '../src/utils/nemaAlgorithms.js'
-import { STATES, evaluateAcquisition } from '../src/utils/nemaAcquisition.js'
+import { STATES, createAcquisitionDeclaration, evaluateAcquisition } from '../src/utils/nemaAcquisition.js'
 import { normalizeStoredPixel } from '../src/utils/dicomPixels.js'
 
 const { DicomDict, DicomMetaDictionary } = dcmjs.data
@@ -105,9 +105,14 @@ check('DU UFOV = 0', near(Math.max(uniform.DUvertUfov, uniform.DUhorizUfov), 0, 
 check('DU CFOV = 0', near(Math.max(uniform.DUvertCfov, uniform.DUhorizCfov), 0, EXACT))
 check('no se elimina ningun pixel', uniform.metadata.nRemovedTotal === 0,
   `${uniform.metadata.nRemovedTotal}`)
-check('el CFOV es el 75 % lineal del UFOV',
-  uniform.metadata.cfovBBoxFinal.minR === 12 && uniform.metadata.cfovBBoxFinal.maxR === 86,
+check('el CFOV incluye simetricamente los pixeles con 50 % de area',
+  uniform.metadata.cfovBBoxFinal.minR === 12 && uniform.metadata.cfovBBoxFinal.maxR === 87,
   `filas ${uniform.metadata.cfovBBoxFinal.minR}-${uniform.metadata.cfovBBoxFinal.maxR}`)
+// Physical edges: [-0.5,99.5], central 75 %: [12,87]. Rows/columns 12 and
+// 87 each have half coverage. Their four intersections have only 25 %.
+check('las cuatro esquinas con 25 % quedan fuera del CFOV',
+  [[12, 12], [12, 87], [87, 12], [87, 87]].every(([r, c]) => uniform.cfovMask[r * GRID + c] === 1))
+check('el CFOV tiene 76 x 76 menos cuatro pixeles', uniform.metadata.nCfovPixelsValid === 5772)
 
 // ---- Case 2: four-pixel low border ------------------------------------------
 // Interior 10 000, the four outer rows and columns at 50.
@@ -152,7 +157,7 @@ check('DU UFOV = 0 en el campo restante',
 // ---- Case 4: defect on the border of the original CFOV ----------------------
 // One low peripheral ring triggers the edge rule, so the valid mask shrinks to
 // rows 2..97. Deriving the CFOV from that eroded box would give rows 13..85;
-// deriving it from the geometric UFOV, as NEMA requires, gives rows 12..86.
+// deriving it from the geometric UFOV gives rows 12..87 (excluding corners).
 //
 // The defect sits at row 12, exactly on that boundary. Its value is 5000, and
 // smoothing puts 4/16 of the pixel on itself and 12/16 on neighbours at 10 000:
@@ -165,13 +170,39 @@ const cfovEdge = fillBorder(uniformField(GRID, GRID, 10000), GRID, GRID, 1, 50)
 cfovEdge[12 * GRID + 50] = 5000
 const edgeDefect = analyse(cfovEdge)
 check('el CFOV no encoge con el borde eliminado',
-  edgeDefect.metadata.cfovBBoxFinal.minR === 12 && edgeDefect.metadata.cfovBBoxFinal.maxR === 86,
+  edgeDefect.metadata.cfovBBoxFinal.minR === 12 && edgeDefect.metadata.cfovBBoxFinal.maxR === 87,
   `filas ${edgeDefect.metadata.cfovBBoxFinal.minR}-${edgeDefect.metadata.cfovBBoxFinal.maxR}`)
 check('el UFOV valido si se reduce a las filas 2-97',
   edgeDefect.metadata.ufovBBoxFinal.minR === 2 && edgeDefect.metadata.ufovBBoxFinal.maxR === 97,
   `filas ${edgeDefect.metadata.ufovBBoxFinal.minR}-${edgeDefect.metadata.ufovBBoxFinal.maxR}`)
 check('el defecto sigue contando en el CFOV', edgeDefect.IUcfov > 0, `${edgeDefect.IUcfov}`)
 check('IU CFOV = 6,666667 %', near(edgeDefect.IUcfov, 6.666667, ROUNDED), `${edgeDefect.IUcfov}`)
+
+section('Simetria y fraccion de area fisica')
+const reflected = fillBorder(uniformField(GRID, GRID, 10000), GRID, GRID, 1, 50)
+reflected[87 * GRID + 50] = 5000
+const reflectedResult = analyse(reflected)
+check('reflejar el defecto conserva IU CFOV', near(reflectedResult.IUcfov, 6.666667, ROUNDED))
+check('reflejar el defecto conserva DU en ambas direcciones',
+  near(reflectedResult.DUvertCfov, edgeDefect.DUvertCfov, EXACT)
+  && near(reflectedResult.DUhorizCfov, edgeDefect.DUhorizCfov, EXACT))
+const areaResult = calculateNemaGeometric(uniformField(10, 10, 10000), 10, 10, {
+  targetSize: 0, pixelSpacingMm: [6.4, 6.4], ufovSizeMm: [7.2 * 6.4, 7.2 * 6.4]
+})
+// UFOV edges 0.9..8.1: rows 1 and 8 have 60 % coverage. At their
+// intersections coverage is 0.6*0.6=0.36, so precisely four corners are out.
+check('UFOV fraccionario incluye 8 x 8 menos cuatro esquinas', areaResult.metadata.nUfovPixelsValid === 60)
+check('UFOV conserva las dimensiones fisicas sin redondearlas antes del CFOV',
+  near(areaResult.metadata.cfovBoundsPx.minR, 1.8, EXACT)
+  && near(areaResult.metadata.cfovBoundsPx.maxR, 7.2, EXACT))
+// CFOV side coverage is 70 %, corner coverage 49 %: 6*6 - 4 = 32.
+check('CFOV excluye las esquinas con 49 % de area', areaResult.metadata.nCfovPixelsValid === 32)
+
+const oddCrop = calculateNemaGeometric(uniformField(21, 21, 3000), 21, 21, {
+  targetSize: 10, pixelSpacingMm: [3.2, 3.2], ufovSizeMm: [51.2, 51.2]
+})
+check('un recorte impar conserva el centro fisico original',
+  near((oddCrop.metadata.ufovBoundsPx.minR + oddCrop.metadata.ufovBoundsPx.maxR) / 2, 4.75, EXACT))
 
 // ---- Case 11: blocks contaminated at the edge of the active field -----------
 // The case that matters most in practice, and the one no rule catches unless
@@ -189,7 +220,7 @@ check('IU CFOV = 6,666667 %', near(edgeDefect.IUcfov, 6.666667, ROUNDED), `${edg
 // on a perfectly uniform detector. The artefact is where the block grid fell,
 // not a property of the camera.
 //
-// Flagging those blocks as zero-count pixels removes them and their neighbours,
+// Flagging blocks touching exterior zero padding removes them and their neighbours,
 // and what remains is uniform.
 section('Caso 11: bloques contaminados en el borde del campo activo')
 const RAW = 130
@@ -211,6 +242,26 @@ check('se detectan los 20 bloques contaminados',
 check('la vecindad retira las 20 posiciones contiguas',
   blocked.metadata.nRemovedByNeighbour === 20, `${blocked.metadata.nRemovedByNeighbour}`)
 check('IU UFOV = 0 una vez excluidos', near(blocked.IUufov, 0, EXACT), `${blocked.IUufov}`)
+check('los ceros de este caso son exclusivamente exteriores',
+  blocked.metadata.nExteriorPaddingInUfov === 20 && blocked.metadata.nInteriorZeroInUfov === 0)
+
+section('Ceros aislados dentro de un bloque con cuentas')
+for (const rawZero of [0, 1]) {
+  const coldBlock = uniformField(128, 128, 2500)
+  coldBlock[40 * 128 + 40] = rawZero
+  coldBlock[40 * 128 + 41] = 100
+  coldBlock[41 * 128 + 40] = 100
+  coldBlock[41 * 128 + 41] = 100
+  const cold = calculateNemaGeometric(coldBlock, 128, 128, {
+    pixelSpacingMm: [3.2, 3.2], ufovSizeMm: [409.6, 409.6]
+  })
+  // A 2x2 raw block sums to 300 or 301. It contributes 4/16 to its
+  // smoothed centre, with 12/16 contributed by neighbours at 10 000.
+  const minimum = (4 * (300 + rawZero) + 12 * 10000) / 16
+  const expected = 100 * (10000 - minimum) / (10000 + minimum)
+  check(`cero interior ${rawZero}: no se elimina el bloque frio`, cold.metadata.nRemovedTotal === 0)
+  check(`cero interior ${rawZero}: IU conserva el defecto`, near(cold.IUcfov, expected, EXACT))
+}
 
 // Sin la propagacion, esos mismos numeros dan el artefacto: se reproduce
 // entregando la matriz ya sumada, donde ningun pixel vale cero.
@@ -552,8 +603,9 @@ const baseFrame = {
   energyWindowUpperLimit: 154,
   collimatorType: 'NONE',
   totalCounts: 6e6,
-  ufovSizeMm: [386, 532]
+  ufovSizeMm: [640, 640]
 }
+const verifiedDeclaration = { sourceDistanceCm: '400', energyWindowConfirmed: 'si' }
 
 const unverified = evaluateAcquisition({
   parsed: baseParsed, frame: baseFrame, result: uniform, profile: symbia, declaration: {}
@@ -566,7 +618,7 @@ const verified = evaluateAcquisition({
   frame: { ...baseFrame, totalCounts: 6e6 },
   result: uniform,
   profile: symbia,
-  declaration: { sourceDistanceCm: 300 }
+  declaration: verifiedDeclaration
 })
 check('con la distancia declarada y todo en orden, Conforme',
   verified.state === STATES.CONFORME, `${verified.state}: ${verified.reason}`)
@@ -576,7 +628,7 @@ const tooFast = evaluateAcquisition({
   frame: { ...baseFrame, totalCounts: 60000 },
   result: uniform,
   profile: symbia,
-  declaration: { sourceDistanceCm: 300 }
+  declaration: verifiedDeclaration
 })
 check('una tasa de 60 000 cps invalida la medida',
   tooFast.state === STATES.NO_EVALUABLE, `${tooFast.state}: ${tooFast.reason}`)
@@ -586,7 +638,7 @@ const withCollimator = evaluateAcquisition({
   frame: { ...baseFrame, collimatorType: 'LEHR' },
   result: uniform,
   profile: symbia,
-  declaration: { sourceDistanceCm: 300 }
+  declaration: verifiedDeclaration
 })
 check('un colimador montado invalida la uniformidad intrinseca',
   withCollimator.state === STATES.NO_EVALUABLE, withCollimator.state)
@@ -606,7 +658,7 @@ const lowCounts = evaluateAcquisition({
   frame: baseFrame,
   result: { ...uniform, metadata: { ...uniform.metadata, centerCountResampled: 8584, maxCountCfov: 8916 } },
   profile: symbia,
-  declaration: { sourceDistanceCm: 300 }
+  declaration: verifiedDeclaration
 })
 check('menos de 10 000 cuentas en el pixel central invalida la medida',
   lowCounts.state === STATES.NO_EVALUABLE, lowCounts.reason)
@@ -616,13 +668,119 @@ const outOfLimits = evaluateAcquisition({
   frame: baseFrame,
   result: { ...uniform, IUufov: 4.01, IUcfov: 3.28 },
   profile: symbia,
-  declaration: { sourceDistanceCm: 300 }
+  declaration: verifiedDeclaration
 })
 check('fuera de los limites del perfil, No conforme',
   outOfLimits.state === STATES.NO_CONFORME, `${outOfLimits.state}: ${outOfLimits.reason}`)
 check('se nombran los parametros fuera de limite',
   outOfLimits.exceeded.map((row) => row.label).join(', ') === 'IU UFOV, IU CFOV',
   outOfLimits.exceeded.map((row) => row.label).join(', '))
+
+const evaluate = (overrides = {}) => evaluateAcquisition({
+  parsed: baseParsed, frame: baseFrame, result: uniform, profile: symbia,
+  declaration: verifiedDeclaration, ...overrides
+})
+const checkById = (evaluation, id) => evaluation.checks.find((item) => item.id === id)
+
+section('Campos vacios y valores fisicamente invalidos')
+for (const blank of ['', ' ', '\t']) {
+  const blankRate = evaluate({ parsed: { ...baseParsed, actualFrameDurationMs: NaN },
+    declaration: { ...verifiedDeclaration, countRateCps: blank } })
+  check('tasa vacia no equivale a 0 cps', checkById(blankRate, 'count_rate').status === 'unknown')
+  check('sin tasa fiable no hay Conforme', blankRate.state === STATES.NO_VERIFICADA)
+  const blankDistance = evaluate({ declaration: { ...verifiedDeclaration, sourceDistanceCm: blank } })
+  check('distancia vacia no equivale a 0 cm', checkById(blankDistance, 'source_distance').status === 'unknown')
+  const confirmedDistance = evaluate({ declaration: { ...verifiedDeclaration,
+    sourceDistanceCm: blank, distanceConfirmed: true } })
+  check('la casilla permite confirmar la distancia sin inventar un valor', confirmedDistance.state === STATES.CONFORME)
+}
+for (const value of ['0', '-1', '20001']) {
+  const badRate = evaluate({ parsed: { ...baseParsed, actualFrameDurationMs: NaN },
+    declaration: { ...verifiedDeclaration, countRateCps: value } })
+  check(`tasa invalida ${value} no se acepta`, badRate.state === STATES.NO_EVALUABLE)
+}
+const decimalRate = evaluate({ parsed: { ...baseParsed, actualFrameDurationMs: NaN },
+  declaration: { ...verifiedDeclaration, countRateCps: '12000,5' } })
+check('se acepta la coma decimal de una tasa positiva valida', decimalRate.state === STATES.CONFORME)
+check('una distancia numerica cero no se sobreescribe con la casilla',
+  evaluate({ declaration: { ...verifiedDeclaration, sourceDistanceCm: '0', distanceConfirmed: true } }).state === STATES.NO_EVALUABLE)
+check('UNKN no significa colimador montado ni retirado',
+  checkById(evaluate({ frame: { ...baseFrame, collimatorType: 'UNKN' } }), 'collimator').status === 'unknown')
+check('UNKN permite confirmar explicitamente el colimador retirado',
+  evaluate({ frame: { ...baseFrame, collimatorType: 'UNKN' },
+    declaration: { ...verifiedDeclaration, collimatorRemoved: 'si' } }).state === STATES.CONFORME)
+
+section('Ventana energetica y protocolo')
+const absentWindow = { ...baseFrame, energyWindowName: '', energyWindowLowerLimit: NaN, energyWindowUpperLimit: NaN }
+check('detector conocido con ventana ausente no verifica la adquisicion',
+  evaluate({ frame: absentWindow }).state === STATES.NO_VERIFICADA)
+check('un nombre de ventana sin limites no basta',
+  evaluate({ frame: { ...absentWindow, energyWindowName: 'Tc' } }).state === STATES.NO_VERIFICADA)
+check('un rango DICOM valido requiere confirmacion del protocolo',
+  evaluate({ declaration: { ...verifiedDeclaration, energyWindowConfirmed: '' } }).state === STATES.NO_VERIFICADA)
+check('un rango DICOM invertido no se puede sobreescribir a mano',
+  evaluate({ frame: { ...baseFrame, energyWindowLowerLimit: 154, energyWindowUpperLimit: 126 },
+    declaration: { ...verifiedDeclaration, energyWindowLowerKev: '126', energyWindowUpperKev: '154' } }).state === STATES.NO_EVALUABLE)
+check('un rango DICOM parcial sigue sin verificar',
+  evaluate({ frame: { ...baseFrame, energyWindowUpperLimit: NaN },
+    declaration: { ...verifiedDeclaration, energyWindowUpperKev: '154' } }).state === STATES.NO_VERIFICADA)
+check('ventana manual completa y confirmada permite evaluar',
+  evaluate({ frame: absentWindow, declaration: { ...verifiedDeclaration,
+    energyWindowLowerKev: '126,0', energyWindowUpperKev: '154,0' } }).state === STATES.CONFORME)
+check('ventana manual vacia permanece desconocida',
+  evaluate({ frame: absentWindow, declaration: { ...verifiedDeclaration,
+    energyWindowLowerKev: '', energyWindowUpperKev: '' } }).state === STATES.NO_VERIFICADA)
+check('ventana declarada ajena al protocolo invalida la medida',
+  evaluate({ declaration: { ...verifiedDeclaration, energyWindowConfirmed: 'no' } }).state === STATES.NO_EVALUABLE)
+
+section('Resultados incompletos y campos no verificados')
+for (const name of ['IUufov', 'IUcfov', 'DUvertUfov', 'DUhorizUfov', 'DUvertCfov', 'DUhorizCfov']) {
+  const invalidMetric = evaluate({ result: { ...uniform, [name]: NaN } })
+  check(`${name} no calculable impide Conforme`, invalidMetric.state === STATES.NO_EVALUABLE)
+  check(`${name} no calculable no se declara numericamente dentro de limites`, !invalidMetric.numericallyWithinLimits)
+}
+const sparseData = new Float64Array(GRID * GRID)
+for (let r = 49; r <= 51; r++) for (let c = 49; c <= 51; c++) sparseData[r * GRID + c] = 10000
+const sparseResult = analyse(sparseData)
+check('el caso degenerado conserva solo un pixel', sparseResult.metadata.nUfovPixelsValid === 1)
+check('sin cinco pixeles no se inventa una DU cero', Number.isNaN(sparseResult.DUvertUfov))
+check('el caso degenerado real no puede ser Conforme', evaluate({ result: sparseResult }).state === STATES.NO_EVALUABLE)
+const interiorZeroData = uniformField(GRID, GRID, 10000)
+interiorZeroData[40 * GRID + 40] = 0
+const interiorZeroResult = analyse(interiorZeroData)
+check('el cero interior completo sigue documentado aunque se excluya', interiorZeroResult.metadata.nInteriorZeroInUfov === 1)
+check('no se certifica el campo restante tras eliminar un pixel interior muerto',
+  evaluate({ result: interiorZeroResult }).state === STATES.NO_EVALUABLE)
+const edgeZeroData = uniformField(GRID, GRID, 10000)
+for (let r = 0; r < 8; r++) edgeZeroData[r * GRID + 40] = 0
+const edgeZeroResult = analyse(edgeZeroData)
+check('un defecto a cero conectado al exterior se detecta dentro del UFOV',
+  edgeZeroResult.metadata.nPaddingIntrusionInUfov === 7)
+check('excluir un defecto conectado al exterior no permite Conforme',
+  evaluate({ result: edgeZeroResult }).state === STATES.NO_EVALUABLE)
+const autoField = calculateNemaGeometric(uniformField(GRID, GRID, 10000), GRID, GRID,
+  { targetSize: 0, pixelSpacingMm: [6.4, 6.4] })
+check('un campo constante admite la estimacion automatica', autoField.available && autoField.metadata.ufovFromImage)
+check('UFOV inferido exige verificar la geometria antes de Conforme', evaluate({ result: autoField }).state === STATES.NO_VERIFICADA)
+const truncatedField = analyse(uniformField(GRID, GRID, 10000), { ufovSizeMm: [700, 700] })
+check('un UFOV fisico que no cabe en la imagen no pasa como campo completo',
+  evaluate({ result: truncatedField }).state === STATES.NO_EVALUABLE)
+const invalidProfile = { ...symbia, specs: { ...symbia.specs, DUcfov: NaN } }
+check('limites incompletos impiden Conforme', evaluate({ profile: invalidProfile }).state === STATES.NO_EVALUABLE)
+const invalidCounts = uniformField(GRID, GRID, 10000)
+invalidCounts[0] = -1
+assert.throws(() => analyse(invalidCounts), /no negativas/)
+invalidCounts[0] = NaN
+assert.throws(() => analyse(invalidCounts), /finitas/)
+
+section('Declaracion independiente de cada archivo')
+const oldDeclaration = createAcquisitionDeclaration()
+oldDeclaration.energyWindowConfirmed = 'si'
+oldDeclaration.distanceConfirmed = true
+oldDeclaration.countRateCps = '10000'
+const newDeclaration = createAcquisitionDeclaration()
+check('una nueva adquisicion no hereda confirmaciones ni tasa de cuentas',
+  newDeclaration.energyWindowConfirmed === '' && !newDeclaration.distanceConfirmed && newDeclaration.countRateCps === '')
 
 // ---- Result -----------------------------------------------------------------
 console.log('')
