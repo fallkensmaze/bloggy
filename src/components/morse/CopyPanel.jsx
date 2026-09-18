@@ -8,6 +8,7 @@ import {
   KOCH_TARGET,
   MAX_LESSON,
 } from '../../utils/morseTrainer'
+import { buildReviewDrill } from '../../utils/morseProgress'
 import { readChoice, readNumber, writeValue } from '../../utils/localSettings'
 
 const MODES = [
@@ -25,7 +26,7 @@ const SIZE_KEY = 'morse_copy_size'
  * corrige carácter a carácter; cada carácter alimenta su caja de Leitner.
  * Con el mazo Koch, tras varios grupos buenos se ofrece añadir el siguiente.
  */
-function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recordChars, onAdvance, canPlay }) {
+function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recordChars, onAdvance, canPlay, reviewOnly = false }) {
   const [mode, setMode] = useState(() => readChoice(MODE_KEY, MODES.map(m => m.id), 'grupo'))
   const [size, setSize] = useState(() => readNumber(SIZE_KEY, { min: 3, max: 7, fallback: 5 }))
 
@@ -39,21 +40,27 @@ function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recor
   const inputRef  = useRef(null)
   const playedRef = useRef(null)   // id del ejercicio ya reproducido
   const gradeRef  = useRef(null)
+  const listensRef = useRef(0)
+  const [heard, setHeard] = useState(false)
 
   const words = wordsFor(pool.map(e => e.char))
 
   const nextDrill = useCallback((over = {}) => {
-    const d = buildCopyDrill({
+    stop()
+    setLamp(false)
+    setHeard(false)
+    listensRef.current = 0
+    const d = reviewOnly ? buildReviewDrill({ pool, progress: progressRef.current }) : buildCopyDrill({
       pool,
       progress: progressRef.current,
       mode: over.mode ?? mode,
       size: over.size ?? size,
     })
-    setDrill({ ...d, id: Date.now() + Math.random() })
+    setDrill(d ? { ...d, id: Date.now() + Math.random() } : null)
     setAnswer('')
     setGrade(null)
     gradeRef.current = null
-  }, [pool, mode, size, progressRef])
+  }, [pool, mode, size, progressRef, reviewOnly, stop])
 
   // Ejercicio nuevo al entrar y cada vez que cambian el mazo o los ajustes.
   useEffect(() => { nextDrill() }, [nextDrill])
@@ -61,10 +68,11 @@ function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recor
   const listen = useCallback(() => {
     if (!drill) return
     playedRef.current = drill.id
+    if (!gradeRef.current) listensRef.current++
     setStarted(true)
     play(drill.text, {
       onSymbol: ({ on }) => setLamp(on),
-      onEnd: () => setLamp(false),
+      onEnd: () => { setLamp(false); setHeard(true) },
     })
     inputRef.current?.focus()
   }, [drill, play])
@@ -75,25 +83,25 @@ function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recor
     if (!drill || playedRef.current === null) return
     if (playedRef.current === drill.id) return
     playedRef.current = drill.id
+    listensRef.current++
     play(drill.text, {
       onSymbol: ({ on }) => setLamp(on),
-      onEnd: () => setLamp(false),
+      onEnd: () => { setLamp(false); setHeard(true) },
     })
     inputRef.current?.focus()
   }, [drill, play])
 
   const check = useCallback(() => {
-    if (!drill || gradeRef.current) return
+    if (!drill || gradeRef.current || !heard || playing) return
     stop()
     setLamp(false)
     const g = gradeCopy(drill.text, answer)
     gradeRef.current = g
     setGrade(g)
-    recordChars(g.cells
-      .filter(c => c.expected !== null)
-      .map(c => ({ char: c.expected, ok: c.ok })))
-    setHistory(h => [...h, g.total === 0 ? 0 : Math.round((g.correct / g.total) * 100)].slice(-20))
-  }, [drill, answer, stop, recordChars])
+    const assisted = listensRef.current > 1
+    recordChars(g.characterResults, { assisted })
+    if (!assisted && !reviewOnly) setHistory(h => [...h, g.accuracy].slice(-20))
+  }, [drill, answer, stop, recordChars, heard, playing, reviewOnly])
 
   // Al corregir se deshabilita la casilla, así que el Intro que encadena con el
   // ejercicio siguiente hay que escucharlo en la ventana.
@@ -113,11 +121,13 @@ function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recor
   }, [grade, nextDrill])
 
   const handleModeChange = (m) => {
+    setHistory([])
     setMode(m)
     writeValue(MODE_KEY, m)
   }
 
   const handleSizeChange = (s) => {
+    setHistory([])
     setSize(s)
     writeValue(SIZE_KEY, s)
   }
@@ -129,13 +139,22 @@ function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recor
     else check()
   }
 
-  const puedeSubir = deck === 'koch' && lesson < MAX_LESSON && readyToAdvance(history)
+  const puedeSubir = !reviewOnly && deck === 'koch' && lesson < MAX_LESSON && readyToAdvance(history)
   const media = history.length
     ? Math.round(history.slice(-5).reduce((a, b) => a + b, 0) / Math.min(history.length, 5))
     : null
 
+  if (reviewOnly && !drill) return (
+    <div className="mr-feedback mr-feedback--info" role="status">
+      No hay errores ni repasos pendientes en este mazo. Continúa el curso o practica una copia libre.
+      <button className="mr-btn mr-btn--sm" onClick={() => nextDrill()}>Actualizar repasos</button>
+    </div>
+  )
+
   return (
     <>
+      {reviewOnly && <p className="mr-slider-note">Repaso auditivo de errores y letras pendientes, mezclados con caracteres conocidos. No cuenta para subir de lección.</p>}
+      {!reviewOnly && <>
       <div className="mr-row-between">
         <span className="field-label" style={{ marginBottom: 0 }}>Qué se envía</span>
         {media !== null && (
@@ -176,6 +195,7 @@ function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recor
         </p>
       )}
 
+      </>}
       <div className="mr-drill">
         <div className={`mr-lamp${lamp ? ' mr-lamp--on' : ''}`} />
         <div style={{ marginTop: '18px', display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
@@ -205,6 +225,9 @@ function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recor
         onKeyDown={onKeyDown}
         disabled={!!grade}
         placeholder="· · ·"
+        maxLength={10000}
+        autoCapitalize="characters"
+        autoCorrect="off"
         autoComplete="off"
         spellCheck="false"
         aria-label="Lo que has copiado"
@@ -215,7 +238,7 @@ function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recor
           className="mr-btn mr-btn--primary"
           style={{ width: '100%', marginTop: '14px', padding: '13px' }}
           onClick={check}
-          disabled={!drill}
+          disabled={!drill || !heard || playing}
         >
           <i className="bi bi-check2-square" style={{ marginRight: '8px' }} />
           Comprobar (Intro)
@@ -240,12 +263,14 @@ function CopyPanel({ pool, deck, lesson, progressRef, play, stop, playing, recor
             <i className={`bi ${grade.perfect ? 'bi-check-circle' : 'bi-x-circle'}`} style={{ marginRight: '8px' }} />
             {grade.perfect
               ? `¡Copiado entero! (${drill.text})`
-              : `${grade.correct} de ${grade.total} caracteres — era «${drill.text}»`}
+              : `${grade.accuracy}% · ${grade.errors} errores — era «${drill.text}»`}
+            {listensRef.current > 1 && ' · Práctica con repetición'}
+            {drill.focus && ` · Refuerzo de ${drill.focus}${drill.confusion ? ` / ${drill.confusion}` : ''}`}
             {drill.meaning && ` · ${drill.meaning}`}
           </div>
 
           <div style={{ display: 'flex', gap: '10px', marginTop: '14px', flexWrap: 'wrap' }}>
-            <button className="mr-btn" onClick={() => play(drill.text, { onSymbol: ({ on }) => setLamp(on), onEnd: () => setLamp(false) })} disabled={!canPlay}>
+            <button className="mr-btn" onClick={() => play(drill.text, { onSymbol: ({ on }) => setLamp(on), onEnd: () => { setLamp(false); setHeard(true) } })} disabled={!canPlay}>
               <i className="bi bi-arrow-repeat" style={{ marginRight: '6px' }} />
               Volver a oírlo
             </button>

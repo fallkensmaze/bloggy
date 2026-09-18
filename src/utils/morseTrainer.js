@@ -202,21 +202,44 @@ export function buildCopyDrill({ pool, progress = {}, mode = 'grupo', size = 5, 
 }
 
 /**
- * Corrige lo copiado carácter a carácter. Compara por posición, así que una
- * letra de más desplaza el resto: es justo lo que pasa al copiar de verdad.
- * Devuelve { cells, correct, total, perfect }.
+ * Alineación Levenshtein: una omisión o inserción no desplaza los aciertos
+ * posteriores. La nota y el progreso usan exactamente las mismas operaciones.
  */
 export function gradeCopy(target, typed) {
   const want = String(target).toUpperCase().replace(/\s+/g, '')
   const got  = String(typed).toUpperCase().replace(/\s+/g, '')
-  const cells = []
-  for (let i = 0; i < Math.max(want.length, got.length); i++) {
-    const expected = want[i] ?? null
-    const answer   = got[i] ?? null
-    cells.push({ expected, got: answer, ok: expected !== null && expected === answer })
+  const width = got.length + 1
+  const directions = new Uint8Array((want.length + 1) * width)
+  let previous = Array.from({ length: width }, (_, i) => i)
+  for (let j = 1; j < width; j++) directions[j] = 2
+  for (let i = 1; i <= want.length; i++) {
+    const current = [i]
+    directions[i * width] = 1
+    for (let j = 1; j < width; j++) {
+      const diagonal = previous[j - 1] + (want[i - 1] === got[j - 1] ? 0 : 1)
+      const deletion = previous[j] + 1
+      const insertion = current[j - 1] + 1
+      current[j] = Math.min(diagonal, deletion, insertion)
+      directions[i * width + j] = current[j] === diagonal ? 0 : current[j] === deletion ? 1 : 2
+    }
+    previous = current
   }
+  const cells = []
+  let i = want.length
+  let j = got.length
+  while (i || j) {
+    const direction = directions[i * width + j]
+    const expected = direction === 2 ? null : want[--i]
+    const answer = direction === 1 ? null : got[--j]
+    const ok = expected !== null && expected === answer
+    cells.push({ expected, got: answer, ok,
+      operation: ok ? 'match' : expected === null ? 'insertion' : answer === null ? 'deletion' : 'substitution' })
+  }
+  cells.reverse()
   const correct = cells.filter(c => c.ok).length
-  return { cells, correct, total: want.length, perfect: correct === want.length && got.length === want.length }
+  const errors = previous[got.length]
+  return { cells, correct, errors, total: want.length, accuracy: accuracyFrom(errors, want.length),
+    perfect: errors === 0, characterResults: cells.map(c => ({ char: c.expected, got: c.got, ok: c.ok })) }
 }
 
 // ── Progresión Koch ─────────────────────────────────────────────────────────
@@ -327,9 +350,8 @@ const accuracyFrom = (errors, total) => (
 
 /**
  * Corrige una sesión completa como LCWO: calcula el error grupo a grupo y una
- * distancia de edición global (útil si se omitió un espacio), y conserva la
- * mejor de las dos precisiones. Devuelve también el detalle por grupo y los
- * aciertos por carácter para alimentar el repaso local.
+ * distancia de edición global, que ignora los espacios. El detalle por grupo
+ * es sólo diagnóstico: la nota y el progreso salen de la alineación global.
  */
 export function gradeKochSession(target, typed) {
   const sent = practiceGroups(target)
@@ -348,10 +370,10 @@ export function gradeKochSession(target, typed) {
   const expectedText = sent.join('')
   const receivedText = received.join('')
   const total = expectedText.length
-  const sequenceErrors = editDistance(expectedText, receivedText)
+  const aligned = gradeCopy(expectedText, receivedText)
+  const sequenceErrors = aligned.errors
   const groupedAccuracy = accuracyFrom(groupErrors, total)
   const sequenceAccuracy = accuracyFrom(sequenceErrors, total)
-  const aligned = gradeCopy(expectedText, receivedText)
 
   return {
     rows,
@@ -360,11 +382,10 @@ export function gradeKochSession(target, typed) {
     sequenceErrors,
     groupedAccuracy,
     sequenceAccuracy,
-    accuracy: Math.max(groupedAccuracy, sequenceAccuracy),
-    passed: Math.max(groupedAccuracy, sequenceAccuracy) >= KOCH_TARGET,
-    characterResults: aligned.cells
-      .filter(cell => cell.expected !== null)
-      .map(cell => ({ char: cell.expected, ok: cell.ok })),
+    accuracy: aligned.accuracy,
+    passed: aligned.accuracy >= KOCH_TARGET,
+    cells: aligned.cells,
+    characterResults: aligned.characterResults,
   }
 }
 
@@ -458,7 +479,8 @@ export function buildVisualQuestion({
   progress = {},
   rng = Math.random,
 } = {}) {
-  const candidates = pool.length > 1 ? pool.filter(e => e.char !== excludeChar) : pool
+  // Con dos caracteres excluir el anterior revela siempre la respuesta.
+  const candidates = pool.length > 2 ? pool.filter(e => e.char !== excludeChar) : pool
   const entry = pickWeighted(candidates, progress, rng, e => e.char)
 
   const resolved = mode === 'mixed'

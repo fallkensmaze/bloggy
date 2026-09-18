@@ -542,7 +542,7 @@ function testGuidedCourse() {
     noSpaces.accuracy === 100 && noSpaces.sequenceErrors === 0)
 
   const ninety = gradeKochSession('KMUKM UKMKM', 'KMUKM UKMKA')
-  check('90% is enough to unlock the next lesson',
+  check('90% passes a practice (promotion additionally checks session history)',
     ninety.accuracy === 90 && ninety.passed)
 
   const below = gradeKochSession('KMUKM UKMKM', 'KMUKM UKAAA')
@@ -583,3 +583,6 @@ if (failures.length > 0) {
   process.exit(1)
 }
 console.log(`Morse trainer assertions passed: ${passed.length} checks.`)
+
+// Cross-session retention, grading and modality isolation regressions.
+await import('./test-morse-learning.mjs')

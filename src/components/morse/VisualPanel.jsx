@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { prettyMorse, rhythmOf, reverseOf, oppositeOf } from '../../utils/morse'
 import { buildVisualQuestion, VISUAL_MODES } from '../../utils/morseTrainer'
-import { MASTERY, masteryOf } from '../../utils/leitner'
+import { MORSE_MASTERY as MASTERY, morseMastery as masteryOf } from '../../utils/morseProgress'
 import { readChoice, writeValue } from '../../utils/localSettings'
 
 const LETTERS  = ['A', 'B', 'C', 'D']

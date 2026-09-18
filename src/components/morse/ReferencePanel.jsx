@@ -7,7 +7,7 @@ import {
   morseToText,
 } from '../../utils/morse'
 import { MORSE_CHARS, PROSIGN_LIST, GROUP_LABELS } from '../../utils/morseTrainer'
-import { MASTERY, masteryOf } from '../../utils/leitner'
+import { MORSE_MASTERY as MASTERY, morseMastery as masteryOf } from '../../utils/morseProgress'
 
 /**
  * Tabla completa con reproducción y un traductor de ida y vuelta. Cada fila
