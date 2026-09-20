@@ -400,6 +400,42 @@ button.ra-option:disabled { cursor: default; }
 /* El boton de explicar es un enlace, y el subrayado global de :hover le sobra. */
 a.ra-btn:hover { text-decoration: none; }
 
+/* ── Subida de temas (solo administración) ── */
+.ra-subida-zona {
+    margin-top: 12px;
+    padding: 18px;
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.5;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+}
+.ra-subida-zona:hover { border-color: var(--accent-blue); color: var(--text-secondary); }
+.ra-subida-zona i { font-size: 22px; color: var(--accent-blue); }
+.ra-subida-lista {
+    margin: 12px 0 0;
+    padding-left: 18px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+}
+.ra-subida-item--ko strong { color: var(--accent-red); }
+.ra-subida-tag {
+    margin-left: 8px;
+    padding: 1px 7px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.ra-subida-tag--pisa { color: var(--accent-orange); border-color: var(--accent-orange); }
+.ra-subida-resumen { margin: 12px 0; font-size: 13px; color: var(--text-muted); }
+
 /* ── Responsive ── */
 @media (max-width: 640px) {
     .ra-stats-grid { grid-template-columns: repeat(2, 1fr); }

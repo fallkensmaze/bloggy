@@ -10,6 +10,7 @@ import { MASTERY, accuracy, masterySummary, updateProgress } from '../utils/leit
 import { readJson, readChoice, readNumber, writeValue } from '../utils/localSettings'
 import PracticePanel from '../components/radio/PracticePanel'
 import ExamPanel from '../components/radio/ExamPanel'
+import TemaUploader from '../components/radio/TemaUploader'
 import '../styles/radio.css'
 
 const COLECCION    = 'RADIO_TEMAS'
@@ -200,6 +201,8 @@ function RadioExam() {
           <i className="bi bi-exclamation-triangle" /> {error}
         </div>
       )}
+
+      <TemaUploader existentes={temas.map(t => t.id)} onSubido={cargarTemas} />
 
       {!cargando && temas.length === 0 && !error && (
         <div className="calc-card">
