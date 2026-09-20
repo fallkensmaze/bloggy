@@ -1,7 +1,8 @@
 import { useCallback, useRef, useState } from 'react'
-import { doc, setDoc } from 'firebase/firestore'
+import { collection, doc, getDocs, setDoc } from 'firebase/firestore'
 import { db } from '../../firebase'
 import { parseTemaXml } from '../../utils/radioXml'
+import { makeZip, triggerDownload } from '../../utils/zipDownload'
 
 // Límites de la regla de Firestore para RADIO_TEMAS: un único campo `xml`, que
 // es una cadena no vacía de como mucho 200 000 caracteres. Si algo no cumple
@@ -88,6 +89,25 @@ function TemaUploader({ existentes, onSubido }) {
     if (hechas.some(h => h.ok)) onSubido?.()
   }
 
+  // Copia de seguridad: el temario solo vive en Firestore, así que antes de
+  // sobrescribir nada conviene poder bajarse lo que hay tal cual está.
+  const descargar = async () => {
+    setSubiendo(true)
+    setError('')
+    try {
+      const snap = await getDocs(collection(db, 'RADIO_TEMAS'))
+      const entradas = snap.docs
+        .map(d => ({ name: `${d.id}.xml`, data: new TextEncoder().encode(String(d.data()?.xml ?? '')) }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'es', { numeric: true }))
+      if (entradas.length === 0) { setError('No hay ningún tema que descargar.'); return }
+      triggerDownload(makeZip(entradas), `radio-temas-${new Date().toISOString().slice(0, 10)}.zip`)
+    } catch (err) {
+      setError(`No se han podido descargar los temas: ${err.message}`)
+    } finally {
+      setSubiendo(false)
+    }
+  }
+
   const buenas = fichas.filter(f => !f.error)
   const malas = fichas.filter(f => f.error)
   const sobrescriben = buenas.filter(f => f.existe)
@@ -96,9 +116,14 @@ function TemaUploader({ existentes, onSubido }) {
     <div className="calc-card ra-subida" style={{ marginBottom: '16px' }}>
       <div className="ra-card-head">
         <span className="field-label" style={{ marginBottom: 0 }}>Subir temas</span>
-        <button className="ra-btn ra-btn--sm" onClick={() => inputRef.current?.click()} disabled={subiendo}>
-          <i className="bi bi-folder2-open" /> Elegir ficheros
-        </button>
+        <span className="ra-chips">
+          <button className="ra-btn ra-btn--sm" onClick={descargar} disabled={subiendo}>
+            <i className="bi bi-download" /> Descargar los de Firestore
+          </button>
+          <button className="ra-btn ra-btn--sm" onClick={() => inputRef.current?.click()} disabled={subiendo}>
+            <i className="bi bi-folder2-open" /> Elegir ficheros
+          </button>
+        </span>
       </div>
 
       <div
