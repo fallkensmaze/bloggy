@@ -202,7 +202,7 @@ function RadioExam() {
         </div>
       )}
 
-      <TemaUploader existentes={temas.map(t => t.id)} onSubido={cargarTemas} />
+      <TemaUploader temas={temas} onSubido={cargarTemas} />
 
       {!cargando && temas.length === 0 && !error && (
         <div className="calc-card">

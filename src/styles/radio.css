@@ -435,6 +435,9 @@ a.ra-btn:hover { text-decoration: none; }
 }
 .ra-subida-tag--pisa { color: var(--accent-orange); border-color: var(--accent-orange); }
 .ra-subida-resumen { margin: 12px 0; font-size: 13px; color: var(--text-muted); }
+.ra-subida-borrado { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.ra-subida-borrado li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.ra-subida-borrado li > span:first-of-type { flex: 1 1 auto; }
 
 /* ── Responsive ── */
 @media (max-width: 640px) {

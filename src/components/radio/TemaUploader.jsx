@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import { collection, doc, getDocs, setDoc } from 'firebase/firestore'
+import { collection, deleteDoc, doc, getDocs, setDoc } from 'firebase/firestore'
 import { db } from '../../firebase'
 import { parseTemaXml } from '../../utils/radioXml'
 import { makeZip, triggerDownload } from '../../utils/zipDownload'
@@ -44,12 +44,34 @@ async function revisa(file, existentes) {
  * el examen antes de escribir nada: lo que no se puede leer aquí tampoco se
  * podría estudiar después, y subirlo solo serviría para romper la lista.
  */
-function TemaUploader({ existentes, onSubido }) {
+function TemaUploader({ temas = [], onSubido }) {
+  const existentes = temas.map(t => t.id)
   const [fichas, setFichas] = useState([])
   const [subiendo, setSubiendo] = useState(false)
   const [resultados, setResultados] = useState(null)
   const [error, setError] = useState('')
+  const [verBorrado, setVerBorrado] = useState(false)
+  const [porBorrar, setPorBorrar] = useState(null)
   const inputRef = useRef(null)
+
+  // El borrado va en dos pasos a propósito: un documento borrado no se puede
+  // recuperar, y el temario solo vive aquí. Por eso conviene bajarse el ZIP
+  // antes de tocar nada.
+  const borrar = async id => {
+    setSubiendo(true)
+    setError('')
+    try {
+      await deleteDoc(doc(db, 'RADIO_TEMAS', id))
+      setPorBorrar(null)
+      onSubido?.()
+    } catch (err) {
+      setError(err?.code === 'permission-denied'
+        ? `Las reglas de Firestore no han dejado borrar ${id}.`
+        : `No se ha podido borrar ${id}: ${err.message}`)
+    } finally {
+      setSubiendo(false)
+    }
+  }
 
   const acepta = useCallback(async (lista) => {
     const files = [...lista].filter(f => /\.xml$/i.test(f.name))
@@ -188,6 +210,45 @@ function TemaUploader({ existentes, onSubido }) {
             </button>
           </div>
         </>
+      )}
+
+      {temas.length > 0 && (
+        <div className="ra-subida-borrado">
+          <button className="ra-btn ra-btn--sm" onClick={() => setVerBorrado(v => !v)} disabled={subiendo}>
+            <i className={`bi bi-chevron-${verBorrado ? 'up' : 'down'}`} /> Borrar temas ({temas.length})
+          </button>
+          {verBorrado && (
+            <>
+              <p className="ra-subida-resumen">
+                Borrar un tema no se puede deshacer y el temario solo está aquí: baja antes el ZIP.
+              </p>
+              <ul className="ra-subida-lista">
+                {temas.map(t => (
+                  <li key={t.id}>
+                    <strong>{t.id}</strong>
+                    <span>
+                      {t.numero != null ? ` · nº ${t.numero}` : ''}
+                      {t.titulo && t.titulo !== t.id ? ` · ${t.titulo}` : ''}
+                      {' · '}{t.preguntas.length} preguntas
+                      {t.preguntas.length === 0 && <span className="ra-subida-tag ra-subida-tag--pisa">sin preguntas</span>}
+                    </span>
+                    {porBorrar === t.id ? (
+                      <span className="ra-confirm">
+                        <span>¿Borrar {t.id}?</span>
+                        <button className="ra-btn ra-btn--sm ra-btn--danger" onClick={() => borrar(t.id)} disabled={subiendo}>Sí, borrar</button>
+                        <button className="ra-btn ra-btn--sm" onClick={() => setPorBorrar(null)} disabled={subiendo}>No</button>
+                      </span>
+                    ) : (
+                      <button className="ra-btn ra-btn--sm" onClick={() => setPorBorrar(t.id)} disabled={subiendo}>
+                        <i className="bi bi-trash" /> Borrar
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
       )}
 
       {resultados && (
