@@ -61,6 +61,8 @@ publicaciones pero no elimina sus revisiones antiguas del historial de Git.
 
 ## Limitaciones conocidas
 
+- El informe mensual de gammacámara exige la sesión del propietario en la interfaz y mantiene las imágenes/resultados solo en memoria. No los persiste en Firestore, localStorage ni en el sitio estático. Su código, como el resto de la SPA, es público. La preparación de imágenes para ChatGPT es una descarga local y copia de texto; no contiene ni utiliza claves API. Una futura integración automática deberá verificar Firebase Auth en un backend y guardar allí la clave, nunca en variables `VITE_*`.
+
 - `public/Informe-Tanques-Terminal.html` es un informe estatico y publico. Su
   `iframe` permite scripts, pero queda aislado del origen principal mediante
   `sandbox`.

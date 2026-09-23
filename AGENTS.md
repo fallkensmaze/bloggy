@@ -16,6 +16,7 @@ npm run test:radio     # Radio-exam XML parsing and quiz building
 npm run test:paste     # Secure Paste crypto (the document id must not decrypt anything)
 npm run test:pet       # PET DICOM calibration and NEMA NU 2 background ROI placement
 npm run test:cor       # SPECT COR centroids, NEMA upper bounds, 3D geometry and ROC
+npm run test:gamma     # Planar resolution, sensitivity, monthly batch identity and report states
 npm run test:fdtd      # FDTD fallback, PEC geometry and JSON configuration
 npm run check:security # Anonymizer and paste tests, then build and audit the GitHub Pages artifact
 npm run deploy         # Build, audit and deploy dist/ to GitHub Pages
@@ -159,6 +160,9 @@ Firestore collections:
 - `RADIO_TEMAS` - private radio-exam topics, admin-only in both directions.
 
 ### Main modules
+
+- `src/pages/GammaCameraQC.jsx`, `src/components/GammaImage.jsx`, `src/utils/gamma*.js` — planar line-source resolution, sensitivity and the private monthly report. Read `GAMMA_CAMERA_QC.md`. Never start monthly analysis until every DICOM is readable and the acquisition month and camera identity match; do not substitute export dates or silently split a batch. Keep per-file declarations and per-frame count duration/background. Missing activity, limits, acquisition checks or tomography review cannot yield conformity. The report uses the existing owner login and memory-only data; no private Firestore collection or browser persistence is added. The ChatGPT helper is manual image/prompt preparation, not an API call. Run `test:gamma`, `test:nema`, `test:cor` after changing the batch adapters.
+- `src/utils/navigation.js` — common categorized catalog for desktop and mobile; private report and radio exam links require the existing admin session.
 
 - `src/pages/Blog.jsx` - paginated Firestore feed. Renders Markdown, code highlighting and math.
 - `src/pages/UniformidadGamma.jsx` - DICOM flood upload, NEMA NU 1-2007 calculation, Pylinac-like
