@@ -45,6 +45,9 @@ jobs:
       - name: Test Morse learning
         run: npm run test:morse
 
+      - name: Test gamma-camera quality control
+        run: npm run test:gamma && npm run test:nema && npm run test:cor
+
       - name: Build
         run: npm run build
       

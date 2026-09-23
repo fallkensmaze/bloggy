@@ -110,6 +110,8 @@ function DecayCalculator() {
               <option value="1.8295">Flúor-18 (F-18) — T½ = 1.83 h</option>
               <option value="6.0058">Tecnecio-99m (Tc-99m) — T½ = 6.01 h</option>
               <option value="160.1">Lutecio-177 (Lu-177) — T½ = 160.1 h</option>
+              {/* IAEA TRS 473, evaluated Y-90 ground-state half-life: 64.053(20) h. */}
+              <option value="64.053">Itrio-90 (Y-90) — T½ = 64.053 h</option>
               <option value="192.5">Iodo-131 (I-131) — T½ = 192.5 h</option>
               <option value="1.128">Galio-68 (Ga-68) — T½ = 1.13 h</option>
               <option value="67.31">Indio-111 (In-111) — T½ = 67.3 h</option>

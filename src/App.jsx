@@ -30,6 +30,7 @@ import ExamHost from './pages/ExamHost'
 import ExamPrintTickets from './pages/ExamPrintTickets'
 import ExamJoin from './pages/ExamJoin'
 import FilmDosimetry from './pages/FilmDosimetry'
+import GammaCameraQC, { GammaMonthly } from './pages/GammaCameraQC'
 
 function App() {
   return (
@@ -41,6 +42,9 @@ function App() {
         <Route path="restricciones-lu177" element={<RestricionesLu177 />} />
         <Route path="uniformidad-gamma" element={<UniformidadGamma />} />
         <Route path="centro-rotacion-spect" element={<CorAnalysis />} />
+        <Route path="resolucion-espacial-gamma" element={<GammaCameraQC mode="resolution" />} />
+        <Route path="sensibilidad-gamma" element={<GammaCameraQC mode="sensitivity" />} />
+        <Route path="informe-mensual-gamma" element={<GammaMonthly />} />
         <Route path="rtplan-compare" element={<RTPlanCompare />} />
         <Route path="tg43-calculator" element={<Tg43Calculator />} />
         <Route path="acr-qc" element={<AcrQcPage />} />
