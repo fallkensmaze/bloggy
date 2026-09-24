@@ -39,11 +39,12 @@ function weightedCentroid(profile, start, end) {
     weighted += index * counts
     total += counts
   }
-  return total > 0 ? weighted / total : (start + end) / 2
+  return total > 0 ? weighted / total : Number.NaN
 }
 
 function centroidAroundPeak(profile, peakIndex, minimum = 0, maximum = profile.length - 1) {
   const peak = clamp(Math.round(peakIndex), minimum, maximum)
+  if (!(profile[peak] > 0)) throw new Error('fuente sin señal positiva')
   const halfMaximum = profile[peak] / 2
   let left = peak
   let right = peak
@@ -52,8 +53,14 @@ function centroidAroundPeak(profile, peakIndex, minimum = 0, maximum = profile.l
   while (right < maximum && profile[right] >= halfMaximum) right++
 
   const radius = Math.max(1, peak - left, right - peak)
-  const start = Math.max(minimum, peak - radius)
-  const end = Math.min(maximum, peak + radius)
+  if (profile[left] >= halfMaximum || profile[right] >= halfMaximum || peak - radius < minimum || peak + radius > maximum) {
+    throw new Error('perfil truncado o plano; no se puede medir un centroide simétrico')
+  }
+  for (let i = minimum; i <= maximum; i++) {
+    if ((i < left || i > right) && profile[i] >= halfMaximum) throw new Error('perfil ambiguo con varias fuentes')
+  }
+  const start = peak - radius
+  const end = peak + radius
   return {
     value: weightedCentroid(profile, start, end),
     start,
@@ -165,10 +172,13 @@ function groupByDetector(series, sourceHints, roiRows, roiCols) {
       ...frameMeta,
       frameIndex,
       totalCounts: frame.reduce((sum, value) => sum + value, 0),
-      sources: sourceHints.map((hint, sourceIndex) => ({
-        sourceIndex,
-        ...measureSource(frame, series.rows, series.cols, hint.row, roiRows, roiCols)
-      }))
+      sources: sourceHints.map((hint, sourceIndex) => {
+        try {
+          return { sourceIndex, ...measureSource(frame, series.rows, series.cols, hint.row, roiRows, roiCols) }
+        } catch (error) {
+          throw new Error(`Cabezal ${detectorNumber}, frame ${frameIndex + 1}, fuente ${sourceIndex + 1}: ${error.message}`)
+        }
+      })
     })
   })
   for (const frames of grouped.values()) frames.sort((a, b) => a.angleDeg - b.angleDeg)
@@ -201,8 +211,8 @@ function calculateDetectorNema(detectorNumber, frames, sourceCount, centreX, pix
     }
   })
 
-  const angularStep = frames[0]?.angularStepDeg || 360 / Math.max(1, frames.length)
-  const angleTolerance = Math.max(0.6, angularStep / 3)
+  // Tool allowance for DICOM angle rounding, independent of sampling interval.
+  const angleTolerance = 0.1
   const nearestZero = frames.reduce((best, frame) => (
     angleDistance(frame.angleDeg, 0) < angleDistance(best.angleDeg, 0) ? frame : best
   ), frames[0])
@@ -217,9 +227,11 @@ function calculateDetectorNema(detectorNumber, frames, sourceCount, centreX, pix
   const expectedGap = 360 / frames.length
   const uniformAngles = angleGaps.every((gap) => Math.abs(gap - expectedGap) <= Math.max(0.6, expectedGap * 0.02))
   const zeroMaxima = nearestZero.sources.map((source) => source.maximumPixel)
-  const countRates = Number.isFinite(frameDurationMs) && frameDurationMs > 0
-    ? frames.map((frame) => frame.totalCounts / (frameDurationMs / 1000))
-    : []
+  const countRates = frames.map(frame => {
+    const duration = frame.frameDurationMs ?? frameDurationMs
+    return Number.isFinite(duration) && duration > 0 ? frame.totalCounts / (duration / 1000) : NaN
+  })
+  const knownCountRates = countRates.every(Number.isFinite)
 
   return {
     detectorNumber,
@@ -239,8 +251,8 @@ function calculateDetectorNema(detectorNumber, frames, sourceCount, centreX, pix
       zeroMaximumPixels: zeroMaxima,
       minimumZeroMaximum: Math.min(...zeroMaxima),
       enoughCountsAtZero: zeroMaxima.every((value) => value >= 5000),
-      maximumCountRateCps: countRates.length ? Math.max(...countRates) : Number.NaN,
-      underMaximumCountRate: countRates.length ? Math.max(...countRates) <= 20000 : null
+      maximumCountRateCps: knownCountRates ? Math.max(...countRates) : Number.NaN,
+      underMaximumCountRate: knownCountRates ? Math.max(...countRates) <= 20000 : null
     }
   }
 }
@@ -491,6 +503,12 @@ export function analyzeCor(series, options = {}) {
     throw new Error('El número de frames no coincide con el vector angular DICOM')
   }
 
+  if (!series.pixelSpacing.every(value => Number.isFinite(value) && value > 0)
+      || series.frameMeta.some(frame => !Number.isFinite(frame.angleDeg))
+      || series.frames.some(frame => frame.length !== series.rows * series.cols || frame.some(value => !Number.isFinite(value) || value < 0))) {
+    throw new Error('COR: píxeles, espaciado o ángulos inválidos')
+  }
+
   const roiSizeMm = Number.isFinite(options.roiSizeMm) ? options.roiSizeMm : DEFAULT_ROI_MM
   const expectedSources = Number.isFinite(options.expectedSources)
     ? options.expectedSources
@@ -654,6 +672,13 @@ export function rocAnalysis(records) {
   return { points, auc, best }
 }
 
+export function corAcquisitionValid(results) {
+  const fields = ['evenViews', 'enoughViews', 'uniformAngles', 'includesZero', 'includes180', 'enoughCountsAtZero', 'underMaximumCountRate']
+  return results?.acquisition?.pixelSizeUnder5Mm === true
+    && results.acquisition.detectorChecks.length > 0
+    && results.acquisition.detectorChecks.every(check => fields.every(key => check[key] === true))
+}
+
 export function toleranceStatus(results, limits) {
   if (!results) return []
   const metrics = [
@@ -663,12 +688,14 @@ export function toleranceStatus(results, limits) {
     ['deltaAxialPairMm', 'δAXIAL,12', results.upperBounds.deltaAxialPairMm, limits.deltaAxialPairMm],
     ['ellipsoidDiameterMm', 'Diámetro elipsoide 3D', results.geometry3d.maximumDiameterMm, limits.ellipsoidDiameterMm]
   ]
+  const acquisitionValid = corAcquisitionValid(results)
   return metrics.map(([key, label, value, limit]) => ({
     key,
     label,
     value,
     limit,
+    acquisitionValid,
     available: Number.isFinite(value) && Number.isFinite(limit),
-    pass: Number.isFinite(value) && Number.isFinite(limit) ? value <= limit : null
+    pass: acquisitionValid && Number.isFinite(value) && Number.isFinite(limit) ? value <= limit : null
   }))
 }

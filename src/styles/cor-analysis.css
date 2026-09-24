@@ -601,3 +601,5 @@ p.cor-method-note {
     height: 290px;
   }
 }
+
+.cor-tolerance-unknown > i { color: var(--text-muted); }

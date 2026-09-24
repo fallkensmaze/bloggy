@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import dcmjs from 'dcmjs'
+import { parseCorDICOM } from '../src/utils/corDicom.js'
 import { parseGammaDicom, dicomDateTime, classifyGamma } from '../src/utils/gammaDicom.js'
 import { analyzeResolution, profileWidths } from '../src/utils/gammaResolution.js'
 import { analyzeSensitivity, decayActivity } from '../src/utils/gammaSensitivity.js'
@@ -55,6 +56,63 @@ test('Monthly COR never invents a missing angular step or combines energy window
   assert.equal(parseGammaDicom(makeDicom({ ...base, RotationInformationSequence: [{ StartAngle: 0, RotationDirection: 'CC' }] })).hasCorGeometry, false)
   assert.equal(parseGammaDicom(makeDicom({ ...base, EnergyWindowVector: [1, 2],
     EnergyWindowInformationSequence: [{ EnergyWindowName: 'photopeak' }, { EnergyWindowName: 'scatter' }] })).hasCorGeometry, false)
+})
+
+test('Both COR entry points reject missing or invalid geometry identically', () => {
+  const base = { AngularViewVector: [1, 2], RotationVector: [1, 1],
+    RotationInformationSequence: [{ AngularStep: 30, StartAngle: 0, RotationDirection: 'CC' }] }
+  assert.deepEqual(parseCorDICOM(makeDicom(base)).frameMeta.map(f => f.angleDeg), [0, 30])
+  const cases = [
+    { DetectorVector: undefined }, { DetectorVector: [1, 3] },
+    { AngularViewVector: [0, 2] },
+    { RotationVector: [1, 2] },
+    { RotationInformationSequence: [{ StartAngle: 0, RotationDirection: 'CC' }] },
+    { RotationInformationSequence: [{ AngularStep: 30, RotationDirection: 'CC' }] },
+    { RotationInformationSequence: [{ AngularStep: 30, StartAngle: 0 }] },
+    { EnergyWindowVector: [1, 2] },
+  ]
+  for (const overrides of cases) {
+    const buffer = makeDicom({ ...base, ...overrides })
+    assert.equal(parseGammaDicom(buffer).hasCorGeometry, false)
+    assert.throws(() => parseCorDICOM(buffer), /COR:/)
+  }
+})
+test('Reconstruction and wholebody take precedence over planar description keywords', () => {
+  for (const description of ['RESOLUCION TOMOGRAFICA', 'RECON RESOLUCION']) {
+    assert.equal(classifyGamma({ metadata: { description }, imageType: [] }), 'tomography')
+  }
+  assert.equal(classifyGamma({ metadata: { description: 'RESOLUCION' }, imageType: ['DERIVED', 'TOMO'] }), 'tomography')
+  assert.equal(classifyGamma({ metadata: { description: 'VAR LONG SENSIBILIDAD WHOLEBODY' }, imageType: [] }), 'unknown')
+  assert.equal(classifyGamma({ metadata: { description: 'SENSIBILIDAD' }, imageType: ['ORIGINAL', 'WHOLE BODY'] }), 'unknown')
+  assert.equal(classifyGamma({ metadata: { description: 'RESOLUCION ESPACIAL' }, imageType: ['STATIC'] }), 'resolution')
+  assert.equal(classifyGamma({ metadata: { description: 'SENSIBILIDAD' }, imageType: ['STATIC'] }), 'sensitivity')
+})
+test('Monthly COR blocks a missing central source in a nonzero view even with verified limits', () => {
+  const frames = [], DetectorVector = [], AngularViewVector = []
+  for (let head = 0; head < 2; head++) for (let view = 0; view < 12; view++) {
+    const frame = new Uint16Array(128 * 128)
+    for (let source = 0; source < 3; source++) {
+      const x = 63.5 + [-18, 0, 18][source] * Math.cos((view * 30 + head * 180) * Math.PI / 180)
+      const y = [32, 64, 96][source]
+      for (let row = y - 7; row <= y + 7; row++) for (let col = Math.floor(x - 7); col <= Math.ceil(x + 7); col++) {
+        frame[row * 128 + col] += Math.round(7000 * Math.exp(-((row - y) ** 2 + (col - x) ** 2) / (2 * 1.35 ** 2)))
+      }
+    }
+    frames.push(frame); DetectorVector.push(head + 1); AngularViewVector.push(view + 1)
+  }
+  const encode = () => makeDicom({ Rows: 128, Columns: 128, NumberOfFrames: 24, BitsStored: 16, HighBit: 15,
+    PixelSpacing: [2, 2], DetectorVector, AngularViewVector, EnergyWindowVector: Array(24).fill(1),
+    DetectorInformationSequence: [{ StartAngle: 0 }, { StartAngle: 180 }],
+    RotationInformationSequence: [{ AngularStep: 30, RotationDirection: 'CC', ActualFrameDuration: 60000 }],
+    PixelData: [new Uint16Array(frames.flatMap(f => Array.from(f))).buffer] })
+  const entry = buffer => {
+    const image = parseGammaDicom(buffer)
+    return { buffer, image, name: 'synthetic', id: 'cor', type: 'cor', options: {
+      ...initialGammaOptions(image), verified: true, protocol: 'synthetic test', limitSource: 'test only', corLimit: 1, axialLimit: 1 } }
+  }
+  assert.equal(analyzeGammaEntry(entry(encode()))[0].status, 'Conforme')
+  for (let row = 54; row <= 74; row++) frames[1].fill(0, row * 128, (row + 1) * 128)
+  assert.throws(() => analyzeGammaEntry(entry(encode())), /Cabezal 1, frame 2, fuente 2/)
 })
 
 const gaussian = (sigma, n = 101, background = 0) => Array.from({ length: n }, (_, x) => background + 10000 * Math.exp(-0.5 * ((x - (n - 1) / 2) / sigma) ** 2))

@@ -1,3 +1,4 @@
+import { readCorGeometry } from './corGeometry.js'
 import dcmjs from 'dcmjs'
 import {
   assertNativeTransferSyntax, getPixelDataBytes, isLittleEndian,
@@ -82,15 +83,8 @@ export function parseGammaDicom(buffer) {
   }
   const spacing = list(d.PixelSpacing).map(numberOrNull)
   const station = text(d.StationName), serial = text(d.DeviceSerialNumber)
-  const rotations = list(d.RotationInformationSequence), rotationVector = list(d.RotationVector)
-  const hasCorGeometry = list(d.AngularViewVector).length === frames.length
-    && detectorVector.length === frames.length && rotations.length > 0
-    && (rotations.length === 1 || rotationVector.length === frames.length)
-    && frameInfo.every(f => f.detectorNumber != null && f.energyWindowNumber != null)
-    && new Set(frameInfo.map(f => f.energyWindowNumber)).size === 1
-    && rotations.every(r => numberOrNull(r.AngularStep) > 0 && ['CW', 'CC'].includes(text(r.RotationDirection)))
-    && frameInfo.every((f, i) => numberOrNull(detectors[f.detectorNumber - 1]?.StartAngle) != null
-      || numberOrNull(rotations[(numberOrNull(rotationVector[i]) ?? 1) - 1]?.StartAngle) != null)
+  let hasCorGeometry = false
+  try { readCorGeometry(d, frames.length); hasCorGeometry = true } catch { /* Non-COR images need no angular geometry. */ }
   return { rows, cols, frames, frameInfo,
     pixelSpacing: spacing.length === 2 && spacing.every(v => v > 0) ? spacing : null,
     isStatic: imageType.includes('STATIC'),
@@ -108,10 +102,11 @@ export function parseGammaDicom(buffer) {
 
 export function classifyGamma(image) {
   const label = image.metadata.description.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  if (/recon|tomograf/.test(label) || (image.imageType.includes('DERIVED') && image.imageType.includes('TOMO'))) return 'tomography'
+  if (image.imageType.includes('WHOLE BODY') || /whole[ -]?body|cuerpo.*entero|var.*long.*sensi/.test(label)) return 'unknown'
   if (/\bcor\b|cent(ro|er|re).*rota/.test(label)) return 'cor'
   if (/resol/.test(label)) return 'resolution'
   if (/sensi/.test(label)) return 'sensitivity'
   if (/unif|flood/.test(label)) return 'uniformity'
-  if (/recon|tomograf/.test(label) || (image.imageType.includes('DERIVED') && image.imageType.includes('TOMO'))) return 'tomography'
   return 'unknown'
 }
