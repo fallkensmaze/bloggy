@@ -15,8 +15,10 @@ Condiciones que comprueba la interfaz:
 - menos de 20 000 cps;
 - al menos 5000 cuentas en el píxel máximo de cada fuente en la vista de 0°.
 
-Para cada fuente, vista y detector se forma una ROI cuadrada de 45 mm. La ROI
-se integra en cada dirección y el centroide del perfil se calcula sobre un
+Para cada fuente, vista y detector se busca el pico transversal en una banda axial
+de unos 45 mm de alto y todo el ancho de la matriz. El perfil axial se integra
+en una ventana de unos 45 mm de ancho centrada en ese pico, dentro de la banda.
+El centroide de cada perfil se calcula sobre un
 número impar de píxeles centrado en el máximo que incluye ambos cruces de la
 semialtura, conforme a la ecuación 2-3. Las coordenadas se mantienen en
 subpíxel y solo se convierten a milímetros al final.
@@ -75,3 +77,22 @@ de Youden. El rendimiento calculado en la cohorte de desarrollo es optimista;
 el corte debe confirmarse en una cohorte independiente y con intervalos de
 confianza antes de utilizarse como tolerancia clínica.
 
+
+## Validación de entrada (cor-qc-1.1)
+
+El COR individual y el informe mensual comparten `corGeometry.js`: exigen vectores
+válidos de detector y vista, un paso, sentido y ángulo inicial explícitos, y una
+única ventana de energía identificada. Solo se omite el vector de rotación/energía
+si su secuencia tiene un único elemento. No se inventan ángulos ni cabezales.
+
+Cada fuente de cada frame debe tener señal positiva, ambos cruces al 50 % y una
+ventana simétrica completa. Los perfiles planos, truncados o con otro pico separado
+que alcance el 50 % bloquean el cálculo e identifican cabezal, frame y fuente.
+No se descartan medidas para obtener una media. Estas comprobaciones no sustituyen
+la revisión visual ni garantizan la identidad de una fuente confundida con ruido.
+
+La coincidencia con 0° y 180° admite 0,1° de redondeo, un criterio de la herramienta,
+no una tolerancia NEMA. No depende del intervalo entre vistas. La tasa de cuentas
+usa la duración de cada frame. Los límites individuales quedan sin veredicto si
+alguna comprobación de adquisición falla o es desconocida; el informe mensual usa
+la misma condición. El método 3D sigue siendo experimental.

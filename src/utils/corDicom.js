@@ -1,4 +1,5 @@
 import dcmjs from 'dcmjs'
+import { readCorGeometry } from './corGeometry.js'
 import { parseDICOM } from './dicomParser.js'
 
 const { DicomMessage, DicomMetaDictionary } = dcmjs.data
@@ -24,17 +25,6 @@ function text(value) {
   return raw == null ? '' : String(raw)
 }
 
-function normaliseAngle(angle) {
-  return ((angle % 360) + 360) % 360
-}
-
-function frameVector(dataset, keyword, frameCount, fallbackFactory) {
-  const values = numbers(dataset[keyword])
-  return Array.from({ length: frameCount }, (_, index) => (
-    Number.isFinite(values[index]) ? values[index] : fallbackFactory(index)
-  ))
-}
-
 export function parseCorDICOM(arrayBuffer) {
   const image = parseDICOM(arrayBuffer)
   const dicomData = DicomMessage.readFile(arrayBuffer)
@@ -51,44 +41,8 @@ export function parseCorDICOM(arrayBuffer) {
     ? dataset.DetectorInformationSequence
     : []
   const frameCount = image.frames.length
-  const defaultViews = Math.max(1, number(rotations[0]?.NumberOfFramesInRotation, frameCount))
-  const detectorVector = frameVector(
-    dataset,
-    'DetectorVector',
-    frameCount,
-    (index) => Math.floor(index / defaultViews) + 1
-  )
-  const rotationVector = frameVector(dataset, 'RotationVector', frameCount, () => 1)
-  const angularViewVector = frameVector(
-    dataset,
-    'AngularViewVector',
-    frameCount,
-    (index) => (index % defaultViews) + 1
-  )
-
-  const frameMeta = Array.from({ length: frameCount }, (_, index) => {
-    const detectorNumber = Math.max(1, Math.trunc(detectorVector[index]))
-    const rotationNumber = Math.max(1, Math.trunc(rotationVector[index]))
-    const viewNumber = Math.max(1, Math.trunc(angularViewVector[index]))
-    const detector = detectors[detectorNumber - 1] || {}
-    const rotation = rotations[rotationNumber - 1] || rotations[0] || {}
-    const angularStep = number(rotation.AngularStep, 360 / defaultViews)
-    const direction = text(rotation.RotationDirection).toUpperCase() === 'CW' ? -1 : 1
-    const startAngle = number(detector.StartAngle, number(rotation.StartAngle, 0))
-
-    return {
-      frameIndex: index,
-      detectorNumber,
-      rotationNumber,
-      viewNumber,
-      angleDeg: normaliseAngle(startAngle + direction * (viewNumber - 1) * angularStep),
-      angularStepDeg: Math.abs(angularStep),
-      radialPositionMm: number(
-        numbers(detector.RadialPosition)[viewNumber - 1],
-        number(numbers(rotation.RadialPosition)[viewNumber - 1])
-      )
-    }
-  })
+  const frameMeta = readCorGeometry(dataset, frameCount)
+  const detectorVector = frameMeta.map(frame => frame.detectorNumber)
 
   const energyWindow = dataset.EnergyWindowInformationSequence?.[0] || {}
   const energyRange = energyWindow.EnergyWindowRangeSequence?.[0] || {}

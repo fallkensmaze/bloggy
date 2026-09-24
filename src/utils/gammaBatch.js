@@ -1,6 +1,6 @@
 import { parseDICOM } from './dicomParser.js'
 import { parseCorDICOM } from './corDicom.js'
-import { analyzeCor } from './corAnalysis.js'
+import { analyzeCor, corAcquisitionValid } from './corAnalysis.js'
 import { calculateNemaGeometric, detectLimitProfile, getLimitProfile } from './nemaAlgorithms.js'
 import { createAcquisitionDeclaration, evaluateAcquisition } from './nemaAcquisition.js'
 import { analyzeResolution } from './gammaResolution.js'
@@ -24,7 +24,7 @@ const metric = (key, label, value, unit, limit = null, operator = 'max') => ({ k
 export function analyzeGammaEntry(entry) {
   const { image, options: o, type } = entry
   const base = { file: entry.name, type, equipment: image.metadata.equipment, acquiredAt: image.metadata.acquiredAt,
-    methodVersion: 'gamma-qc-1.0', protocol: o.protocol, limitSource: o.limitSource, notes: o.notes,
+    methodVersion: 'gamma-qc-1.1', protocol: o.protocol, limitSource: o.limitSource, notes: o.notes,
     inputs: o, metadata: image.metadata }
   if (type === 'unknown') throw new Error('Selecciona el tipo de prueba antes del análisis.')
   if (type === 'tomography') {
@@ -40,9 +40,7 @@ export function analyzeGammaEntry(entry) {
       metric('deltaCorPairMm', 'δCOR,12', result.upperBounds.deltaCorPairMm, 'mm', o.corLimit),
       metric('deltaAxialSingleMm', 'δAXIAL,1', result.upperBounds.deltaAxialSingleMm, 'mm', o.axialLimit),
       metric('deltaAxialPairMm', 'δAXIAL,12', result.upperBounds.deltaAxialPairMm, 'mm', o.axialLimit)]
-    const checks = result.acquisition.detectorChecks
-    const fields = ['evenViews', 'enoughViews', 'uniformAngles', 'includesZero', 'includes180', 'enoughCountsAtZero', 'underMaximumCountRate']
-    const valid = result.acquisition.pixelSizeUnder5Mm && checks.every(c => fields.every(k => c[k] === true))
+    const valid = corAcquisitionValid(result)
     return [{ ...base, id: `${entry.id}:cor`, detector: null, detectors: result.detectors.map(d => d.detectorNumber), metrics,
       method: result.method, ...evaluateGammaMetrics(metrics, { ...o, blocked: valid ? '' : 'Revisa los requisitos de adquisición COR; hay comprobaciones incumplidas o desconocidas.' }),
       details: { acquisition: result.acquisition, roiSizeMm: result.roiSizeMm } }]

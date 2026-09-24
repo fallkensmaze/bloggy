@@ -75,3 +75,13 @@ Las imágenes y resultados viven solo en memoria de la pestaña. El área mensua
 Se ejecutan también `npm run test:nema`, `npm run test:cor` y `npm run build:web`. El workflow ejecuta las tres suites de gammacámara y el build completo (incluido WASM del simulador FDTD).
 
 Decay Calculator incluye ahora Y-90 con T½ = 64,053 h, valor de [IAEA TRS 473](https://www.iaea.org/publications/8522/nuclear-data-for-the-production-of-therapeutic-radionuclides) y la [medida de referencia de PTB](https://pubmed.ncbi.nlm.nih.gov/15082054/). El acceso rápido de sensibilidad utiliza Tc-99m = 6,0067 h, valor usado en la [comparación BIPM](https://www.bipm.org/documents/20126/48150639/BIPM.RI%28II%29-K4.Tc-99m-F-18-Cu-64-POLATOM-2022.pdf/421b70ab-dd81-bb62-e134-ac71c1850ff7).
+
+### Correcciones gamma-qc-1.1
+
+COR utiliza la geometría y las condiciones de adquisición compartidas con la página
+individual. Una fuente ausente, truncada o ambigua en cualquier vista bloquea el
+análisis completo. Las pruebas sintéticas incluyen un lote COR válido y el mismo
+lote con la fuente central ausente en 30°: solo el primero puede resultar conforme.
+La clasificación da prioridad a reconstrucciones tomográficas sobre «resolución»;
+wholebody y variación longitudinal de sensibilidad quedan como tipo desconocido,
+pues no equivalen a sensibilidad planar. La propuesta sigue siendo editable.

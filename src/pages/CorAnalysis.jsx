@@ -424,6 +424,8 @@ function CorAnalysis() {
       metadata: series.metadata,
       pixelSpacing: series.pixelSpacing,
       method: results.method,
+      methodVersion: 'cor-qc-1.1',
+      acquisition: results.acquisition,
       upperBounds: results.upperBounds,
       geometry3d: results.geometry3d,
       tolerance: { limits, status: statuses }
@@ -564,10 +566,11 @@ function CorAnalysis() {
                 <label key={key}><span className="field-label">{label}</span><input className="dark-input" type="number" min="0" step="0.05" value={finite(limits[key])} onChange={(event) => setLimits((current) => ({ ...current, [key]: Number(event.target.value) }))} /></label>
               ))}
             </div>
+            {statuses.some(item => !item.acquisitionValid) && <p className="cor-warning">Adquisición no verificada o incumplida: la comparación numérica no permite declarar conformidad.</p>}
             <div className="cor-tolerance-list">
               {statuses.map((item) => (
-                <div key={item.key} className={`cor-tolerance-${item.pass ? 'pass' : 'fail'}`}>
-                  <i className={`bi bi-${item.pass ? 'check-circle' : 'x-circle'}`}></i>
+                <div key={item.key} className={`cor-tolerance-${item.pass === null ? 'unknown' : item.pass ? 'pass' : 'fail'}`}>
+                  <i className={`bi bi-${item.pass === null ? 'question-circle' : item.pass ? 'check-circle' : 'x-circle'}`}></i>
                   <span><strong>{item.label}</strong>{finite(item.value, 3)} mm / límite {finite(item.limit, 3)} mm</span>
                 </div>
               ))}

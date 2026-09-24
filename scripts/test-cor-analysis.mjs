@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import {
   analyzeCor,
+  corAcquisitionValid,
+  toleranceStatus,
   diagnosticPerformance,
   parseValidationCsv,
   rocAnalysis
@@ -89,6 +91,33 @@ for (const line of results.geometry3d.lines) {
   }, 0)
   assert.ok(ellipsoidDistance <= 1 + 1e-6)
 }
+
+// A source missing outside the zero-degree view must never become a finite midpoint.
+for (const kind of ['missing', 'flat', 'truncated', 'ambiguous']) {
+  const series = syntheticSeries()
+  const frame = series.frames[1]
+  for (let y = 54; y <= 74; y++) for (let x = 0; x < 128; x++) frame[y * 128 + x] = kind === 'flat' ? 100 : 0
+  if (kind === 'truncated' || kind === 'ambiguous') {
+    const points = kind === 'truncated' ? [{ x: 0, y: 64, amplitude: 6500 }]
+      : [{ x: 45, y: 64, amplitude: 6500 }, { x: 80, y: 64, amplitude: 6500 }]
+    const extra = gaussianFrame(128, 128, points)
+    for (let i = 0; i < frame.length; i++) frame[i] += extra[i]
+  }
+  assert.throws(() => analyzeCor(series), /Cabezal 1, frame 2, fuente 2:/, kind)
+}
+const shifted = syntheticSeries()
+shifted.frameMeta.forEach(frame => { frame.angleDeg = (frame.angleDeg + 5) % 360 })
+const shiftedResult = analyzeCor(shifted)
+assert.equal(shiftedResult.detectors[0].acquisition.includesZero, false)
+assert.equal(shiftedResult.detectors[0].acquisition.includes180, false)
+assert.equal(corAcquisitionValid(shiftedResult), false)
+assert.ok(toleranceStatus(shiftedResult, { deltaCorSingleMm: 100 }).every(item => item.pass === null))
+const rounded = syntheticSeries()
+rounded.frameMeta.forEach(frame => { frame.angleDeg = (frame.angleDeg + 0.01) % 360 })
+assert.equal(analyzeCor(rounded).detectors[0].acquisition.includesZero, true)
+const fastFrame = syntheticSeries()
+fastFrame.frameMeta[1].frameDurationMs = 1
+assert.equal(analyzeCor(fastFrame).detectors[0].acquisition.underMaximumCountRate, false)
 
 const records = parseValidationCsv([
   'score_mm,label',
