@@ -37,7 +37,8 @@ jobs:
       - name: Setup wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
         with:
-          version: 'latest'
+          # Pin the toolchain used by the passing ACR build; 'latest' can resolve to v0.9.1.
+          version: 'v0.15.0'
 
       - name: Test FDTD core
         run: cargo test --manifest-path fdtd-wasm/Cargo.toml && npm run test:fdtd
