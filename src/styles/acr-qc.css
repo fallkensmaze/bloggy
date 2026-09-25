@@ -240,6 +240,27 @@
   height: 80px;
 }
 
+.acr-qc-page #assessment-summary:not(:empty) {
+  padding: 12px 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-weight: 700;
+  margin-bottom: 18px;
+}
+.acr-qc-page #visual-review fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 16px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.acr-qc-page #visual-review label { display: flex; flex-direction: column; gap: 6px; }
+.acr-qc-page #visual-review p { width: 100%; margin: 0; color: var(--text-muted); }
+.acr-qc-page #visual-review input { width: 80px; background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border); padding: 6px; }
+.acr-qc-page #print-meta { white-space: pre-line; }
+
 /* ── Print meta ── */
 #print-meta {
   display: none;
@@ -250,6 +271,7 @@
 
   .acr-qc-page .controls,
   .acr-qc-page #drop-zone,
+  .acr-qc-page #visual-review,
   .acr-qc-page #log { display: none !important; }
 
   #print-meta {

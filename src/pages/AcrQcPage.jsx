@@ -4,21 +4,22 @@ import '../styles/acr-qc.css'
 
 function AcrQcPage() {
   useEffect(() => {
-    initAcrQc()
+    return initAcrQc()
   }, [])
 
   return (
     <div className="acr-qc-page">
       <h1>Control de calidad ACR — Maniquí Medium</h1>
-      <p className="subtitle">Análisis automático de imágenes DICOM siguiendo el procedimiento ACR Medium Phantom Test Guidance.</p>
+      <p className="subtitle">Medidas automáticas y revisión visual del maniquí ACR Medium. El informe indica las pruebas pendientes y las medidas complementarias.</p>
 
       <div id="print-meta"></div>
 
       <div className="controls">
         <label>
           Campo magnético:
-          <select id="field-strength">
-            <option value="1.5">&lt; 3T (1.5T y similares)</option>
+          <select id="field-strength" defaultValue="1.5">
+            <option value="0.5">&lt; 1.5T</option>
+            <option value="1.5">1.5T a &lt; 3T</option>
             <option value="3">3T</option>
           </select>
         </label>
@@ -27,6 +28,8 @@ function AcrQcPage() {
         <button id="save-pdf-btn" disabled>Guardar PDF</button>
         <button id="clear-btn">Limpiar</button>
       </div>
+
+      <div id="assessment-summary" role="status"></div>
 
       <div className="controls" id="series-controls" style={{ display: 'none' }}>
         <label>
@@ -42,7 +45,7 @@ function AcrQcPage() {
       <div id="drop-zone">
         <p><strong>Arrastra los DICOM aquí</strong></p>
         <p>o haz clic para seleccionarlos</p>
-        <p style={{ color: '#7f8c8d', fontSize: '12px' }}>11 axiales (+ opcionalmente el localizador sagital)</p>
+        <p>Un estudio: 11 cortes T1, 11 cortes T2 y localizador sagital. DICOM MR sin comprimir, un archivo por corte.</p>
         <input type="file" id="file-input" multiple accept=".dcm,.ima,application/dicom" style={{ display: 'none' }} />
       </div>
 
@@ -50,6 +53,8 @@ function AcrQcPage() {
 
       <h2 id="overview-title" style={{ display: 'none' }}>Resumen de cortes detectados</h2>
       <div id="slice-overview"></div>
+
+      <div id="visual-review"></div>
 
       <h2 id="results-title" style={{ display: 'none' }}>Resultados</h2>
       <div id="results"></div>
