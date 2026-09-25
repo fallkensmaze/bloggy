@@ -9,6 +9,7 @@ import CorAnalysis from './pages/CorAnalysis'
 import RTPlanCompare from './pages/RTPlanCompare'
 import Tg43Calculator from './pages/Tg43Calculator'
 import AcrQcPage from './pages/AcrQcPage'
+import MriProtocolCompare from './pages/MriProtocolCompare'
 import LectorRapido from './pages/LectorRapido'
 import InformeTanques from './pages/InformeTanques'
 import PetNemaFractionation from './pages/PetNemaFractionation'
@@ -48,6 +49,7 @@ function App() {
         <Route path="rtplan-compare" element={<RTPlanCompare />} />
         <Route path="tg43-calculator" element={<Tg43Calculator />} />
         <Route path="acr-qc" element={<AcrQcPage />} />
+        <Route path="comparar-protocolos-rm" element={<MriProtocolCompare />} />
         <Route path="lector" element={<LectorRapido />} />
         <Route path="informe-tanques" element={<InformeTanques />} />
         <Route path="pet-nema-fraccionamiento" element={<PetNemaFractionation />} />

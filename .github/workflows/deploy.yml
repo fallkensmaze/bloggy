@@ -52,6 +52,11 @@ jobs:
       - name: Test ACR Medium quality control
         run: npm run test:acr
 
+      - name: Test MRI protocol comparison
+        run: npm run test:mri && npm run test:mri:browser
+        env:
+          MRI_CHROME: google-chrome
+
       - name: Security checks and build
         run: npm run check:security
       

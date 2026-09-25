@@ -21,6 +21,8 @@
     "test:tg43": "node scripts/test-tg43.mjs",
     "test:fdtd": "node scripts/test-fdtd.mjs",
     "test:film": "node scripts/test-film-dosimetry.mjs",
+    "test:mri": "node scripts/test-mri-protocols.mjs",
+    "test:mri:browser": "node scripts/test-mri-browser.mjs",
     "test:acr": "node scripts/test-acr-qc.mjs",
     "check:security": "npm run test:anon && npm run test:paste && npm run build",
     "deploy": "npm run check:security && gh-pages -d dist"
