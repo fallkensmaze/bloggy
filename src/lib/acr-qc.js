@@ -1,4 +1,7 @@
 import dicomParser from 'dicom-parser';
+import { assertNativeTransferSyntax, isLittleEndian, readUnsignedPixel, normalizeStoredPixel, resolveFrameCount } from '../utils/dicomPixels.js';
+import { ACR_METHOD_VERSION, validateAcrImage, canonicalizeAcrImage, validateAcrStack, validateAcrBatch, scoreAcrProtocol, summarizeAcrResults, thicknessVerdict, positionVerdict, visualAcrResults } from '../utils/acrQcValidation.js';
+import { measureAcrPiu, proposedNotchMask, measureAcrGhosting } from '../utils/acrQcRois.js';
 
 function setCopyExcelEnabled(enabled) {
   const btn = document.getElementById('copy-excel-btn');
@@ -116,45 +119,15 @@ function getSeriesBucketsForExport(results, analysis) {
   return buckets;
 }
 
-function summarizeResultStates(results) {
-  let passCount = 0;
-  let warnCount = 0;
-  let failCount = 0;
-  let errorCount = 0;
+function summarizeResultStates(results) { return summarizeAcrResults(results); }
 
-  for (const res of results) {
-    if (res.skipped) continue;
-
-    if (res.error) {
-      errorCount++;
-      continue;
-    }
-
-    if (res.pass) passCount++;
-    else failCount++;
-
-    if (res.warn) warnCount++;
-  }
-
-  return {
-    passCount,
-    warnCount,
-    failCount,
-    errorCount,
-    overallPass: failCount === 0 && errorCount === 0
-  };
-}
-
-function buildExcelExportRows() {
-  if (!state.results || !state.results.length) return [];
-
-  const buckets = getSeriesBucketsForExport(state.results, state.analysis || {});
+export function buildExcelExportRows({results = state.results, analysis = state.runAnalysis, fieldStrength = state.lastFieldStrength, runAt = state.lastRunAt} = {}) {
+  if (!results || !results.length || !analysis) return [];
+  const buckets = getSeriesBucketsForExport(results, analysis);
   if (!buckets.length) return [];
 
-  const timestamp = formatExcelDateTime(state.lastRunAt || new Date());
-  const fieldStrength = Number.isFinite(state.lastFieldStrength)
-    ? state.lastFieldStrength
-    : parseFloat(document.getElementById('field-strength').value);
+  const timestamp = formatExcelDateTime(runAt);
+  const globalSummary = summarizeResultStates(results);
 
   const allResults = buckets.flatMap((bucket) => bucket.results);
   const sagittal = findSeriesResult(allResults, {
@@ -192,7 +165,11 @@ function buildExcelExportRows() {
     'tests_warn',
     'tests_fail',
     'tests_error',
-    'pass_global'
+    'pass_global',
+    'estado_global',
+    'tests_pendientes',
+    'metodo',
+    'res_h_mm', 'res_v_mm', 'lcd_total', 'artefactos', 'medidas_revisadas', 'categoria_campo_t'
   ];
 
   const rows = [header];
@@ -239,7 +216,7 @@ function buildExcelExportRows() {
 
     rows.push([
       timestamp,
-      fieldStrength,
+      group.magneticFieldStrength,
       bucket.label,
       group.seriesNumber || '',
       group.seriesDescription || '',
@@ -267,7 +244,16 @@ function buildExcelExportRows() {
       summary.warnCount,
       summary.failCount,
       summary.errorCount,
-      summary.overallPass ? 1 : 0
+      globalSummary.overallPass ? 1 : 0,
+      globalSummary.status,
+      globalSummary.pendingCount,
+      ACR_METHOD_VERSION,
+      tests.find(r => r.exportKey === 'resolution_visual')?.exportData?.horizontalMm,
+      tests.find(r => r.exportKey === 'resolution_visual')?.exportData?.verticalMm,
+      tests.find(r => r.exportKey === 'lcd_visual')?.exportData?.total,
+      tests.find(r => r.exportKey === 'artifacts_visual')?.pass,
+      tests.find(r => r.exportKey === 'measurement_review')?.pass,
+      fieldStrength === 0.5 ? '<1.5' : fieldStrength === 1.5 ? '1.5–<3' : '3'
     ]);
   }
 
@@ -336,20 +322,20 @@ function updatePrintMeta() {
   const meta = document.getElementById('print-meta');
   if (!meta) return;
 
-  const analysis = state.analysis || {};
+  const analysis = state.runAnalysis || {};
   const runAt = formatExcelDateTime(state.lastRunAt || new Date());
-  const fieldStrength = Number.isFinite(state.lastFieldStrength)
-    ? `${formatExcelCell(state.lastFieldStrength)} T`
-    : '';
+  const fieldStrength = state.lastFieldStrength === 0.5 ? '<1,5 T'
+    : state.lastFieldStrength === 1.5 ? '1,5 a <3 T' : '3 T';
   const lines = [
     `<strong>Fecha del informe:</strong> ${runAt || '-'}`,
-    `<strong>Campo magnético:</strong> ${fieldStrength || '-'}`,
+    `<strong>Categoría de campo:</strong> ${fieldStrength}`,
+    `<strong>Campo DICOM T1/T2:</strong> ${analysis.t1?.magneticFieldStrength ?? '-'} / ${analysis.t2?.magneticFieldStrength ?? '-'} T`,
     `<strong>Serie T1:</strong> ${analysis.t1 ? describeAxialGroup(analysis.t1) : '-'}`,
     `<strong>Serie T2:</strong> ${analysis.t2 ? describeAxialGroup(analysis.t2) : '-'}`,
     `<strong>Localizador sagital:</strong> ${analysis.sagittal ? 'sí' : 'no'}`
   ];
 
-  meta.innerHTML = lines.join('<br>');
+  meta.textContent = lines.map(line => line.replace(/<\/?strong>/g, '')).join('\n') + '\nMétodo: ' + ACR_METHOD_VERSION + '\nEstado: ' + summarizeResultStates(state.results).status;
 }
 
 function saveResultsAsPdf() {
@@ -384,6 +370,9 @@ function saveResultsAsPdf() {
    ========================================================================= */
 // Estado global
 const state = {
+  runAnalysis: null,
+  visualReviews: {},
+  loadEpoch: 0,
   images: [],          // Imágenes DICOM cargadas (parseadas)
   axial: [],           // Axiales ordenadas
   sagittal: null,      // Localizador sagital (opcional)
@@ -409,7 +398,7 @@ const log = (msg) => {
    1. CARGA DE DICOM
    ========================================================================= */
 
-async function loadDicomFile(file) {
+export async function loadDicomFile(file) {
   const buffer = await file.arrayBuffer();
   const byteArray = new Uint8Array(buffer);
   let dataSet;
@@ -421,26 +410,36 @@ async function loadDicomFile(file) {
   return parseDataSet(dataSet, file.name);
 }
 
-function parseDataSet(dataSet, filename) {
+export function parseDataSet(dataSet, filename) {
   const rows = dataSet.uint16('x00280010');
   const cols = dataSet.uint16('x00280011');
-  const bitsAllocated = dataSet.uint16('x00280100') || 16;
-  const pixelRepresentation = dataSet.uint16('x00280103') || 0;
+  const bitsAllocated = dataSet.uint16('x00280100');
+  const bitsStored = dataSet.uint16('x00280101');
+  const highBit = dataSet.uint16('x00280102');
+  const transferSyntax = dataSet.string('x00020010');
+  if (!transferSyntax) throw new Error(`${filename}: falta Transfer Syntax UID.`);
+  assertNativeTransferSyntax(transferSyntax);
+  const frames = Number(dataSet.string('x00280008') || '1');
+  if (frames !== 1 || dataSet.elements.x52009229 || dataSet.elements.x52009230) throw new Error('Enhanced MR / multiframe no soportado. Exporta un archivo por corte.');
+  if (dataSet.uint16('x00280002') !== 1 || dataSet.string('x00280004') !== 'MONOCHROME2') throw new Error('Se requiere MR monocromo MONOCHROME2.');
+  if (![8,16,32].includes(bitsAllocated) || !Number.isInteger(bitsStored) || !Number.isInteger(highBit) || bitsStored<1 || bitsStored>bitsAllocated || highBit<bitsStored-1 || highBit>=bitsAllocated) throw new Error('BitsAllocated/BitsStored/HighBit inválidos.');
+  const pixelRepresentation = dataSet.uint16('x00280103');
+  if (![0,1].includes(pixelRepresentation)) throw new Error('PixelRepresentation inválido.');
 
   const pixelSpacingStr = dataSet.string('x00280030');
   const pixelSpacing = pixelSpacingStr
     ? pixelSpacingStr.split('\\').map(parseFloat)
-    : [1, 1];
+    : [];
 
   const ippStr = dataSet.string('x00200032');
   const imagePosition = ippStr
     ? ippStr.split('\\').map(parseFloat)
-    : [0, 0, 0];
+    : [];
 
   const iopStr = dataSet.string('x00200037');
   const imageOrientation = iopStr
     ? iopStr.split('\\').map(parseFloat)
-    : [1, 0, 0, 0, 1, 0];
+    : [];
 
   const sliceThickness = parseFloat(dataSet.string('x00180050') || '0');
   const sliceLocation = parseFloat(dataSet.string('x00201041') || '0');
@@ -473,36 +472,40 @@ function parseDataSet(dataSet, filename) {
     throw new Error(`${filename}: no se ha encontrado PixelData`);
   }
 
-  let raw;
-  if (bitsAllocated === 16) {
-    if (pixelRepresentation === 1) {
-      raw = new Int16Array(
-        dataSet.byteArray.buffer,
-        dataSet.byteArray.byteOffset + pixelDataElement.dataOffset,
-        pixelDataElement.length / 2
-      );
-    } else {
-      raw = new Uint16Array(
-        dataSet.byteArray.buffer,
-        dataSet.byteArray.byteOffset + pixelDataElement.dataOffset,
-        pixelDataElement.length / 2
-      );
-    }
-  } else {
-    raw = new Uint8Array(
-      dataSet.byteArray.buffer,
-      dataSet.byteArray.byteOffset + pixelDataElement.dataOffset,
-      pixelDataElement.length
-    );
+  if (pixelDataElement.encapsulatedPixelData) throw new Error('PixelData encapsulado no soportado.');
+  if (!rows || !cols) throw new Error('Faltan Rows/Columns.');
+  const bytesPerPixel = bitsAllocated / 8;
+  const count = rows * cols;
+  const layout = resolveFrameCount(1, pixelDataElement.length, count * bytesPerPixel);
+  if (!layout.paddingOnly) throw new Error('PixelData tiene bytes sobrantes no declarados.');
+  if (pixelDataElement.dataOffset + pixelDataElement.length > dataSet.byteArray.length) throw new Error('PixelData truncado.');
+  if (!Number.isFinite(rescaleSlope) || rescaleSlope <= 0 || !Number.isFinite(rescaleIntercept)) throw new Error('Rescale inválido.');
+  const view = new DataView(dataSet.byteArray.buffer, dataSet.byteArray.byteOffset + pixelDataElement.dataOffset, pixelDataElement.length);
+  const data = new Float32Array(count);
+  const paddingMask = new Uint8Array(count);
+  const pad = pixelRepresentation ? dataSet.int16('x00280120') : dataSet.uint16('x00280120');
+  const padEnd = (pixelRepresentation ? dataSet.int16('x00280121') : dataSet.uint16('x00280121')) ?? pad;
+  for (let i = 0; i < count; i++) {
+    const raw = readUnsignedPixel(view, i * bytesPerPixel, bitsAllocated, isLittleEndian(transferSyntax));
+    const stored = normalizeStoredPixel(raw, bitsStored, highBit, pixelRepresentation);
+    data[i] = stored * rescaleSlope + rescaleIntercept;
+    paddingMask[i] = pad != null && stored >= Math.min(pad,padEnd) && stored <= Math.max(pad,padEnd) ? 1 : 0;
   }
 
-  const data = new Float32Array(raw.length);
-  for (let i = 0; i < raw.length; i++) {
-    data[i] = raw[i] * rescaleSlope + rescaleIntercept;
-  }
-
-  return {
+  const img = {
     filename,
+    transferSyntax,
+    paddingMask,
+    studyInstanceUID: dataSet.string('x0020000d') || '',
+    sopInstanceUID: dataSet.string('x00080018') || '',
+    frameOfReferenceUID: dataSet.string('x00200052') || '',
+    modality: dataSet.string('x00080060') || '',
+    manufacturer: dataSet.string('x00080070') || '',
+    modelName: dataSet.string('x00081090') || '',
+    stationName: dataSet.string('x00081010') || '',
+    deviceSerialNumber: dataSet.string('x00181000') || '',
+    magneticFieldStrength: parseFloat(dataSet.string('x00180087') || ''),
+    scanningSequence: dataSet.string('x00180020') || '',
     rows,
     cols,
     pixelSpacing,
@@ -528,6 +531,8 @@ function parseDataSet(dataSet, filename) {
     imageType,
     data
   };
+  validateAcrImage(img);
+  return canonicalizeAcrImage(img);
 }
 
 /* =========================================================================
@@ -602,7 +607,7 @@ function buildAxialGroupKey(img) {
   const te = Number.isFinite(img.echoTime) ? img.echoTime.toFixed(3) : '0.000';
   const echo = img.echoNumber || 0;
 
-  if (uid) return `${uid}|TE=${te}|EN=${echo}`;
+  if (uid) return `${uid}|TE=${te}|EN=${echo}|ACQ=${img.acquisitionNumber || ''}|TYPE=${img.imageType || ''}`;
 
   return [
     img.seriesNumber || '',
@@ -613,64 +618,10 @@ function buildAxialGroupKey(img) {
   ].join('|');
 }
 
-/* Secuencia estándar del ACR Large/Medium Phantom Test Guidance:
-   SE, FOV 25 cm, matriz 256×256, corte 5 mm, gap 5 mm (separación 10 mm),
-   1 NEX, 11 cortes. Se usa para distinguir las series ACR de las clínicas,
-   que muy a menudo llevan "T1"/"T2" en la descripción mientras que las ACR
-   se llaman simplemente "Spin Echo". */
-const ACR_SPEC = {
-  matrix: 256,
-  fovMm: 250,
-  sliceThicknessMm: 5,
-  sliceSpacingMm: 10,
-  averages: 1,
-  flipAngleDeg: 90,
-  echoTrainLength: 1
-};
-
 /* Penalización por desviarse del protocolo ACR, en las mismas unidades que la
    distancia de TR/TE (ms). Devuelve también las desviaciones para poder
    explicarlas en el log y en el selector. */
-function scoreAcrConformance(group) {
-  const deviations = [];
-  let penalty = 0;
-
-  const add = (points, text) => {
-    penalty += points;
-    deviations.push(text);
-  };
-
-  const matrix = Math.max(group.rows || 0, group.cols || 0);
-  if (matrix && matrix !== ACR_SPEC.matrix) {
-    add(400, `matriz ${group.rows}×${group.cols}`);
-  }
-
-  if (group.echoTrainLength > ACR_SPEC.echoTrainLength) {
-    add(400, `ETL ${group.echoTrainLength} (no es SE simple)`);
-  }
-
-  if (group.numberOfAverages > 0 && Math.abs(group.numberOfAverages - ACR_SPEC.averages) > 0.01) {
-    add(200, `NEX ${formatTagValue(group.numberOfAverages)}`);
-  }
-
-  if (group.reconstructionDiameter > 0 && Math.abs(group.reconstructionDiameter - ACR_SPEC.fovMm) > 5) {
-    add(150, `FOV ${formatTagValue(group.reconstructionDiameter)} mm`);
-  }
-
-  if (group.sliceThickness > 0 && Math.abs(group.sliceThickness - ACR_SPEC.sliceThicknessMm) > 0.2) {
-    add(150, `espesor ${formatTagValue(group.sliceThickness)} mm`);
-  }
-
-  if (group.spacingBetweenSlices > 0 && Math.abs(group.spacingBetweenSlices - ACR_SPEC.sliceSpacingMm) > 0.5) {
-    add(100, `separación ${formatTagValue(group.spacingBetweenSlices)} mm`);
-  }
-
-  if (group.flipAngle > 0 && Math.abs(group.flipAngle - ACR_SPEC.flipAngleDeg) > 1) {
-    add(100, `flip ${formatTagValue(group.flipAngle)}°`);
-  }
-
-  return { penalty, deviations, conformant: penalty === 0 };
-}
+function scoreAcrConformance(group) { return scoreAcrProtocol(group); }
 
 function hasUniformityFilter(group) {
   return /FILTERED/i.test(group.scanOptions || '');
@@ -736,7 +687,7 @@ function scoreAxialGroupAsT2(group) {
 }
 
 function detectAnalysisSeries(classified) {
-  const validAxialGroups = classified.axialGroups.filter(g => g.count === 11);
+  const validAxialGroups = classified.axialGroups.filter(g => g.count === 11 && !g.stackError);
 
   const t1Candidates = validAxialGroups
     .filter(g => scoreAxialGroupAsT1(g) < 5000)
@@ -763,14 +714,18 @@ function detectAnalysisSeries(classified) {
 
 /* El localizador 3-plano trae varios cortes sagitales (p. ej. x = +45 … −45 mm).
    La prueba de geometría sagital del ACR se mide sobre el corte central, así que
-   se elige el más próximo al isocentro en lugar del primero de la lista, que
+   se elige el más próximo al centro físico del maniquí axial; el primero de la lista
    dependía del orden en que se soltaban los ficheros. */
-function pickCentralSagittal(sagittal) {
+function pickCentralSagittal(sagittal, axial = []) {
   if (!sagittal.length) return null;
-
-  return sagittal.reduce((best, img) =>
-    Math.abs(img.imagePosition[0]) < Math.abs(best.imagePosition[0]) ? img : best
-  );
+  if (!axial.length) return null;
+  const ref = axial[0];
+  const geom = phantomGeometry(createPhantomMask(ref), ref);
+  if (!geom.pixelCount) return null;
+  const centerX = ref.imagePosition[0] + geom.cx * ref.pixelSpacing[1] * ref.imageOrientation[0]
+    + geom.cy * ref.pixelSpacing[0] * ref.imageOrientation[3];
+  const candidates = sagittal.filter(img => img.studyInstanceUID === ref.studyInstanceUID);
+  return candidates.reduce((best, img) => !best || Math.abs(img.imagePosition[0]-centerX) < Math.abs(best.imagePosition[0]-centerX) ? img : best, null);
 }
 
 function classifyImages(images) {
@@ -794,11 +749,21 @@ function classifyImages(images) {
   }
 
   const axialGroups = Array.from(grouped.entries()).map(([key, imgs], idx) => {
-    const ordered = sortAndOrientAxialStack(imgs, `grupo axial ${idx + 1}`);
+    let stackError = null;
+    try { validateAcrStack(imgs); } catch(e) { stackError = e.message; }
+    const ordered = stackError ? [...imgs] : sortAndOrientAxialStack(imgs, `grupo axial ${idx + 1}`);
     const ref = ordered[0] || {};
 
     return {
       key,
+      stackError,
+      stackValidated: !stackError,
+      acquisitionMatrix: ref.acquisitionMatrix,
+      scanningSequence: ref.scanningSequence,
+      fovX: ref.cols * ref.pixelSpacing[1],
+      fovY: ref.rows * ref.pixelSpacing[0],
+      studyInstanceUID: ref.studyInstanceUID,
+      magneticFieldStrength: ref.magneticFieldStrength,
       axial: ordered,
       count: ordered.length,
       tr: ref.repetitionTime || 0,
@@ -828,7 +793,7 @@ function classifyImages(images) {
 
   return {
     axial: [...axial].sort((a, b) => a.imagePosition[2] - b.imagePosition[2]),
-    sagittal: pickCentralSagittal(sagittal),
+    sagittal: pickCentralSagittal(sagittal, axial),
     sagittalCount: sagittal.length,
     other,
     axialGroups
@@ -1843,236 +1808,57 @@ function isInExcludedTopSector(fit, dirX, dirY) {
    5. TESTS
    ========================================================================= */
 
-function testPIU(img, fieldStrength) {
+function uniformityGeometry(img) {
   const mask = createPhantomMask(img);
-  const bright = brightPhantomMask(img);
   const geom = phantomGeometry(mask, img);
+  if (!geom.pixelCount || geom.widthMm < 145 || geom.heightMm < 145) throw new Error('No se ha localizado un contorno Medium completo. Revisa la segmentación.');
+  const fit = fitPhantomEllipse(img);
+  if (fit) { geom.cx = fit.cx; geom.cy = fit.cy; }
+  return { mask, geom };
+}
 
-  const largeAreaMm2 = 12000;
-  const largeRadiusMm = Math.sqrt(largeAreaMm2 / Math.PI);
-  const largeRadiusPx = largeRadiusMm / img.pixelSpacing[0];
+function drawPhysicalCircle(ctx, center, radiusMm, img, color) {
+  ctx.beginPath();
+  ctx.ellipse(center[0], center[1], radiusMm / img.pixelSpacing[1], radiusMm / img.pixelSpacing[0], 0, 0, 2*Math.PI);
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
+}
 
-  const smallAreaMm2 = 100;
-  const smallRadiusMm = Math.sqrt(smallAreaMm2 / Math.PI);
-  const smallRadiusPx = smallRadiusMm / img.pixelSpacing[0];
-
-  const smallOffsets = buildDiskOffsets(smallRadiusPx);
-  const allowedR2 = (largeRadiusPx - smallRadiusPx) * (largeRadiusPx - smallRadiusPx);
-  const largeR2 = largeRadiusPx * largeRadiusPx;
-
-  const diskFullyInBright = (cx, cy) => {
-    for (const [dx, dy] of smallOffsets) {
-      const x = cx + dx;
-      const y = cy + dy;
-      if (x < 0 || x >= img.cols || y < 0 || y >= img.rows) return false;
-      if (!bright[y * img.cols + x]) return false;
-    }
-    return true;
-  };
-
-  let minMean = Infinity;
-  let maxMean = -Infinity;
-  let minLoc = null;
-  let maxLoc = null;
-  let largeSum = 0;
-  let largeCount = 0;
-  let excludedCount = 0;
-
-  for (let y = 0; y < img.rows; y++) {
-    for (let x = 0; x < img.cols; x++) {
-      const dx = x - geom.cx;
-      const dy = y - geom.cy;
-      const d2 = dx * dx + dy * dy;
-      if (d2 > largeR2) continue;
-      const idx = y * img.cols + x;
-
-      if (!bright[idx]) {
-        excludedCount++;
-        continue;
-      }
-
-      largeSum += img.data[idx];
-      largeCount++;
-
-      if (d2 > allowedR2) continue;
-      if (x % 2 !== 0 || y % 2 !== 0) continue;
-      if (!diskFullyInBright(x, y)) continue;
-
-      const m = meanInDisk(img.data, img.rows, img.cols, x, y, smallOffsets);
-      if (m < minMean) {
-        minMean = m;
-        minLoc = [x, y];
-      }
-      if (m > maxMean) {
-        maxMean = m;
-        maxLoc = [x, y];
-      }
-    }
-  }
-
-  const piu = 100 * (1 - (maxMean - minMean) / (maxMean + minMean));
+export function testPIU(img, fieldStrength) {
+  const {mask, geom} = uniformityGeometry(img);
+  const notch = proposedNotchMask(img, geom, mask);
+  const m = measureAcrPiu(img, geom, notch);
   const limit = fieldStrength >= 3 ? 85 : 90;
-  const pass = piu >= limit;
-  const exportData = {
-    piuPct: piu,
-    limitPct: limit,
-    minSignal: minMean,
-    maxSignal: maxMean,
-    largeMean: largeSum / largeCount,
-    excludedPixels: excludedCount
-  };
-
   return {
-    exportKey: 'piu_slice_7',
-    name: 'Uniformidad de intensidad (PIU) — slice 7',
-    pass,
-    exportData,
-    metrics: {
-      'PIU': `${piu.toFixed(2)} %`,
-      'Límite': `≥ ${limit} %`,
-      'Señal mínima': minMean.toFixed(1),
-      'Señal máxima': maxMean.toFixed(1),
-      'Media ROI grande': (largeSum / largeCount).toFixed(1),
-      'Píx. excluidos': `${excludedCount} (burbujas/tapón)`
-    },
-    overlay: (ctx) => {
-      drawCircle(ctx, geom.cx, geom.cy, largeRadiusPx, '#3498db', 2);
-      if (minLoc) drawCircle(ctx, minLoc[0], minLoc[1], smallRadiusPx, '#e74c3c', 1.5);
-      if (maxLoc) drawCircle(ctx, maxLoc[0], maxLoc[1], smallRadiusPx, '#27ae60', 1.5);
-    },
-    img
+    exportKey: 'piu_slice_7', name: 'Uniformidad de intensidad (PIU) — slice 7',
+    pass: m.piu >= limit, img,
+    exportData: {piuPct:m.piu, limitPct:limit, minSignal:m.min, maxSignal:m.max, largeMean:m.mean, excludedPixels:m.excluded, areaCm2:m.areaCm2},
+    message: 'La señal baja interior se conserva. Revisa la exclusión propuesta de la muesca (naranja) antes de confirmar las medidas.',
+    metrics: {'PIU': `${m.piu.toFixed(2)} %`, 'Límite': `≥ ${limit} %`, 'ROI grande': `${m.areaCm2.toFixed(2)} cm²`,
+      'ROIs pequeñas': `${m.smallAreaCm2.toFixed(3)} cm²`, 'Señal mínima':m.min.toFixed(1), 'Señal máxima':m.max.toFixed(1),
+      'Media ROI grande (incluye muesca)':m.mean.toFixed(1), 'Píxeles de muesca propuestos':m.excluded},
+    overlay: ctx => {
+      ctx.fillStyle='rgba(255,165,0,0.6)';
+      for(const i of m.indices) if(notch[i])ctx.fillRect(i%img.cols,Math.floor(i/img.cols),1,1);
+      drawPhysicalCircle(ctx,[geom.cx,geom.cy],m.radiusMm,img,'#3498db');
+      drawPhysicalCircle(ctx,m.minLoc,m.smallRadiusMm,img,'#e74c3c');
+      drawPhysicalCircle(ctx,m.maxLoc,m.smallRadiusMm,img,'#27ae60');
+    }
   };
 }
 
-function testGhosting(img) {
-  const mask = createPhantomMask(img);
-  const bright = brightPhantomMask(img);
-  const geom = phantomGeometry(mask, img);
-
-  const largeAreaMm2 = 16000;
-  const largeRadiusMm = Math.sqrt(largeAreaMm2 / Math.PI);
-  const largeRadiusPx = largeRadiusMm / img.pixelSpacing[0];
-  const largeR2 = largeRadiusPx * largeRadiusPx;
-
-  let largeMean = 0;
-  let largeCount = 0;
-  for (let y = 0; y < img.rows; y++) {
-    for (let x = 0; x < img.cols; x++) {
-      const dx = x - geom.cx;
-      const dy = y - geom.cy;
-      const idx = y * img.cols + x;
-      if (dx * dx + dy * dy <= largeR2 && bright[idx]) {
-        largeMean += img.data[idx];
-        largeCount++;
-      }
-    }
-  }
-  largeMean /= largeCount;
-
-  const phantomRadiusPx = geom.radiusMm / img.pixelSpacing[0];
-  const targetAreaPx = 1000 / (img.pixelSpacing[0] * img.pixelSpacing[1]);
-  let shortPx = Math.sqrt(targetAreaPx / 4);
-  let longPx = 4 * shortPx;
-  const margin = 4;
-
-  const phantomTop = geom.cy - phantomRadiusPx;
-  const phantomBottom = geom.cy + phantomRadiusPx;
-  const phantomLeft = geom.cx - phantomRadiusPx;
-  const phantomRight = geom.cx + phantomRadiusPx;
-
-  const fitDim = (avail) => Math.max(2, Math.min(shortPx, avail - 2 * margin));
-
-  const topShort = fitDim(phantomTop);
-  const botShort = fitDim(img.rows - phantomBottom);
-  const lftShort = fitDim(phantomLeft);
-  const rgtShort = fitDim(img.cols - phantomRight);
-
-  const horizLong = Math.min(longPx, img.cols - 2 * margin);
-  const vertLong = Math.min(longPx, img.rows - 2 * margin);
-
-  const topRoi = {
-    x: geom.cx - horizLong / 2,
-    y: margin + (phantomTop - margin - topShort) / 2,
-    w: horizLong,
-    h: topShort
-  };
-  const botRoi = {
-    x: geom.cx - horizLong / 2,
-    y: phantomBottom + (img.rows - phantomBottom - margin - botShort) / 2,
-    w: horizLong,
-    h: botShort
-  };
-  const lftRoi = {
-    x: margin + (phantomLeft - margin - lftShort) / 2,
-    y: geom.cy - vertLong / 2,
-    w: lftShort,
-    h: vertLong
-  };
-  const rgtRoi = {
-    x: phantomRight + (img.cols - phantomRight - margin - rgtShort) / 2,
-    y: geom.cy - vertLong / 2,
-    w: rgtShort,
-    h: vertLong
-  };
-
-  const meanRect = (r) => {
-    let s = 0;
-    let n = 0;
-    const x0 = Math.max(0, Math.floor(r.x));
-    const y0 = Math.max(0, Math.floor(r.y));
-    const x1 = Math.min(img.cols, Math.ceil(r.x + r.w));
-    const y1 = Math.min(img.rows, Math.ceil(r.y + r.h));
-    for (let y = y0; y < y1; y++) {
-      for (let x = x0; x < x1; x++) {
-        s += img.data[y * img.cols + x];
-        n++;
-      }
-    }
-    return n > 0 ? s / n : 0;
-  };
-
-  const top = meanRect(topRoi);
-  const bottom = meanRect(botRoi);
-  const left = meanRect(lftRoi);
-  const right = meanRect(rgtRoi);
-
-  const ghostingRatio = Math.abs(((top + bottom) - (left + right)) / (2 * largeMean));
-  const psg = ghostingRatio * 100;
-  const pass = psg < 3.0;
-  const exportData = {
-    psgPct: psg,
-    limitPct: 3.0,
-    largeMean,
-    topMean: top,
-    bottomMean: bottom,
-    leftMean: left,
-    rightMean: right
-  };
-
+export function testGhosting(img) {
+  const {geom} = uniformityGeometry(img);
+  const m = measureAcrGhosting(img,geom);
   return {
-    exportKey: 'ghosting_slice_7',
-    name: 'Ghosting (PSG) — slice 7',
-    pass,
-    exportData,
-    metrics: {
-      'PSG': `${psg.toFixed(3)} %`,
-      'Límite': '< 3.0 %',
-      'Media ROI grande': largeMean.toFixed(1),
-      'Top': top.toFixed(1),
-      'Bottom': bottom.toFixed(1),
-      'Left': left.toFixed(1),
-      'Right': right.toFixed(1)
-    },
-    overlay: (ctx) => {
-      drawCircle(ctx, geom.cx, geom.cy, largeRadiusPx, '#3498db', 2);
-      drawRect(ctx, topRoi, '#f39c12', 1.5);
-      drawRect(ctx, botRoi, '#f39c12', 1.5);
-      drawRect(ctx, lftRoi, '#f39c12', 1.5);
-      drawRect(ctx, rgtRoi, '#f39c12', 1.5);
-    },
-    img
+    exportKey:'ghosting_slice_7',name:'Ghosting (PSG) — slice 7',pass:m.psg<=3, img,
+    exportData:{psgPct:m.psg,limitPct:3,largeMean:m.large.mean,topMean:m.measurements.top.mean,bottomMean:m.measurements.bottom.mean,
+      leftMean:m.measurements.left.mean,rightMean:m.measurements.right.mean},
+    metrics:{'PSG':`${m.psg.toFixed(3)} %`,'Límite T1':'≤ 3.0 %','Media ROI grande':m.large.mean.toFixed(1),'Área ROI grande':`${m.large.areaCm2.toFixed(2)} cm²`,
+      ...Object.fromEntries(Object.entries(m.measurements).map(([k,v])=>[k,`${v.mean.toFixed(2)} (${v.areaCm2.toFixed(2)} cm²)`]))},
+    overlay:ctx=>{drawPhysicalCircle(ctx,[geom.cx,geom.cy],m.large.radiusMm,img,'#3498db');for(const roi of Object.values(m.rois))drawRect(ctx,roi,'#f39c12',1.5);}
   };
 }
+
 function testGeometryAxial(img, sliceLabel, expectedDiameterMm, tolerance, useCrosswiseDiameters) {
   const psY = img.pixelSpacing[0];
   const psX = img.pixelSpacing[1];
@@ -2558,12 +2344,10 @@ function testSliceThickness(img) {
     y1: botRect.y1
   };
 
-  const expectedMm = img.sliceThickness > 0 ? img.sliceThickness : 5.0;
+  const expectedMm = 5.0;
   const toleranceMm = 0.7;
   const failMm = 1.0;
-  const errAbs = Math.abs(sliceThicknessMm - expectedMm);
-  const pass = errAbs <= toleranceMm;
-  const acceptable = errAbs <= failMm;
+  const {pass, warn} = thicknessVerdict(sliceThicknessMm);
   const exportData = {
     sliceThicknessMm,
     expectedMm,
@@ -2579,10 +2363,10 @@ function testSliceThickness(img) {
     name: 'Espesor de corte — slice 1',
     pass,
     exportData,
-    warn: !pass && acceptable,
+    warn,
     metrics: {
       'Espesor medido': `${sliceThicknessMm.toFixed(2)} mm`,
-      'Esperado': `${expectedMm.toFixed(1)} mm ± ${toleranceMm.toFixed(1)}`,
+      'Esperado': `${expectedMm.toFixed(1)} mm; objetivo ±0.7 mm, aceptable ±1.0 mm`,
       'Rampa superior': `${topMm.toFixed(2)} mm`,
       'Rampa inferior': `${botMm.toFixed(2)} mm`,
       'Franja central': `${(bandHeightPx * psY).toFixed(2)} mm`,
@@ -3028,6 +2812,7 @@ function testSlicePosition_legacy(img, sliceLabel) {
 
 
 function testSlicePosition(img, sliceLabel) {
+  const exportKey = `slice_position_${slugifyExportPart(sliceLabel)}`;
   const mask = createPhantomMask(img);
   const geom = phantomGeometry(mask, img);
   const waterMean = waterMeanInside(img, mask);
@@ -3618,8 +3403,7 @@ function testSlicePosition(img, sliceLabel) {
   const stepMm = Math.hypot(psY, commonA * psX);
   const diffMm = (edgeR.idx - edgeL.idx) * stepMm;
   const absOff = Math.abs(diffMm);
-  const pass = absOff <= 5.0;
-  const warnLcd = absOff > 4.0;
+  const {pass, warn} = positionVerdict(diffMm, isSlice11);
   const exportData = {
     sliceLabel,
     anchor,
@@ -3631,7 +3415,8 @@ function testSlicePosition(img, sliceLabel) {
     validRows: insert.count,
     widthMadPx: insert.widthMad,
     method: measurementMethod,
-    passLimitMm: 5.0,
+    passLimitMm: 7.0,
+    sliceDisplacementMm: diffMm / 2,
     lcdLimitMm: 4.0
   };
 
@@ -3674,7 +3459,8 @@ function testSlicePosition(img, sliceLabel) {
     'Ángulo inserto': `${(Math.atan2(commonA * psX, psY) * 180 / Math.PI).toFixed(2)} °`,
     'Filas válidas inserto': `${insert.count}`,
     'Consistencia ancho': `MAD ${insert.widthMad.toFixed(2)} px`,
-    'Límite paso/falla': '|Δ| <= 5.0 mm (<= 4.0 mm no afecta LCD)'
+    'Desplazamiento real': `${(diffMm / 2).toFixed(2)} mm`,
+    'Límite': '|Δ barras|: objetivo ≤5 mm; aceptable ≤7 mm; aviso LCD >4 mm en corte 11'
   };
 
   if (sharedLevel) {
@@ -3690,9 +3476,11 @@ function testSlicePosition(img, sliceLabel) {
   }
 
   return {
+    exportKey,
+    exportData,
     name: `Posición de corte — ${sliceLabel}`,
     pass,
-    warn: pass && warnLcd,
+    warn,
     metrics,
     overlay: (ctx) => {
       drawRect(ctx, boxRect, null, null, null, 'rgba(241,196,15,0.55)', 1);
@@ -4569,17 +4357,17 @@ function renderResults(results) {
     const div = document.createElement('div');
     let cls = 'test-result ';
     if (res.error) cls += 'error';
-    else if (res.skipped) cls += 'warn';
+    else if (res.skipped || res.pending || res.pass == null || res.complementary) cls += 'warn';
     else if (res.warn && res.pass) cls += 'warn';
     else cls += res.pass ? 'pass' : 'fail';
     div.className = cls;
 
     const left = document.createElement('div');
-    const badgeText = res.error
+    const badgeText = res.complementary ? 'COMPLEMENTARIA' : (res.pending || res.pass == null) ? 'PENDIENTE' : res.error
       ? 'ERROR'
       : res.skipped
         ? 'OMITIDO'
-        : (res.pass ? (res.warn ? 'PASA (lím.)' : 'PASA') : 'FALLA');
+        : (res.pass ? (res.warn ? 'ACEPTABLE (aviso)' : 'PASA') : 'FALLA');
     left.innerHTML = `<h3>${res.name} <span class="badge">${badgeText}</span></h3>`;
 
     if (res.message) {
@@ -4695,6 +4483,58 @@ function populateSeriesSelectors(analysis) {
   fill('t2-select', candidates.t2, analysis.t2);
 }
 
+export function invalidateResults() {
+  state.results = [];
+  state.runAnalysis = null;
+  state.lastRunAt = null;
+  state.lastFieldStrength = null;
+  for (const id of ['results', 'assessment-summary', 'print-meta']) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = '';
+  }
+  const title = document.getElementById('results-title');
+  if (title) title.style.display = 'none';
+  setCopyExcelEnabled(false);
+  setPdfEnabled(false);
+}
+
+function renderVisualReview(analysis) {
+  const wrap = document.getElementById('visual-review');
+  wrap.replaceChildren();
+  for (const [label,group] of [['T1',analysis.t1],['T2',analysis.t2]]) {
+    if (!group) continue;
+    const review = state.visualReviews[group.key] ||= {};
+    const fieldset = document.createElement('fieldset');
+    const legend = document.createElement('legend');
+    legend.textContent = `${label}: lecturas visuales y revisión de medidas`;
+    fieldset.appendChild(legend);
+    const help = document.createElement('p');
+    help.textContent = 'Registra las lecturas de tu visor o consola. Bajo contraste: radios completos consecutivos, hasta el primero incompleto (0–10 por corte). Ejecuta las medidas y revísalas antes de confirmarlas; después vuelve a ejecutar para actualizar el informe.';
+    fieldset.appendChild(help);
+    const field = (key,text,options) => {
+      const row = document.createElement('label');
+      row.appendChild(document.createTextNode(text));
+      const input = document.createElement(options ? 'select' : 'input');
+      input.name = `${label}-${key}`;
+      if (options) {
+        for (const [value,text] of [['','Pendiente'],...options]) {
+          const option = document.createElement('option'); option.value = value; option.textContent = text; input.appendChild(option);
+        }
+      } else { input.type='number'; input.min='0'; input.max='10'; input.step='1'; }
+      input.value = review[key] ?? '';
+      input.addEventListener('change', () => { review[key] = input.value; invalidateResults(); });
+      row.appendChild(input);fieldset.appendChild(row);
+    };
+    const resolutions = [['0.8','0,8 mm'],['0.9','0,9 mm'],['1','1,0 mm'],['1.1','1,1 mm'],['unresolved','No resuelve 1,1 mm']];
+    field('resolutionH','Resolución horizontal',resolutions);field('resolutionV','Resolución vertical',resolutions);
+    for (let slice=8;slice<=11;slice++)field(`lcd${slice}`,`Radios corte ${slice}`);
+    field('artifacts','Artefactos',[['pass','Revisados: aceptables'],['fail','No aceptables']]);
+    field('measurements','Cortes, muesca, ROIs y medidas',[['pass','Revisados: mediciones válidas'],['fail','Mediciones no válidas']]);
+    field('acquisition','Reconstrucción y bobina',[['pass','Sin IA; corrección de intensidad adecuada'],['fail','No cumple el protocolo']]);
+    wrap.appendChild(fieldset);
+  }
+}
+
 function onSeriesSelectionChange() {
   const analysis = state.analysis;
   if (!analysis || !analysis.candidates) return;
@@ -4707,6 +4547,8 @@ function onSeriesSelectionChange() {
 
   analysis.t1 = pick('t1-select', analysis.candidates.t1);
   analysis.t2 = pick('t2-select', analysis.candidates.t2);
+  invalidateResults();
+  renderVisualReview(analysis);
 
   log(`\nSelección manual: T1 = ${analysis.t1 ? describeAxialGroup(analysis.t1) : 'ninguna'}`);
   log(`                  T2 = ${analysis.t2 ? describeAxialGroup(analysis.t2) : 'ninguna'}`);
@@ -4771,6 +4613,12 @@ function renderOverview(analysis) {
    ========================================================================= */
 
 async function handleFiles(fileList) {
+  const epoch = ++state.loadEpoch;
+  state.visualReviews = {};
+  state.runAnalysis = null;
+  document.getElementById('run-btn').disabled = true;
+  document.getElementById('visual-review').replaceChildren();
+  document.getElementById('assessment-summary').textContent = '';
   state.images = [];
   state.axial = [];
   state.sagittal = null;
@@ -4799,17 +4647,23 @@ async function handleFiles(fileList) {
 
   log(`Cargando ${files.length} archivo(s)...`);
 
+  let failedFiles = 0;
   for (const f of files) {
     try {
       const img = await loadDicomFile(f);
+      if (epoch !== state.loadEpoch) return;
       state.images.push(img);
       log(
         `✔ ${f.name}  (${img.rows}×${img.cols}, inst ${img.instanceNumber}, serie=${img.seriesNumber || '?'}, TR=${formatTagValue(img.repetitionTime)}, TE=${formatTagValue(img.echoTime)}, z=${img.imagePosition[2].toFixed(2)})`
       );
     } catch (e) {
+      if (epoch !== state.loadEpoch) return;
+      failedFiles++;
       log(`✖ ${e.message}`);
     }
   }
+  if (failedFiles) { log('No se analiza un lote parcialmente leído. Corrige los archivos indicados y vuelve a cargar.'); return; }
+  try { validateAcrBatch(state.images); } catch(e) { log(`✖ ${e.message}`); return; }
 
   const classified = classifyImages(state.images);
   const analysis = detectAnalysisSeries(classified);
@@ -4822,7 +4676,7 @@ async function handleFiles(fileList) {
   log(`  Axiales totales: ${classified.axial.length}`);
   log(
     classified.sagittal
-      ? `  Sagital: sí (${classified.sagittalCount} disponible(s), se usa el de x=${classified.sagittal.imagePosition[0].toFixed(1)} mm por ser el más central)`
+      ? `  Sagital: sí (${classified.sagittalCount} disponible(s), se usa x=${classified.sagittal.imagePosition[0].toFixed(1)} mm por proximidad al centro del maniquí axial; confirmar visualmente)`
       : '  Sagital: no'
   );
 
@@ -4855,7 +4709,10 @@ async function handleFiles(fileList) {
     log(`  (hay ${extraT1} T1 y ${extraT2} T2 alternativas: cámbialas en los desplegables si quieres analizar otro par)`);
   }
 
+  const field = analysis.t1?.magneticFieldStrength ?? analysis.t2?.magneticFieldStrength;
+  if (Number.isFinite(field)) document.getElementById('field-strength').value = field >= 3 ? '3' : field >= 1.5 ? '1.5' : '0.5';
   populateSeriesSelectors(analysis);
+  renderVisualReview(analysis);
   renderOverview(analysis);
   document.getElementById('run-btn').disabled = !analysis.t1 && !analysis.t2;
 }
@@ -4882,9 +4739,9 @@ function runTestsForSeries(seriesLabel, axial, sagittal, fieldStrength, includeS
       } else {
         results.push({
           name: 'Geometría sagital (longitud H-F)',
-          pass: true,
-          skipped: true,
-          message: 'No se ha cargado localizador sagital. Esta prueba se omite.'
+          pass: null,
+          pending: true,
+          message: 'Falta el localizador sagital. Evaluación incompleta.'
         });
         log(`  ${prefix} · Geometría sagital omitida`);
       }
@@ -4899,31 +4756,31 @@ function runTestsForSeries(seriesLabel, axial, sagittal, fieldStrength, includeS
   }
 
   try {
-    results.push(testGeometryAxial(axial[0], 'slice 1', 165, 2, false));
+    results.push({...testGeometryAxial(axial[0], 'slice 1', 165, 2, false), complementary:seriesLabel !== 'T1'});
     log(`  ${prefix} ✓ Geometría axial slice 1`);
   } catch (e) {
-    results.push({ name: 'Geometría axial — slice 1', pass: false, error: true, message: e.message });
+    results.push({ name: 'Geometría axial — slice 1', complementary:seriesLabel !== 'T1', pass: false, error: true, message: e.message });
   }
 
   try {
-    results.push(testGeometryAxial(axial[4], 'slice 5', 165, 2, true));
+    results.push({...testGeometryAxial(axial[4], 'slice 5', 165, 2, true), complementary:seriesLabel !== 'T1'});
     log(`  ${prefix} ✓ Geometría axial slice 5`);
   } catch (e) {
-    results.push({ name: 'Geometría axial — slice 5', pass: false, error: true, message: e.message });
+    results.push({ name: 'Geometría axial — slice 5', complementary:seriesLabel !== 'T1', pass: false, error: true, message: e.message });
   }
 
   try {
-    results.push(testPhantomEllipseFit(axial[4], 'slice 5', 165, 2));
+    results.push({...testPhantomEllipseFit(axial[4], 'slice 5', 165, 2), complementary:true, message:'Medida complementaria del contorno; no determina el estado ACR.'});
     log(`  ${prefix} ✓ Ajuste elíptico del borde slice 5`);
   } catch (e) {
-    results.push({ name: 'Ajuste elíptico del borde — slice 5', pass: false, error: true, message: e.message });
+    results.push({ name: 'Ajuste elíptico del borde — slice 5', complementary:true, pass: false, error: true, message: e.message });
   }
 
   try {
-    results.push(testPelletGridDistortion(axial[4], 'slice 5'));
+    results.push({...testPelletGridDistortion(axial[4], 'slice 5'), complementary:true, message:'Criterio local: rejilla de paso 40 mm, error <1 mm; confirmar el modelo de inserto. No determina el estado ACR.'});
     log(`  ${prefix} ✓ Distorsión por matriz de perdigones slice 5`);
   } catch (e) {
-    results.push({ name: 'Distorsión por matriz de perdigones — slice 5', pass: false, error: true, message: e.message });
+    results.push({ name: 'Distorsión por matriz de perdigones — slice 5', complementary:true, pass: false, error: true, message: e.message });
   }
 
   try {
@@ -4955,10 +4812,10 @@ function runTestsForSeries(seriesLabel, axial, sagittal, fieldStrength, includeS
   }
 
   try {
-    results.push(testGhosting(axial[6]));
+    results.push({...testGhosting(axial[6]), complementary:seriesLabel !== 'T1', message:seriesLabel !== 'T1' ? 'Medida adicional T2; el límite numérico ACR de PSG se aplica a T1.' : undefined});
     log(`  ${prefix} ✓ Ghosting slice 7`);
   } catch (e) {
-    results.push({ name: 'Ghosting (PSG) — slice 7', pass: false, error: true, message: e.message });
+    results.push({ name: 'Ghosting (PSG) — slice 7', complementary:seriesLabel !== 'T1', pass: false, error: true, message: e.message });
   }
 
   return results;
@@ -4970,6 +4827,7 @@ function runTests() {
   const analysis = state.analysis;
   const results = [];
   const seriesToRun = [];
+  invalidateResults();
   setCopyExcelEnabled(false);
   setPdfEnabled(false);
 
@@ -4999,6 +4857,15 @@ function runTests() {
       title: `${entry.label} — ${describeAxialGroup(entry.group)}`
     });
 
+    const protocol = scoreAcrConformance(entry.group);
+    const review = state.visualReviews[entry.group.key] || {};
+    results.push({name:'Protocolo de adquisición', pass:protocol.invalid || review.acquisition === 'fail' ? false : protocol.conformant && review.acquisition === 'pass' ? true : null,
+      message:protocol.conformant ? 'Requiere confirmar ausencia de reconstrucción IA y corrección de intensidad apropiada para la bobina.' : protocol.deviations.join('; ')});
+    const actualField = entry.group.magneticFieldStrength;
+    const actualBand = Number.isFinite(actualField) ? actualField >= 3 ? 3 : actualField >= 1.5 ? 1.5 : 0.5 : null;
+    results.push({name:'Campo magnético verificado',pass:actualBand == null ? null : actualBand === fieldStrength,
+      message:actualBand == null ? 'Falta MagneticFieldStrength en DICOM.' : `${actualField} T en DICOM; categoría seleccionada ${fieldStrength} T.`});
+    results.push(...visualAcrResults(review,fieldStrength,entry.label));
     results.push(
       ...runTestsForSeries(
         entry.label,
@@ -5010,10 +4877,15 @@ function runTests() {
     );
   });
 
+  for (const label of ['T1','T2']) {
+    if (!seriesToRun.some(s => s.label === label)) results.push({name:`Serie ACR ${label} pendiente`,pass:null,pending:true});
+  }
+  state.runAnalysis = {t1:analysis.t1 ? {...analysis.t1} : null,t2:analysis.t2 ? {...analysis.t2} : null,sagittal:analysis.sagittal};
   state.lastRunAt = new Date();
   state.lastFieldStrength = fieldStrength;
   state.results = results;
   renderResults(results);
+  document.getElementById('assessment-summary').textContent = summarizeResultStates(results).status;
   setCopyExcelEnabled(results.some((item) => !item.section));
   setPdfEnabled(results.some((item) => !item.section));
   log('Tests completados.');
@@ -5021,6 +4893,11 @@ function runTests() {
 
 
 export function initAcrQc() {
+  const controller = new AbortController();
+  const listen = (el, event, fn) => el.addEventListener(event, fn, {signal:controller.signal});
+  state.loadEpoch++;
+  state.visualReviews = {};
+  state.runAnalysis = null;
   // Reset state on each mount
   state.images = [];
   state.axial = [];
@@ -5048,11 +4925,11 @@ const copyExcelBtn = document.getElementById('copy-excel-btn');
 const savePdfBtn = document.getElementById('save-pdf-btn');
 const clearBtn = document.getElementById('clear-btn');
 
-dropZone.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+listen(dropZone, 'click', () => fileInput.click());
+listen(fileInput, 'change', (e) => handleFiles(e.target.files));
 
 ['dragenter', 'dragover'].forEach(evt => {
-  dropZone.addEventListener(evt, (e) => {
+  listen(dropZone, evt, (e) => {
     e.preventDefault();
     e.stopPropagation();
     dropZone.classList.add('dragover');
@@ -5060,35 +4937,39 @@ fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
 });
 
 ['dragleave', 'drop'].forEach(evt => {
-  dropZone.addEventListener(evt, (e) => {
+  listen(dropZone, evt, (e) => {
     e.preventDefault();
     e.stopPropagation();
     dropZone.classList.remove('dragover');
   });
 });
 
-dropZone.addEventListener('drop', (e) => {
+listen(dropZone, 'drop', (e) => {
   const dt = e.dataTransfer;
   if (dt.files && dt.files.length) handleFiles(dt.files);
 });
 
 ['t1-select', 't2-select'].forEach((id) => {
   const sel = document.getElementById(id);
-  if (sel) sel.addEventListener('change', onSeriesSelectionChange);
+  if (sel) listen(sel, 'change', onSeriesSelectionChange);
 });
 
-runBtn.addEventListener('click', runTests);
+listen(runBtn, 'click', runTests);
 if (copyExcelBtn) {
-  copyExcelBtn.addEventListener('click', () => {
+  listen(copyExcelBtn, 'click', () => {
     copyResultsForExcel();
   });
 }
 if (savePdfBtn) {
-  savePdfBtn.addEventListener('click', () => {
+  listen(savePdfBtn, 'click', () => {
     saveResultsAsPdf();
   });
 }
-clearBtn.addEventListener('click', () => {
+listen(clearBtn, 'click', () => {
+  state.loadEpoch++;
+  state.visualReviews = {};
+  invalidateResults();
+  document.getElementById('visual-review').replaceChildren();
   state.images = [];
   state.axial = [];
   state.sagittal = null;
@@ -5114,5 +4995,8 @@ clearBtn.addEventListener('click', () => {
   setPdfEnabled(false);
   fileInput.value = '';
 });
+
+  listen(document.getElementById('field-strength'), 'change', invalidateResults);
+  return () => { controller.abort(); state.loadEpoch++; };
 
 }

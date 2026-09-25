@@ -16,6 +16,7 @@ npm run test:radio     # Radio-exam XML parsing and quiz building
 npm run test:paste     # Secure Paste crypto (the document id must not decrypt anything)
 npm run test:pet       # PET DICOM calibration and NEMA NU 2 background ROI placement
 npm run test:cor       # SPECT COR centroids, NEMA upper bounds, 3D geometry and ROC
+npm run test:acr       # ACR Medium ROIs, DICOM calibration, completeness and export
 npm run test:gamma     # Planar resolution, sensitivity, monthly batch identity and report states
 npm run test:fdtd      # FDTD fallback, PEC geometry and JSON configuration
 npm run check:security # Anonymizer and paste tests, then build and audit the GitHub Pages artifact
@@ -190,7 +191,7 @@ Firestore collections:
 - `src/utils/petNemaDicom.js` - PET series loader. It owns **all** the DICOM in this chain: `petNemaAnalysis.js` receives a `volume[]` whose voxels are already quantitative and contains no DICOM logic at all. Keep it that way. Each frame gets its own Rescale transformation, resolved with the precedence per-frame `PixelValueTransformationSequence` → shared → root dataset → identity, and the resolved calibration is reported back in `series.calibration` so it can be verified. This is not cosmetic: NU 2-2018 §7.4 pools 60 background ROIs across five axial planes, so frames scaled by different factors would inject variability that is not in the image, and while a uniform scale factor cancels in the NEMA ratios, a wrong **intercept** does not. `RealWorldValueMappingSequence` is not read, and no vendor-private factor is applied.
 - `src/pages/RTPlanCompare.jsx` and `src/utils/rtPlanParser.js` - DICOM RT Plan comparison.
 - `src/pages/Tg43Calculator.jsx` and `src/lib/brachy/` - HDR Ir-192 TG-43 calculations.
-- `src/pages/AcrQcPage.jsx` and `src/lib/acr-qc.js` - ACR Medium Phantom DICOM analysis.
+- `src/pages/AcrQcPage.jsx`, `src/lib/acr-qc.js`, `src/utils/acrQcRois.js` and `src/utils/acrQcValidation.js` - ACR Medium Phantom DICOM analysis. Read `ACR_QC.md`. PIU uses 160 cm² and must retain low-signal interior defects. Only the proposed anterior, exterior-connected notch is excluded from the small ROIs, and its overlay requires visual review; ghosting includes the entire large ROI. A complete assessment requires both ACR series, the sagittal localizer, acquisition checks and recorded visual tests. Complementary ellipse/grid/T2 PSG measurements must not determine the ACR verdict. Every input change invalidates results; exports use the last execution snapshot. Run `npm run test:acr` after changes.
 - `src/pages/LectorRapido.jsx` and `src/utils/rsvp.js` - RSVP reader with localStorage persistence.
 - `src/pages/InformeTanques.jsx` - iframe wrapper for the interactive Lu-177 tank report. The required static report is `public/Informe-Tanques-Terminal.html`; keep it tracked because the page loads it at runtime through `import.meta.env.BASE_URL`.
 - `src/pages/QCodes.jsx` and `src/utils/qcodes.js` - Q-code study quiz. Three 4-option question modes (code to meaning, meaning to code, and a cloze over the usage example), a three-step hint ladder (theme, 50/50, mnemonic), Leitner-box spaced repetition that resurfaces weak codes, per-code mastery, theme/deck filters and CW playback through the Web Audio API. Every entry's `example` **must contain its own code**: the cloze mode blanks it out to build the question.
