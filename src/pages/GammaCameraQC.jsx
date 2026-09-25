@@ -205,7 +205,13 @@ export function GammaWorkspace({ mode }) {
     <div className="page-header gamma-no-print"><div className="page-icon"><i className={`bi ${monthly ? 'bi-calendar-check' : mode === 'resolution' ? 'bi-crosshair' : 'bi-speedometer2'}`}></i></div>
       <h1 className="page-title">{monthly ? 'Informe mensual de gammacámara' : GAMMA_TESTS[mode]}</h1><p className="page-subtitle">{monthly ? 'Área privada · un equipo, un mes y todas sus pruebas' : mode === 'resolution' ? 'Fuentes lineales · FWHM y FWTM por cabezal y eje' : 'Cuentas por segundo y MBq · fondo y decaimiento'}</p></div>
     <section className="calc-card gamma-no-print">
-      <label className="gamma-upload"><i className="bi bi-files"></i><strong>{monthly ? 'Añadir todos los DICOM del mes' : 'Añadir imágenes DICOM'}</strong><span>Selecciona varios archivos · procesamiento en este navegador</span><input type="file" multiple accept=".dcm,application/dicom" disabled={busy} onChange={e => { loadFiles([...e.target.files]); e.target.value = '' }} /></label>
+      <label className={`gamma-upload${busy ? ' gamma-upload-busy' : ''}`}>
+        <i className="bi bi-files" aria-hidden="true"></i>
+        <strong>{monthly ? 'Añadir todos los DICOM del mes' : 'Añadir imágenes DICOM'}</strong>
+        <span>Selecciona varios archivos · procesamiento en este navegador</span>
+        <span className="gamma-upload-action"><i className="bi bi-folder2-open" aria-hidden="true"></i>{busy ? 'Procesando…' : 'Elegir archivos DICOM'}</span>
+        <input className="gamma-upload-input" type="file" multiple accept=".dcm,application/dicom" disabled={busy} onChange={e => { loadFiles([...e.target.files]); e.target.value = '' }} />
+      </label>
       <p className="gamma-hint">Las imágenes y los resultados permanecen en esta pestaña. Descarga el informe antes de cerrarla; no se guardan en un servidor.</p>
       {monthly && entries.length > 0 && <div className={`gamma-validation ${batch.valid ? 'pass' : 'fail'}`}><strong>{batch.valid ? `Lote verificado · ${batch.month} · ${batch.equipment}` : 'Lote incompatible: no se iniciará el análisis'}</strong>{batch.errors.length > 0 && <ul>{batch.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}<p>Se usa la fecha de adquisición y los identificadores StationName/DeviceSerialNumber, no el nombre del archivo ni la fecha de exportación.</p></div>}
       {entries.length > 0 && <div className="gamma-table-scroll"><table><thead><tr><th>Archivo / adquisición</th><th>Gammacámara</th><th>Prueba</th><th>Estado</th><th></th></tr></thead><tbody>{entries.map(e => <tr key={e.id} className={selectedId === e.id ? 'gamma-selected' : ''}>

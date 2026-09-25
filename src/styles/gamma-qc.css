@@ -5,10 +5,15 @@
 .gamma-qc button:hover:not(:disabled) { border-color: var(--accent-blue); }
 .gamma-qc button:disabled { opacity: .45; cursor: not-allowed; }
 .gamma-qc button.gamma-primary { background: var(--accent-blue); color: var(--bg-primary); font-weight: 600; }
-.gamma-upload { display: flex; flex-direction: column; align-items: center; gap: 12px; border: 1px dashed var(--accent-blue); border-radius: 10px; padding: 26px; background: rgba(136,192,208,.04); text-align: center; }
+.gamma-upload { display: flex; flex-direction: column; align-items: center; gap: 12px; border: 1px dashed var(--accent-blue); border-radius: 10px; padding: 26px; background: rgba(136,192,208,.04); text-align: center; cursor: pointer; }
 .gamma-upload > i { font-size: 1.7rem; color: var(--accent-blue); }
-.gamma-upload input { max-width: 100%; }
-.gamma-hint, .gamma-upload span { color: var(--text-muted); font-size: .8rem; line-height: 1.6; }
+.gamma-upload .gamma-upload-action { display: inline-flex; align-items: center; gap: 7px; margin-top: 4px; border-radius: 7px; padding: 9px 13px; background: var(--accent-blue); color: var(--bg-primary); font-size: .85rem; font-weight: 600; line-height: 1.4; }
+.gamma-upload:hover:not(.gamma-upload-busy) .gamma-upload-action { filter: brightness(1.12); }
+.gamma-upload:focus-within .gamma-upload-action { outline: 2px solid var(--text-primary); outline-offset: 3px; }
+.gamma-upload-busy { cursor: not-allowed; }
+.gamma-upload-busy .gamma-upload-action { opacity: .45; }
+.gamma-upload .gamma-upload-input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.gamma-hint, .gamma-upload > span:not(.gamma-upload-action) { color: var(--text-muted); font-size: .8rem; line-height: 1.6; }
 .gamma-validation { border: 1px solid var(--border); border-left-width: 4px; padding: 14px 18px; margin: 20px 0; border-radius: 7px; font-size: .85rem; }
 .gamma-validation.pass { border-left-color: var(--accent-green); }
 .gamma-validation.fail { border-left-color: #bf616a; }
