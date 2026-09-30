@@ -99,17 +99,19 @@ Fuente: [TRS-483 (2017)](https://www-pub.iaea.org/MTCD/Publications/PDF/D483_web
 ## PDD → TPR
 
 TRS-398 Rev.1, §6.3.1, nota 36 (p.84):
-TPR20,10 = 1.2661·PDD(20)/PDD(10)−0.0595. Se habilita para WFF, agua, SSD 100 cm,
+TPR20,10 = 1.2661·PDD(20)/PDD(10)−0.0595. Se habilita para WFF o, como estimación aproximada, FFF hasta 10 MV, agua, SSD 100 cm,
 10×10 cm **en superficie**, curva declarada como dosis y datos que abarquen 10 y 20 cm.
 Geometría y medida central sin cuña se confirman explícitamente por barrido.
-La publicación menciona evidencia de aplicación aproximada a FFF; esta versión
-no la generaliza automáticamente ni la encadena a una corrección msr.
+Para FFF se exige energía nominal conocida y confirmación explícita del uso aproximado.
+Se informa el alcance de la nota 36, se recomienda contraste con TPR medido antes
+de calibración y se conserva esa advertencia en el vínculo a kQ y en el JSON.
+No se encadena la estimación a una corrección msr.
 No se presenta una corrección de inverso del cuadrado como conversión general de
 PDD a TPR: faltarían la geometría de campo y la contribución de dispersión.
 
 El botón **Vincular este TPR al cálculo de kQ** fija el barrido de origen y mantiene
 el vínculo con su resultado calculado, no con una copia redondeada del número.
-Ese resultado ya es TPR(10) WFF: no vuelve a pasar por ec.28. Cambiar de barrido
+Ese resultado ya es una estimación del TPR de referencia WFF/FFF: no vuelve a pasar por ec.28. Cambiar de barrido
 activo no cambia el vínculo; editar el PDD lo recalcula, e invalidar sus condiciones,
 vaciar o cargar otro lote invalida el resultado. Se informa archivo y número de scan.
 Para trabajar directamente con un TPR de referencia medido hay un tercer origen,
@@ -125,7 +127,7 @@ de la cámara de referencia.
 
 | Índice/origen | Tabla | Q0 admitida |
 |---|---|---|
-| TPR de referencia vinculado a PDD WFF o medido directamente | TRS-398 Rev.1, 16, pp.90–93; 26 modelos | Co-60 |
+| TPR vinculado a PDD WFF/FFF (estimado) o medido directamente | TRS-398 Rev.1, 16, pp.90–93; 26 modelos | Co-60 |
 | TPR(10) obtenido desde TPR(S) msr WFF | TRS-483, 12, pp.83–85; 28 entradas | Co-60 |
 | TPR(10) obtenido desde TPR(S) msr FFF | TRS-483, 13, pp.88–90; 28 entradas | Co-60 |
 | R50 activo de electrones | TRS-398 Rev.1, 20, pp.110–111; 8 modelos | Co-60 |
@@ -176,3 +178,13 @@ cociente de calibración cruzada, incompatibilidad de Q0, trazabilidad y ausenci
 doble corrección del TPR. `npm run build:web` verifica la integración
 React/Vite y la auditoría de artefactos públicos. La compilación Rust/WASM existente
 se mantiene en el workflow de CI.
+
+## Resumen de todos los barridos
+
+La tabla de PDD y perfiles muestra una fila por scan con archivo, identificador,
+metadatos geométricos, métricas y avisos propios. Los PDD permiten declarar la
+magnitud en su fila; «Ver / ajustar» abre la curva y condiciones del scan seleccionado.
+No se copian confirmaciones ni ajustes entre barridos. El cálculo por lote aísla
+los errores de análisis: un perfil no evaluable no elimina los resultados de los demás.
+La exportación JSON conserva todos los resultados, incluidas las condiciones y
+la procedencia del TPR estimado de cada PDD.

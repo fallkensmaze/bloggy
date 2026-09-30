@@ -1,6 +1,6 @@
 import { R50_GRID, STOPPING_ROWS, MSR_TABLES } from './mccProtocolData.js'
 
-export const MCC_METHOD = 'mcc-1.2 / TRS-398 Rev.1 (2024) / TRS-483 (2017)'
+export const MCC_METHOD = 'mcc-1.3 / TRS-398 Rev.1 (2024) / TRS-483 (2017)'
 const valid = n => typeof n === 'number' && Number.isFinite(n)
 const lerp = (a,b,t) => a+(b-a)*t
 function bracket(grid, x) {
@@ -34,8 +34,20 @@ export function equivalentSmallField(x,y) {
   const ratio=x/y
   return { value:Math.sqrt(x*y), aspectRatio:ratio, recommended:ratio>0.7 && ratio<1.4 }
 }
-export function tprFromPdd(p10,p20,{ filter, ssd, xSurface, ySurface, water, confirmed }={}) {
-  if (!confirmed || !water || filter!=='WFF' || ![ssd,xSurface,ySurface].every(valid) || Math.abs(ssd-100)>0.01 || Math.abs(xSurface-10)>0.01 || Math.abs(ySurface-10)>0.01 || !valid(p10) || !valid(p20) || p10<=0 || p20<=0 || p20>=p10) return null
+export function tprPddIssues(p10,p20,{ filter, energy, ssd, xSurface, ySurface, water, confirmed }={}) {
+  const issues=[]
+  if(!['WFF','FFF'].includes(filter)) issues.push('Selecciona WFF o FFF para este barrido.')
+  if(filter==='FFF'&&!(valid(energy)&&energy>0&&energy<=10)) issues.push('La estimación FFF requiere energía nominal conocida, mayor que 0 y hasta 10 MV.')
+  if(!water) issues.push('Confirma que las profundidades están medidas en agua.')
+  if(!valid(ssd)||Math.abs(ssd-100)>0.01) issues.push('PDD → TPR requiere SSD = 100 cm.')
+  if(![xSurface,ySurface].every(valid)||Math.abs(xSurface-10)>0.01||Math.abs(ySurface-10)>0.01) issues.push('Introduce un campo de 10 × 10 cm en la superficie para esta conversión.')
+  if(!valid(p10)||!valid(p20)||p10<=0||p20<=0||p20>=p10) issues.push('Se necesitan dosis válidas a 10 y 20 cm, con PDD(20) menor que PDD(10).')
+  if(!confirmed) issues.push('Confirma las condiciones del PDD de este barrido para habilitar el TPR estimado.')
+  return issues
+}
+// TRS-398 Rev.1 §6.3.1, note 36: fitted to WFF; evidence supports approximate FFF use.
+export function tprFromPdd(p10,p20,options={}) {
+  if(tprPddIssues(p10,p20,options).length) return null
   const value=1.2661*p20/p10-0.0595
   return value>0 && value<1 ? value : null
 }

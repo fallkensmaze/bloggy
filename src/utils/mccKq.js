@@ -35,9 +35,9 @@ export function calculateKq({tableKey,chamber,quality,q0Type='co60',q0Quality=nu
 // Keep the provenance of the quality index. The PDD relation already yields TPR(10).
 export function resolvePhotonQuality(msr,scans,results) {
   if(msr.source==='pdd') {
-    const scan=scans.find(s=>s.key===msr.pddKey),value=results[msr.pddKey]?.tpr
+    const scan=scans.find(s=>s.key===msr.pddKey),value=results[msr.pddKey]?.tpr,info=results[msr.pddKey]?.tprInfo
     if(!scan || !finite(value)) return {value:null,tableKey:'398-photon',error:'El PDD vinculado ya no tiene un TPR válido. Revisa su magnitud y geometría de referencia.'}
-    return {value,input:value,tableKey:'398-photon',filter:'WFF',origin:'PDD → TPR de referencia (10×10)',scanKey:scan.key,fileName:scan.fileName,scanId:scan.id,correctionApplied:false}
+    return {value,input:value,tableKey:'398-photon',filter:info?.filter,estimated:true,warning:info?.warning,origin:`PDD → TPR de referencia estimado (10×10 · ${info?.filter||'filtro desconocido'})`,scanKey:scan.key,fileName:scan.fileName,scanId:scan.id,correctionApplied:false,tprInfo:info}
   }
   if(msr.source==='reference') {
     const value=mccNumber(msr.tpr),energy=mccNumber(msr.energy)
@@ -61,5 +61,5 @@ export function qualityFactorContext(settings,photon,electron) {
     const q0=settings.q0Type==='electron'?manualElectronQuality(settings.q0Quality,settings.q0Quantity||'dose'):null
     return {quality:manual?q.r50:electron?.r50??null,tableKey:settings.q0Type==='electron'?'398-electron-cross':'398-electron-co',origin:manual?'Calidad de electrones introducida manualmente':'R₅₀ del PDD de electrones activo',unit:'g/cm²',q0Quality:q0?.r50??null,manualQ:q,manualQ0:q0}
   }
-  return {quality:photon.value,tableKey:photon.tableKey,origin:photon.origin,unit:'',error:photon.error}
+  return {quality:photon.value,tableKey:photon.tableKey,origin:photon.origin,unit:'',error:photon.error,warning:photon.warning,estimated:photon.estimated||false}
 }

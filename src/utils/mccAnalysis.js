@@ -1,5 +1,5 @@
 import { mccNumber } from './mccParser.js'
-import { r50FromIon, stoppingPower, tprFromPdd } from './mccDosimetry.js'
+import { r50FromIon, stoppingPower, tprFromPdd, tprPddIssues } from './mccDosimetry.js'
 
 export function interpolate(points,x) {
   if (!Number.isFinite(x) || !points.length || x<points[0].x || x>points.at(-1).x) return null
@@ -45,8 +45,8 @@ function practicalRange(points) {
 export function defaultMccOptions(scan) {
   const m=scan.metadata, mode=(m.MODALITY||'').toUpperCase()
   const modality=['E','EL','ELECTRON','ELECTRONS'].includes(mode)?'electron':['X','PHOTON','PHOTONS'].includes(mode)?'photon':'unknown'
-  const filter=m.FILTER==='FFF'?'FFF':['FF','WFF'].includes(m.FILTER)?'WFF':'unknown'
-  return { modality,filter,quantity:'unknown',reference:false,depthShift:0,center:0,
+  const filter=(m.FILTER||'').toUpperCase()==='FFF'?'FFF':['FF','WFF'].includes((m.FILTER||'').toUpperCase())?'WFF':'unknown'
+  return { modality,filter,energy:mccNumber(m.ENERGY)??'',quantity:'unknown',reference:false,depthShift:0,center:0,
     ssd:mccNumber(m.SSD)===null?'':mccNumber(m.SSD)/10,water:m.MEAS_MEDIUM==='WATER',referenceConfirmed:false,
     xSurface:'',ySurface:'',regime:'auto' }
 }
@@ -70,7 +70,7 @@ export function analyzeMcc(scan, options=defaultMccOptions(scan)) {
     signal=signal.map(p=>({...p,x:p.x+shift}))
     if(signal.some(p=>p.x<0)) warnings.push('Existen posiciones por encima de la superficie tras el desplazamiento.')
     const raw=normalized(signal), rawMetrics=metricsPdd(raw)
-    let dose=null,metrics=null,electron=null,tpr=null
+    let dose=null,metrics=null,electron=null,tpr=null,tprInfo=null,tprIssues=[]
     if(options.quantity==='dose') { dose=raw; metrics=rawMetrics }
     if(options.modality==='electron' && options.quantity==='ion') {
       if(!options.water) throw new Error('La conversión de electrones exige profundidades equivalentes en agua.')
@@ -98,13 +98,22 @@ export function analyzeMcc(scan, options=defaultMccOptions(scan)) {
     if(options.quantity==='unknown') warnings.push('Declara si los datos son dosis o ionización antes de calcular parámetros de dosis.')
     if(options.modality==='electron' && !options.water) warnings.push('R50 como índice de calidad requiere profundidades en agua; no se informa en g/cm² sin confirmar el medio.')
     if(raw[0].y>=99.99 || raw.at(-1).y>=99.99) warnings.push('Máximo de señal en un extremo: el barrido puede estar incompleto.')
-    if(options.modality==='photon' && options.quantity==='dose') {
-      tpr=tprFromPdd(metrics.pdd10,metrics.pdd20,{...options,ssd:mccNumber(options.ssd),xSurface:mccNumber(options.xSurface),ySurface:mccNumber(options.ySurface),confirmed:options.referenceConfirmed})
-      if(tpr===null) warnings.push('TPR20,10 desde PDD disponible solo al confirmar agua, WFF, SSD 100 cm y 10×10 cm en superficie, con datos a 10 y 20 cm. Para FFF usa el TPR medido y la corrección de campo TRS-483.')
+    if(options.modality==='photon') {
+      const conditions={...options,energy:mccNumber(options.energy),ssd:mccNumber(options.ssd),xSurface:mccNumber(options.xSurface),ySurface:mccNumber(options.ySurface),confirmed:options.referenceConfirmed}
+      tprIssues=tprPddIssues(metrics?.pdd10,metrics?.pdd20,conditions)
+      if(options.quantity!=='dose') tprIssues.unshift('Declara dosis relativa / detector validado para calcular TPR desde este PDD.')
+      if(!tprIssues.length) tpr=tprFromPdd(metrics.pdd10,metrics.pdd20,conditions)
+      if(tpr!==null) {
+        tprInfo={filter:options.filter,energy:conditions.energy,estimated:true,method:'TRS-398 Rev.1 §6.3.1, nota 36',pddRatio:metrics.pdd20/metrics.pdd10}
+        if(options.filter==='FFF') {
+          tprInfo.warning='TPR FFF estimado con una relación ajustada a WFF; TRS-398 Rev.1 nota 36 menciona evidencia de uso aproximado. Contrastar con TPR medido antes de usarlo para calibración; el kQ vinculado hereda esta aproximación.'
+          warnings.push(tprInfo.warning)
+        }
+      } else warnings.push(...tprIssues)
     }
     if(options.modality==='photon' && options.quantity==='ion') warnings.push('Ionización de fotones: no se convierte automáticamente a PDD. Usa datos de dosis o declara expresamente la aproximación en origen.')
     if(metrics && options.modality==='electron') metrics.rp=practicalRange(dose)
-    return {type:'PDD',raw,dose,metrics,rawMetrics,electron,tpr,warnings,maxGap}
+    return {type:'PDD',raw,dose,metrics,rawMetrics,electron,tpr,tprInfo,tprIssues,warnings,maxGap}
   }
   const raw=normalized(signal),center=mccNumber(options.center)
   if(center===null) throw new Error('Centro de perfil no válido.')
@@ -141,6 +150,13 @@ export function analyzeMcc(scan, options=defaultMccOptions(scan)) {
   if(options.filter==='FFF' && !isSmall) warnings.push('FFF amplio: FWHM y penumbra 80–20 están referidos al máximo global, no al borde renormalizado. Se añade distancia entre inflexiones estimadas; no se aplican ajustes específicos de TrueBeam.')
   if(maxGap>width/10) warnings.push('Muestreo escaso respecto al tamaño de campo: revisar resolución espacial del perfil.')
   return {type:'profile',raw,maxGap,warnings,inflections,metrics:{width,beamCenter,centerDeviation:beamCenter-center,left,right,penumbraLeft:pen('left'),penumbraRight:pen('right'),flatness,symmetry,unflatness:options.filter==='FFF'?unflatness:null,inflectionWidth:inflections.every(Boolean)?inflections[1].x-inflections[0].x:null},isSmall}
+}
+
+export function analyzeMccBatch(scans,settings={}) {
+  return Object.fromEntries(scans.map(scan=>{
+    try { return [scan.key,analyzeMcc(scan,settings[scan.key]||defaultMccOptions(scan))] }
+    catch(error) { return [scan.key,{error:error.message}] }
+  }))
 }
 
 // Pair selection is explicit; never combine scans merely because their filenames match.
