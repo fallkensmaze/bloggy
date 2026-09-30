@@ -102,6 +102,13 @@ TRS-398 Rev.1, §6.3.1, nota 36 (p.84):
 TPR20,10 = 1.2661·PDD(20)/PDD(10)−0.0595. Se habilita para WFF o, como estimación aproximada, FFF hasta 10 MV, agua, SSD 100 cm,
 10×10 cm **en superficie**, curva declarada como dosis y datos que abarquen 10 y 20 cm.
 Geometría y medida central sin cuña se confirman explícitamente por barrido.
+La confirmación declara también que se acepta la curva exportada de fotones como
+dosis relativa; se actualiza la magnitud en esa misma acción. La unidad Gy/min
+se muestra como información y nunca basta para inferir dosis corregida, especialmente
+en electrones. Para SSD igual a la distancia al isocentro se proponen las dimensiones
+FIELD_INPLANE/CROSSPLANE (mm → cm) en superficie, sujetas a revisión y confirmación.
+No se usan REF_FIELD_*: pueden describir un campo de referencia diferente. Sin un
+plano común conocido se mantienen las dimensiones vacías para entrada manual.
 Para FFF se exige energía nominal conocida y confirmación explícita del uso aproximado.
 Se informa el alcance de la nota 36, se recomienda contraste con TPR medido antes
 de calibración y se conserva esa advertencia en el vínculo a kQ y en el JSON.

@@ -46,9 +46,19 @@ export function defaultMccOptions(scan) {
   const m=scan.metadata, mode=(m.MODALITY||'').toUpperCase()
   const modality=['E','EL','ELECTRON','ELECTRONS'].includes(mode)?'electron':['X','PHOTON','PHOTONS'].includes(mode)?'photon':'unknown'
   const filter=(m.FILTER||'').toUpperCase()==='FFF'?'FFF':['FF','WFF'].includes((m.FILTER||'').toUpperCase())?'WFF':'unknown'
+  // FIELD_* is the acquired field; REF_FIELD_* belongs to the reference setup.
+  // At SSD = isocentre distance, the surface and isocentre field planes coincide.
+  const ssd=mccNumber(m.SSD),isocenter=mccNumber(m.ISOCENTER)
+  const surfaceKnown=ssd>0&&isocenter>0&&Math.abs(ssd-isocenter)<0.01
+  const surfaceField=key=>surfaceKnown&&mccNumber(m[key])>0?mccNumber(m[key])/10:''
   return { modality,filter,energy:mccNumber(m.ENERGY)??'',quantity:'unknown',reference:false,depthShift:0,center:0,
-    ssd:mccNumber(m.SSD)===null?'':mccNumber(m.SSD)/10,water:m.MEAS_MEDIUM==='WATER',referenceConfirmed:false,
-    xSurface:'',ySurface:'',regime:'auto' }
+    ssd:ssd===null?'':ssd/10,water:m.MEAS_MEDIUM==='WATER',referenceConfirmed:false,
+    xSurface:surfaceField('FIELD_CROSSPLANE'),ySurface:surfaceField('FIELD_INPLANE'),regime:'auto' }
+}
+// This action is labelled as accepting the exported photon curve as relative dose.
+// Measurement units alone do not certify detector corrections, particularly for electrons.
+export function confirmPddDose(options,confirmed) {
+  return {...options,referenceConfirmed:confirmed,quantity:confirmed&&options.modality==='photon'?'dose':options.quantity}
 }
 export function analyzeMcc(scan, options=defaultMccOptions(scan)) {
   const warnings=[...scan.warnings],m=scan.metadata
@@ -100,7 +110,7 @@ export function analyzeMcc(scan, options=defaultMccOptions(scan)) {
     if(raw[0].y>=99.99 || raw.at(-1).y>=99.99) warnings.push('Máximo de señal en un extremo: el barrido puede estar incompleto.')
     if(options.modality==='photon') {
       const conditions={...options,energy:mccNumber(options.energy),ssd:mccNumber(options.ssd),xSurface:mccNumber(options.xSurface),ySurface:mccNumber(options.ySurface),confirmed:options.referenceConfirmed}
-      tprIssues=tprPddIssues(metrics?.pdd10,metrics?.pdd20,conditions)
+      tprIssues=tprPddIssues((metrics||rawMetrics)?.pdd10,(metrics||rawMetrics)?.pdd20,conditions)
       if(options.quantity!=='dose') tprIssues.unshift('Declara dosis relativa / detector validado para calcular TPR desde este PDD.')
       if(!tprIssues.length) tpr=tprFromPdd(metrics.pdd10,metrics.pdd20,conditions)
       if(tpr!==null) {

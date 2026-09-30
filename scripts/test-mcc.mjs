@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { parseMcc, mccNumber } from '../src/utils/mccParser.js'
-import { analyzeMcc, analyzeMccBatch, defaultMccOptions, interpolate, profilePairIssues } from '../src/utils/mccAnalysis.js'
+import { analyzeMcc, analyzeMccBatch, defaultMccOptions, confirmPddDose, interpolate, profilePairIssues } from '../src/utils/mccAnalysis.js'
 import { r50FromIon, stoppingPower, equivalentMsr, equivalentSmallField, tprFromPdd, tprToReference } from '../src/utils/mccDosimetry.js'
 import { STOPPING_ROWS, R50_GRID } from '../src/utils/mccProtocolData.js'
 import { mccDemo } from '../src/utils/mccDemo.js'
@@ -22,6 +22,22 @@ assert.deepEqual(descending.points,scan.points)
 const two=parseMcc(`BEGIN_SCAN 1\nFILTER=FFF\nENERGY=10\n${block}\nEND_SCAN 1\nBEGIN_SCAN 2\n${block}\nEND_SCAN 2`).scans
 assert.equal(two[1].metadata.FILTER,undefined)
 assert.equal(defaultMccOptions(two[1]).filter,'unknown')
+// BeamScan export: acquisition field differs from reference setup. Keep those apart.
+const beamScan={...scan,metadata:{MODALITY:'X',FILTER:'FFF',ENERGY:'6',SSD:'1000',ISOCENTER:'1000',FIELD_INPLANE:'100',FIELD_CROSSPLANE:'100',REF_FIELD_INPLANE:'200',REF_FIELD_CROSSPLANE:'200',MEAS_MEDIUM:'WATER',MEAS_UNIT:'Gy/min'},points:[{x:0,y:30},{x:15,y:100},{x:100,y:63},{x:200,y:34},{x:300,y:18}]}
+const imported=defaultMccOptions(beamScan)
+assert.equal(imported.xSurface,10);assert.equal(imported.ySurface,10)
+assert.equal(imported.quantity,'unknown','Gy/min alone is not detector validation')
+assert.equal(defaultMccOptions({...beamScan,metadata:{...beamScan.metadata,SSD:'900'}}).xSurface,'')
+assert.equal(defaultMccOptions({...beamScan,metadata:{...beamScan.metadata,ISOCENTER:undefined}}).xSurface,'')
+const waiting=analyzeMcc(beamScan,imported)
+assert.equal(waiting.tpr,null)
+assert.ok(!waiting.tprIssues.some(x=>x.startsWith('Se necesitan dosis')),'Existing 10/20 cm data must not be described as absent')
+const accepted=confirmPddDose(imported,true)
+assert.equal(accepted.quantity,'dose')
+near(analyzeMcc(beamScan,accepted).tpr,1.2661*34/63-.0595)
+assert.equal(analyzeMcc(beamScan,confirmPddDose(accepted,false)).tpr,null)
+assert.equal(confirmPddDose({...imported,modality:'electron',quantity:'ion'},true).quantity,'ion')
+assert.equal(imported.referenceConfirmed,false,'Confirmation must not mutate another scan settings object')
 assert.throws(()=>analyzeMcc(scan,{...defaultMccOptions(scan),reference:true}),/Referencia ausente/)
 assert.equal(analyzeMcc(scan).metrics,null,'Unknown quantity must not be labelled dose')
 near(interpolate([{x:0,y:0},{x:2,y:10},{x:10,y:18}],6),14)
