@@ -149,6 +149,17 @@ declaración de incertidumbre.
 
 El JSON incluye el estado de origen, el barrido vinculado, el índice final, el
 formalismo, Q0, cámara y los valores usados para interpolar numerador/denominador.
+La opción **R50,ion / R50 manual** funciona sin cargar un MCC. Acepta el índice de
+ionización o dosis de Q, y la misma elección para Q0; todos en g/cm². Convierte
+solo los índices declarados como ionización mediante ec.37. Un R50 ya de dosis
+permanece intacto. Esta conversión de índice no reemplaza la corrección por
+stopping powers punto a punto de una curva completa.
+Se presentan separadamente k(Q,Qint), k(Q0,Qint) y su cociente. El primero puede
+consultarse aun sin introducir Q0; el cociente requiere ambos índices válidos.
+Un botón permite declarar explícitamente Q0=Qint. Los 7.5 son g/cm² de R50,
+no MeV; Qint es una referencia matemática y no requiere una medida en ese haz
+(TRS-398 Rev.1 §3.2.2). Se conservan ambos valores originales y sus conversiones
+en la exportación JSON. No se infiere R50 a partir de energía nominal en MeV.
 El certificado individual tiene prioridad sobre factores genéricos. Este módulo
 no importa certificados ni calcula dosis absoluta u output factors de perfiles.
 Antes de usar en clínica se necesita validación con resultados de referencia del servicio.

@@ -23,7 +23,7 @@ export default function MccAnalyzer() {
   const [overlay,setOverlay]=useState([]),[error,setError]=useState(''),[busy,setBusy]=useState(false)
   const [pairKey,setPairKey]=useState(''),[pairConfirmed,setPairConfirmed]=useState(false)
   const [msr,setMsr]=useState({x:'10',y:'10',filter:'FFF',energy:'6',tpr:'',confirmed:false,source:'manual',pddKey:''})
-  const [kSettings,setKSettings]=useState({source:'photon',chamber:'',q0Type:'co60',q0Quality:''})
+  const [kSettings,setKSettings]=useState({source:'photon',chamber:'',q0Type:'co60',q0Quality:'',q0Quantity:'dose',electronQuantity:'ion',electronQuality:''})
   const [small,setSmall]=useState({tpr:'',detector:''})
   const loadId=useRef(0)
   const current=scans.find(s=>s.key===selected)
@@ -73,7 +73,7 @@ export default function MccAnalyzer() {
   const photonQuality=resolvePhotonQuality(msr,scans,results)
   const tprRef=photonQuality.value
   const kContext=qualityFactorContext(kSettings,photonQuality,options?.modality==='electron'?result?.electron:null)
-  const kResult=calculateKq({...kContext,chamber:kSettings.chamber,q0Type:kSettings.q0Type,q0Quality:mccNumber(kSettings.q0Quality)})
+  const kResult=calculateKq({...kContext,chamber:kSettings.chamber,q0Type:kSettings.q0Type})
   const radius=lcpeRadius(mccNumber(small.tpr)),detector=mccNumber(small.detector)
   const lcpeClear=equivalent&&radius!==null&&detector!==null&&detector>=0?Math.min(result.metrics.width,otherResult.metrics.width)/20>=radius+detector/20:null
   function exportJson() {
