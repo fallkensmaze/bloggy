@@ -32,6 +32,7 @@ import ExamPrintTickets from './pages/ExamPrintTickets'
 import ExamJoin from './pages/ExamJoin'
 import FilmDosimetry from './pages/FilmDosimetry'
 import GammaCameraQC, { GammaMonthly } from './pages/GammaCameraQC'
+import MccAnalyzer from './pages/MccAnalyzer'
 
 function App() {
   return (
@@ -60,6 +61,7 @@ function App() {
         <Route path="radioaficionado" element={<RadioExam />} />
         <Route path="fdtd-simulator" element={<FdtdSimulator />} />
         <Route path="dosimetria-pelicula" element={<FilmDosimetry />} />
+        <Route path="analizador-mcc" element={<MccAnalyzer />} />
       </Route>
       <Route path="/admin" element={<Admin />} />
       <Route path="/quiz-creator" element={<QuizCreator />} />
