@@ -21,6 +21,8 @@ const REF483='https://www-pub.iaea.org/MTCD/Publications/PDF/D483_web.pdf'
 export default function MccAnalyzer() {
   const [scans,setScans]=useState([]),[selected,setSelected]=useState(''),[settings,setSettings]=useState({})
   const [overlay,setOverlay]=useState([]),[error,setError]=useState(''),[busy,setBusy]=useState(false)
+  const [dragging,setDragging]=useState(false)
+  const fileInput=useRef(null),dragDepth=useRef(0)
   const [pairKey,setPairKey]=useState(''),[pairConfirmed,setPairConfirmed]=useState(false)
   const [msr,setMsr]=useState({x:'10',y:'10',filter:'FFF',energy:'6',tpr:'',confirmed:false,source:'manual',pddKey:''})
   const [kSettings,setKSettings]=useState({source:'photon',chamber:'',q0Type:'co60',q0Quality:'',q0Quantity:'dose',electronQuantity:'ion',electronQuality:''})
@@ -41,8 +43,10 @@ export default function MccAnalyzer() {
     setKSettings(v=>({...v,source:'photon',chamber:'',q0Type:'co60',q0Quality:''}))
   }
   async function load(files) {
+    if(!files.length) return
     const token=++loadId.current;setBusy(true);setError('')
     try {
+      if(files.some(file=>!file.name.toLowerCase().endsWith('.mcc'))) throw new Error('Selecciona o arrastra únicamente archivos .mcc.')
       if(files.length>30 || files.reduce((s,f)=>s+f.size,0)>40*1024*1024) throw new Error('Máximo 30 archivos y 40 MB por lote.')
       const parsed=[]
       for(const [i,file] of files.entries()) {
@@ -93,7 +97,21 @@ export default function MccAnalyzer() {
   const pdd=result?.type==='PDD',metric=result?.metrics
   return <main className="mcc-page">
     <header className="mcc-header"><div><p className="mcc-eyebrow">RADIOTERAPIA · DOSIMETRÍA RELATIVA</p><h1>Analizador MCC</h1><p>PDD, perfiles y calidad del haz. Cálculo local en tu navegador.</p></div><span className="mcc-badge">TRS‑398 · TRS‑483</span></header>
-    <section className="mcc-card mcc-upload"><div><h2>1. Cargar barridos</h2><p>Archivos PTW de tanque de agua. Cada barrido conserva sus metadatos y ajustes.</p><input aria-label="Archivos MCC" type="file" accept=".mcc,.MCC" multiple disabled={busy} onChange={e=>{load([...e.target.files]);e.target.value=''}}/></div><div className="mcc-actions"><button onClick={demo} disabled={busy}>Probar con datos sintéticos</button><button onClick={clear}>Vaciar</button></div></section>
+    <section className="mcc-card"><h2>1. Cargar barridos</h2><p>Archivos PTW de tanque de agua. Cada barrido conserva sus metadatos y ajustes.</p>
+      <div className={`mcc-dropzone${dragging?' mcc-dropzone-active':''}`} aria-label="Zona para soltar archivos MCC" aria-busy={busy}
+        onDragEnter={e=>{e.preventDefault();if(!busy&&e.dataTransfer.types.includes('Files')){dragDepth.current++;setDragging(true)}}}
+        onDragOver={e=>{e.preventDefault();e.dataTransfer.dropEffect=busy?'none':'copy'}}
+        onDragLeave={e=>{e.preventDefault();dragDepth.current=Math.max(0,dragDepth.current-1);if(!dragDepth.current)setDragging(false)}}
+        onDrop={e=>{e.preventDefault();dragDepth.current=0;setDragging(false);if(!busy)load([...e.dataTransfer.files])}}>
+        <svg className="mcc-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></svg>
+        <strong>{dragging?'Suelta los archivos aquí':'Arrastra y suelta aquí tus archivos MCC'}</strong>
+        <span className="mcc-note">o selecciónalos desde tu equipo</span>
+        <input ref={fileInput} aria-label="Archivos MCC" type="file" accept=".mcc,.MCC" multiple hidden disabled={busy} onChange={e=>{load([...e.target.files]);e.target.value=''}}/>
+        <button type="button" className="mcc-upload-button" disabled={busy} onClick={()=>fileInput.current?.click()}>{busy?'Leyendo archivos…':'Seleccionar archivos MCC'}</button>
+        <span className="mcc-note">.mcc · hasta 30 archivos · 20 MB por archivo y 40 MB por lote</span>
+      </div>
+      <div className="mcc-upload-footer"><p className="mcc-note" role="status">{scans.length?`${scans.length} barridos cargados`:'Ningún archivo cargado'}</p><div className="mcc-actions"><button onClick={demo} disabled={busy}>Probar con datos sintéticos</button><button onClick={clear}>Vaciar</button></div></div>
+    </section>
     {busy&&<p role="status">Leyendo MCC…</p>}{error&&<p className="mcc-error" role="alert">{error}</p>}
     {!!scans.length&&<>
       <div className="mcc-toolbar"><Field title={`${scans.length} barridos · selección activa`}><select value={selected} onChange={e=>choose(e.target.value)}>{scans.map(s=><option key={s.key} value={s.key}>{label(s)}</option>)}</select></Field><div className="mcc-actions"><button onClick={exportJson}>Informe JSON</button><button onClick={exportCsv}>Curvas CSV</button></div></div>
