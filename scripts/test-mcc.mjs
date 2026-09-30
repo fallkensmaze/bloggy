@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { parseMcc, mccNumber } from '../src/utils/mccParser.js'
-import { analyzeMcc, defaultMccOptions, interpolate, profilePairIssues } from '../src/utils/mccAnalysis.js'
+import { analyzeMcc, analyzeMccBatch, defaultMccOptions, interpolate, profilePairIssues } from '../src/utils/mccAnalysis.js'
 import { r50FromIon, stoppingPower, equivalentMsr, equivalentSmallField, tprFromPdd, tprToReference } from '../src/utils/mccDosimetry.js'
 import { STOPPING_ROWS, R50_GRID } from '../src/utils/mccProtocolData.js'
 import { mccDemo } from '../src/utils/mccDemo.js'
@@ -90,6 +90,9 @@ assert.equal(tprToReference(.65,3.9),null)
 const geometry={filter:'WFF',ssd:100,xSurface:10,ySurface:10,water:true,confirmed:true}
 near(tprFromPdd(67,38,geometry),1.2661*38/67-.0595)
 for(const change of [{filter:'FFF'},{ssd:90},{xSurface:9},{confirmed:false},{water:false}]) assert.equal(tprFromPdd(67,38,{...geometry,...change}),null)
+for(const energy of [6,10]) near(tprFromPdd(63,34,{...geometry,filter:'FFF',energy}),1.2661*34/63-.0595)
+for(const energy of [null,0,15,NaN]) assert.equal(tprFromPdd(63,34,{...geometry,filter:'FFF',energy}),null)
+for(const change of [{ssd:90},{xSurface:5},{confirmed:false}]) assert.equal(tprFromPdd(63,34,{...geometry,filter:'FFF',energy:6,...change}),null)
 assert.equal(tprFromPdd(67,null,geometry),null)
 
 // Public upstream fixtures: parser compatibility independent of our synthetic format.
@@ -109,6 +112,23 @@ const real=analyzeMcc(realPdd,{...defaultMccOptions(realPdd),quantity:'dose'})
 near(real.metrics.dmax,14)
 near(real.metrics.pdd10,realPdd.points.find(p=>p.x===100).y/1.9154*100)
 const demos=parseMcc(mccDemo()).scans
+// Mixed multi-scan MCC: every scan gets its own result; one bad analysis cannot suppress others.
+const mixed=demos.map((s,i)=>({...s,key:`mixed-${i}`}))
+mixed[0]={...mixed[0],metadata:{...mixed[0].metadata,FILTER:'FFF'}}
+const batchSettings={[mixed[0].key]:{...defaultMccOptions(mixed[0]),quantity:'dose',referenceConfirmed:true,xSurface:10,ySurface:10}}
+const batch=analyzeMccBatch(mixed,batchSettings)
+assert.equal(Object.keys(batch).length,5)
+assert.equal(batch[mixed[0].key].tprInfo.filter,'FFF')
+assert.equal(batch[mixed[0].key].tprInfo.estimated,true)
+assert.match(batch[mixed[0].key].tprInfo.warning,/aproximación/)
+assert.equal(batch[mixed[1].key].metrics,null,'Quantity declaration must not leak to another PDD')
+near(batch[mixed[0].key].tpr,1.2661*batch[mixed[0].key].metrics.pdd20/batch[mixed[0].key].metrics.pdd10-.0595)
+for(const i of [2,3,4]) assert.ok(batch[mixed[i].key].metrics.width>0)
+const changed=analyzeMccBatch(mixed,{...batchSettings,[mixed[2].key]:{...defaultMccOptions(mixed[2]),center:''}})
+assert.match(changed[mixed[2].key].error,/Centro/)
+near(changed[mixed[0].key].tpr,batch[mixed[0].key].tpr)
+near(changed[mixed[3].key].metrics.width,batch[mixed[3].key].metrics.width)
+assert.notEqual(batch[mixed[2].key].metrics.centerDeviation,batch[mixed[3].key].metrics.centerDeviation)
 assert.deepEqual(profilePairIssues(demos[2],demos[3]),[])
 assert.ok(profilePairIssues(demos[2],{...demos[3],metadata:{...demos[3].metadata,SSD:'900'}}).length)
 assert.ok(profilePairIssues(demos[2],demos[2]).length)
