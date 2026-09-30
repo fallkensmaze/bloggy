@@ -1,3 +1,6 @@
+import CorProjectionReview from '../components/CorProjectionReview'
+import { parseCorDICOM } from '../utils/corDicom'
+import CorAcquisitionForm from '../components/CorAcquisitionForm'
 import { useMemo, useState } from 'react'
 import GammaImage, { GammaProfiles, tomographyMosaic } from '../components/GammaImage'
 import { classifyGamma, parseGammaDicom } from '../utils/gammaDicom'
@@ -79,7 +82,7 @@ function FileSettings({ entry, frameIndex, update }) {
       <p className="gamma-hint">Se usa el mismo motor y validación que Uniformidad NEMA. Las declaraciones pertenecen únicamente a este DICOM.</p>
     </>}
     {type === 'cor' && <><div className="gamma-fields"><Field label="Límite δCOR (mm) · individual y entre cabezales" value={o.corLimit} min="0" onChange={v => set('corLimit', v)} />
-      <Field label="Límite δAXIAL (mm) · individual y entre cabezales" value={o.axialLimit} min="0" onChange={v => set('axialLimit', v)} /></div><p className="gamma-hint">Método existente de tres fuentes puntuales. Se conservan las cuatro cotas NEMA y sus comprobaciones de adquisición.</p></>}
+      <Field label="Límite δAXIAL (mm) · individual y entre cabezales" value={o.axialLimit} min="0" onChange={v => set('axialLimit', v)} /></div><p className="gamma-hint">Método de tres fuentes puntuales. Se conservan las cuatro cotas NEMA y sus comprobaciones de adquisición.</p><CorAcquisitionForm value={o.corDeclaration} onChange={v => set('corDeclaration', v)} /></>}
     {type === 'tomography' && <><label className="gamma-field"><span>Hallazgos de la revisión tomográfica</span><textarea className="dark-input" rows="4" value={o.tomoObservations} onChange={e => set('tomoObservations', e.target.value)} placeholder="Fantoma, cortes revisados, uniformidad visual, anillos, defectos, resolución/contraste visual y comparación con referencia…" /></label>
       <Choice label="Valoración del especialista" value={o.tomoVerdict} onChange={v => set('tomoVerdict', v)}><option value="">Pendiente de revisión</option><option value="Conforme">Conforme según protocolo visual</option><option value="No conforme">No conforme</option></Choice></>}
     {type !== 'unknown' && <>
@@ -112,6 +115,10 @@ function RecordResult({ record, detailed = true }) {
 function FilePreview({ entry, frameIndex, setFrameIndex, update, privateReport }) {
   const [windowFraction, setWindowFraction] = useState(1), [aiMessage, setAiMessage] = useState(''), [prompt, setPrompt] = useState('')
   const image = entry.image, frame = image.frameInfo[frameIndex]
+  const corSeries = useMemo(() => {
+    if (entry.type !== 'cor') return null
+    try { return parseCorDICOM(entry.buffer) } catch { return null }
+  }, [entry.type, entry.buffer])
   const maximum = useMemo(() => {
     let max = 0
     const frames = entry.type === 'tomography' ? image.frames : [image.frames[frameIndex]]
@@ -145,6 +152,7 @@ function FilePreview({ entry, frameIndex, setFrameIndex, update, privateReport }
     <p className="gamma-hint">{image.cols} × {image.rows} px · píxel fila/columna {image.pixelSpacing?.map(v => fmt(v, 4)).join(' / ') || 'desconocido'} mm<br />{fmt(frame.totalCounts, 0)} cuentas · {fmt(frame.durationSeconds)} s · {frame.energyWindowKeV.map(v => fmt(v, 1)).join('–')} keV · {frame.collimator || 'colimador sin dato'}</p>
     {entry.type === 'resolution' && roi && <><p className="gamma-hint">Arrastra sobre la imagen o ajusta la ROI (coordenadas de matriz, desde 0).</p><div className="gamma-roi-fields">{[['x', 'Columna'], ['y', 'Fila'], ['width', 'Ancho'], ['height', 'Alto']].map(([key, label]) => <Field key={key} label={label} value={roi[key]} step="1" min="0" onChange={v => setRoi({ ...roi, [key]: Number(v) })} />)}</div><button onClick={() => setRoi(null)}>Restaurar ROI automática</button></>}
     {entry.type === 'tomography' && privateReport && <div className="gamma-ai"><h3>Consulta visual a ChatGPT</h3><p>Prepara hasta 12 cortes con escala común y una consulta. Revisa también el resto de cortes en el selector. El envío y la incorporación de observaciones son manuales.</p><button onClick={prepareChatGPT}>Preparar imagen y consulta</button> <a href="https://chatgpt.com/" target="_blank" rel="noreferrer">Abrir ChatGPT ↗</a><p role="status">{aiMessage}</p>{prompt && <textarea className="dark-input" aria-label="Consulta para ChatGPT" rows="7" readOnly value={prompt} />}</div>}
+    {corSeries && <CorProjectionReview series={corSeries} results={entry.records?.[0]?.details} />}
   </div><FileSettings entry={entry} frameIndex={frameIndex} update={update} /></div>
 }
 

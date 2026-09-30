@@ -1,3 +1,5 @@
+import { evaluateCorAcquisition, corNumber } from './corValidation.js'
+
 const DEFAULT_ROI_MM = 45
 const EXPECTED_SOURCES = 3
 const EPSILON = 1e-10
@@ -65,7 +67,8 @@ function centroidAroundPeak(profile, peakIndex, minimum = 0, maximum = profile.l
     value: weightedCentroid(profile, start, end),
     start,
     end,
-    fwhmPixels: Math.max(1, right - left)
+    fwhmPixels: (right - 1 + (profile[right - 1] - halfMaximum) / (profile[right - 1] - profile[right]))
+      - (left + (halfMaximum - profile[left]) / (profile[left + 1] - profile[left]))
   }
 }
 
@@ -115,8 +118,9 @@ function measureSource(frame, rows, cols, axialHint, roiRows, roiCols) {
   const halfRows = Math.max(2, Math.floor(roiRows / 2))
   const halfCols = Math.max(2, Math.floor(roiCols / 2))
   const centreRow = Math.round(axialHint)
-  const minRow = Math.max(0, centreRow - halfRows)
-  const maxRow = Math.min(rows - 1, centreRow + halfRows)
+  const minRow = centreRow - halfRows
+  const maxRow = centreRow + halfRows
+  if (minRow < 0 || maxRow >= rows) throw new Error('ROI axial incompleta en el borde de la imagen')
   const xProfile = new Float64Array(cols)
 
   for (let row = minRow; row <= maxRow; row++) {
@@ -129,8 +133,9 @@ function measureSource(frame, rows, cols, axialHint, roiRows, roiCols) {
     if (xProfile[col] > xProfile[xPeak]) xPeak = col
   }
   const xCentroid = centroidAroundPeak(xProfile, xPeak)
-  const minCol = Math.max(0, Math.round(xCentroid.value) - halfCols)
-  const maxCol = Math.min(cols - 1, Math.round(xCentroid.value) + halfCols)
+  const minCol = Math.round(xCentroid.value) - halfCols
+  const maxCol = Math.round(xCentroid.value) + halfCols
+  if (minCol < 0 || maxCol >= cols) throw new Error('ROI transversal incompleta en el borde de la imagen')
   const yProfile = new Float64Array(rows)
   let maximumPixel = 0
   let roiCounts = 0
@@ -158,6 +163,7 @@ function measureSource(frame, rows, cols, axialHint, roiRows, roiCols) {
     roiCounts,
     transverseFwhmPixels: xCentroid.fwhmPixels,
     axialFwhmPixels: yCentroid.fwhmPixels,
+    centroidWindows: { x: [xCentroid.start, xCentroid.end], y: [yCentroid.start, yCentroid.end] },
     roi: { minRow, maxRow, minCol, maxCol }
   }
 }
@@ -167,14 +173,31 @@ function groupByDetector(series, sourceHints, roiRows, roiCols) {
   series.frames.forEach((frame, frameIndex) => {
     const frameMeta = series.frameMeta[frameIndex]
     const detectorNumber = frameMeta.detectorNumber
+    const hints = sourceHints[detectorNumber]
+    const axialProfile = new Float64Array(series.rows)
+    for (let y = 0; y < series.rows; y++) {
+      for (let x = 0; x < series.cols; x++) axialProfile[y] += frame[y * series.cols + x]
+    }
     if (!grouped.has(detectorNumber)) grouped.set(detectorNumber, [])
     grouped.get(detectorNumber).push({
-      ...frameMeta,
-      frameIndex,
+      ...frameMeta, frameIndex,
       totalCounts: frame.reduce((sum, value) => sum + value, 0),
-      sources: sourceHints.map((hint, sourceIndex) => {
+      sources: hints.map((hint, sourceIndex) => {
         try {
-          return { sourceIndex, ...measureSource(frame, series.rows, series.cols, hint.row, roiRows, roiCols) }
+          const lo = sourceIndex ? Math.floor((hints[sourceIndex - 1].row + hint.row) / 2) + 1 : 0
+          const hi = sourceIndex + 1 < hints.length ? Math.floor((hint.row + hints[sourceIndex + 1].row) / 2) : series.rows - 1
+          let peak = lo
+          for (let y = lo + 1; y <= hi; y++) if (axialProfile[y] > axialProfile[peak]) peak = y
+          let y = centroidAroundPeak(axialProfile, peak, lo, hi).value
+          // Reacquire independently in each frame, then centre the physical ROI.
+          // Never use the previous view as a finite fallback for a missing source.
+          for (let iteration = 0; iteration < 6; iteration++) {
+            const measurement = measureSource(frame, series.rows, series.cols, y, roiRows, roiCols)
+            if (measurement.y < lo || measurement.y > hi) throw new Error('la fuente abandona su región axial; identidad no verificable')
+            if (Math.round(measurement.y) === Math.round(y)) return { sourceIndex, ...measurement }
+            y = measurement.y
+          }
+          throw new Error('el recentrado axial no converge')
         } catch (error) {
           throw new Error(`Cabezal ${detectorNumber}, frame ${frameIndex + 1}, fuente ${sourceIndex + 1}: ${error.message}`)
         }
@@ -268,21 +291,10 @@ function calculateHeadPairs(detectors, pixelSpacing) {
       const sources = Array.from({ length: sourceCount }, (_, sourceIndex) => {
         const sourceA = detectorA.sources[sourceIndex]
         const sourceB = detectorB.sources[sourceIndex]
-        const viewDifferences = []
-        for (const measurementA of sourceA.measurements) {
-          const sameView = sourceB.measurements.find(
-            (candidate) => candidate.viewNumber === measurementA.viewNumber
-          )
-          const measurementB = sameView || sourceB.measurements.reduce((best, candidate) => (
-            angleDistance(candidate.angleDeg, measurementA.angleDeg) <
-            angleDistance(best.angleDeg, measurementA.angleDeg) ? candidate : best
-          ), sourceB.measurements[0])
-          viewDifferences.push(measurementA.y - measurementB.y)
-        }
         return {
           sourceIndex,
           deltaCorMm: Math.abs(sourceA.corPixels - sourceB.corPixels) * pixelWidth,
-          relativeAxialMm: Math.abs(mean(viewDifferences)) * pixelHeight
+          relativeAxialMm: Math.abs(sourceA.meanAxialPixels - sourceB.meanAxialPixels) * pixelHeight
         }
       })
       pairs.push({
@@ -509,22 +521,31 @@ export function analyzeCor(series, options = {}) {
     throw new Error('COR: píxeles, espaciado o ángulos inválidos')
   }
 
-  const roiSizeMm = Number.isFinite(options.roiSizeMm) ? options.roiSizeMm : DEFAULT_ROI_MM
+  if (!Number.isInteger(series.rows) || !Number.isInteger(series.cols) || series.rows < 3 || series.cols < 3) throw new Error('COR: dimensiones inválidas')
+  const rotations = new Set(series.frameMeta.map(f => f.rotationNumber))
+  if (rotations.size !== 1) throw new Error('COR: se requiere una única rotación')
+  const seen = new Set()
+  for (const frame of series.frameMeta) {
+    if (!Number.isInteger(frame.detectorNumber) || frame.detectorNumber < 1 || !Number.isInteger(frame.viewNumber) || frame.viewNumber < 1) throw new Error('COR: detector o vista inválidos')
+    const key = `${frame.detectorNumber}:${frame.viewNumber}`
+    if (seen.has(key)) throw new Error('COR: vistas repetidas por cabezal')
+    seen.add(key)
+  }
+  const roiSizeMm = options.roiSizeMm === undefined ? DEFAULT_ROI_MM : Number(options.roiSizeMm)
+  if (!(roiSizeMm >= 40 && roiSizeMm <= 50)) throw new Error('COR: la ROI debe medir entre 40 y 50 mm')
   const expectedSources = Number.isFinite(options.expectedSources)
     ? options.expectedSources
     : EXPECTED_SOURCES
+  if (expectedSources !== 3) throw new Error('COR: se requieren exactamente tres fuentes')
   const [pixelHeight, pixelWidth] = series.pixelSpacing
   const centreX = (series.cols - 1) / 2
-  const sourceHints = detectAxialSources(
-    series.frames,
-    series.rows,
-    series.cols,
-    expectedSources,
-    pixelHeight,
-    roiSizeMm
-  )
-  const roiRows = Math.max(3, Math.round(roiSizeMm / pixelHeight))
-  const roiCols = Math.max(3, Math.round(roiSizeMm / pixelWidth))
+  const sourceHints = Object.fromEntries([...new Set(series.frameMeta.map(f => f.detectorNumber))].map(detector => {
+    const indices = series.frameMeta.map((f, i) => f.detectorNumber === detector ? i : -1).filter(i => i >= 0)
+    const anchor = indices.reduce((best, i) => angleDistance(series.frameMeta[i].angleDeg, 0) < angleDistance(series.frameMeta[best].angleDeg, 0) ? i : best)
+    return [detector, detectAxialSources([series.frames[anchor]], series.rows, series.cols, expectedSources, pixelHeight, roiSizeMm)]
+  }))
+  const roiRows = Math.max(3, 2 * Math.round((roiSizeMm / pixelHeight - 1) / 2) + 1)
+  const roiCols = Math.max(3, 2 * Math.round((roiSizeMm / pixelWidth - 1) / 2) + 1)
   const grouped = groupByDetector(series, sourceHints, roiRows, roiCols)
   const detectors = [...grouped.entries()]
     .sort(([a], [b]) => a - b)
@@ -550,8 +571,10 @@ export function analyzeCor(series, options = {}) {
 
   return {
     method: 'NEMA NU 1-2007 §4.1',
+    methodVersion: 'cor-qc-1.2',
     roiSizeMm,
     roiPixels: [roiRows, roiCols],
+    roiActualMm: [roiRows * pixelHeight, roiCols * pixelWidth],
     imageCentrePixels: [centreX, (series.rows - 1) / 2],
     sourceHints,
     centralSourceIndex,
@@ -566,6 +589,9 @@ export function analyzeCor(series, options = {}) {
     geometry3d,
     acquisition: {
       pixelSizeUnder5Mm: pixelHeight < 5 && pixelWidth < 5,
+      roiSizeValid: [roiRows * pixelHeight, roiCols * pixelWidth].every(v => v >= 40 && v <= 50),
+      radiiMm: series.frameMeta.map(f => Number.isFinite(f.radialPositionMm) ? f.radialPositionMm : null),
+      countsUnscaled: series.rescaleSlope == null ? null : series.rescaleSlope === 1 && series.rescaleIntercept === 0,
       detectorChecks: detectors.map((detector) => ({
         detectorNumber: detector.detectorNumber,
         ...detector.acquisition
@@ -581,22 +607,39 @@ function parseLabel(value) {
   return Number.NaN
 }
 
-export function parseValidationCsv(text) {
-  const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-  if (lines.length < 2) throw new Error('El CSV debe incluir cabecera y al menos un caso')
-  const delimiter = lines[0].includes(';') ? ';' : ','
-  const headers = lines[0].split(delimiter).map((header) => header.trim().toLowerCase())
-  const scoreIndex = headers.findIndex((header) => ['score_mm', 'resultado_mm', 'metric_mm', 'valor_mm'].includes(header))
-  const labelIndex = headers.findIndex((header) => ['label', 'estado', 'defecto', 'clase'].includes(header))
-  if (scoreIndex < 0 || labelIndex < 0) {
-    throw new Error('Cabeceras requeridas: score_mm,label')
+function csvRows(text, delimiter) {
+  const rows = []
+  let row = [], field = '', quoted = false
+  const input = String(text).replace(/^\uFEFF/, '')
+  for (let i = 0; i < input.length; i++) {
+    const c = input[i]
+    if (c === '"') {
+      if (quoted && input[i + 1] === '"') { field += '"'; i++ }
+      else quoted = !quoted
+    } else if (!quoted && c === delimiter) { row.push(field.trim()); field = '' }
+    else if (!quoted && (c === '\n' || c === '\r')) {
+      if (c === '\r' && input[i + 1] === '\n') i++
+      row.push(field.trim()); if (row.some(Boolean)) rows.push(row)
+      row = []; field = ''
+    } else field += c
   }
+  if (quoted) throw new Error('CSV con comillas sin cerrar')
+  row.push(field.trim()); if (row.some(Boolean)) rows.push(row)
+  return rows
+}
 
-  const records = lines.slice(1).map((line, index) => {
-    const fields = line.split(delimiter).map((field) => field.trim())
-    const score = Number(fields[scoreIndex].replace(',', '.'))
+export function parseValidationCsv(text) {
+  const delimiter = String(text).split(/\r?\n/, 1)[0].includes(';') ? ';' : ','
+  const rows = csvRows(text, delimiter)
+  if (rows.length < 2) throw new Error('El CSV debe incluir cabecera y al menos un caso')
+  const headers = rows[0].map(header => header.toLowerCase())
+  const scoreIndex = headers.findIndex(header => ['score_mm', 'resultado_mm', 'metric_mm', 'valor_mm'].includes(header))
+  const labelIndex = headers.findIndex(header => ['label', 'estado', 'defecto', 'clase'].includes(header))
+  if (scoreIndex < 0 || labelIndex < 0) throw new Error('Cabeceras requeridas: score_mm,label')
+  const records = rows.slice(1).map((fields, index) => {
+    const score = corNumber(fields[scoreIndex]?.replace(',', '.'))
     const label = parseLabel(fields[labelIndex])
-    if (!Number.isFinite(score) || !Number.isFinite(label)) {
+    if (fields.length !== headers.length || !Number.isFinite(score) || score < 0 || !Number.isFinite(label)) {
       throw new Error(`Fila ${index + 2}: score o etiqueta no válidos`)
     }
     return { score, label }
@@ -672,14 +715,11 @@ export function rocAnalysis(records) {
   return { points, auc, best }
 }
 
-export function corAcquisitionValid(results) {
-  const fields = ['evenViews', 'enoughViews', 'uniformAngles', 'includesZero', 'includes180', 'enoughCountsAtZero', 'underMaximumCountRate']
-  return results?.acquisition?.pixelSizeUnder5Mm === true
-    && results.acquisition.detectorChecks.length > 0
-    && results.acquisition.detectorChecks.every(check => fields.every(key => check[key] === true))
+export function corAcquisitionValid(results, declaration = {}) {
+  return evaluateCorAcquisition(results, declaration).every(check => check.pass === true)
 }
 
-export function toleranceStatus(results, limits) {
+export function toleranceStatus(results, limits, declaration = {}) {
   if (!results) return []
   const metrics = [
     ['deltaCorSingleMm', 'δCOR,1', results.upperBounds.deltaCorSingleMm, limits.deltaCorSingleMm],
@@ -688,14 +728,18 @@ export function toleranceStatus(results, limits) {
     ['deltaAxialPairMm', 'δAXIAL,12', results.upperBounds.deltaAxialPairMm, limits.deltaAxialPairMm],
     ['ellipsoidDiameterMm', 'Diámetro elipsoide 3D', results.geometry3d.maximumDiameterMm, limits.ellipsoidDiameterMm]
   ]
-  const acquisitionValid = corAcquisitionValid(results)
-  return metrics.map(([key, label, value, limit]) => ({
+  const acquisitionValid = corAcquisitionValid(results, declaration)
+  return metrics.map(([key, label, value, rawLimit]) => {
+    const limit = corNumber(rawLimit)
+    const documented = Boolean(declaration.limitSource?.trim())
+    return ({
     key,
     label,
     value,
     limit,
     acquisitionValid,
-    available: Number.isFinite(value) && Number.isFinite(limit),
-    pass: acquisitionValid && Number.isFinite(value) && Number.isFinite(limit) ? value <= limit : null
-  }))
+    available: Number.isFinite(value) && Number.isFinite(limit) && limit >= 0,
+    experimental: key === 'ellipsoidDiameterMm',
+    pass: acquisitionValid && documented && Number.isFinite(value) && Number.isFinite(limit) && limit >= 0 ? value <= limit : null
+  }) })
 }

@@ -140,3 +140,66 @@ assert.ok(roc.auc > 0.99)
 assert.ok(roc.best.youden > 0.99)
 
 console.log('COR analysis assertions passed')
+
+// Independent acceptance checks and adversarial source geometry (cor-qc-1.2).
+const { COR_DECLARATIONS, evaluateCorAcquisition, corCentroidsCsv } = await import('../src/utils/corValidation.js')
+const { readCorGeometry } = await import('../src/utils/corGeometry.js')
+const confirmed = { ...Object.fromEntries(COR_DECLARATIONS.map(([id]) => [id, 'yes'])), limitSource: 'Synthetic reference only' }
+assert.equal(corAcquisitionValid(results), false, 'A numerical result cannot confirm the physical setup')
+assert.equal(corAcquisitionValid(results, confirmed), true)
+for (const [id] of COR_DECLARATIONS) {
+  assert.equal(corAcquisitionValid(results, { ...confirmed, [id]: '' }), false, id)
+  assert.equal(corAcquisitionValid(results, { ...confirmed, [id]: 'no' }), false, id)
+}
+for (const radius of [100, NaN]) {
+  const series = syntheticSeries(); series.frameMeta.forEach(f => { f.radialPositionMm = radius })
+  const result = analyzeCor(series)
+  assert.equal(corAcquisitionValid(result, confirmed), false)
+  assert.equal(corAcquisitionValid(result, { ...confirmed, radiusMm: '200' }), Number.isNaN(radius), 'Manual radius cannot override an explicitly wrong DICOM value')
+}
+const scaled = syntheticSeries(); scaled.rescaleSlope = 2; scaled.rescaleIntercept = 0
+assert.equal(corAcquisitionValid(analyzeCor(scaled), confirmed), false)
+assert.throws(() => analyzeCor(syntheticSeries(), { roiSizeMm: 10 }), /40 y 50/)
+for (const limit of ['', null, -1, NaN]) assert.equal(toleranceStatus(results, { deltaCorSingleMm: limit }, confirmed)[0].pass, null)
+assert.equal(toleranceStatus(results, { deltaCorSingleMm: 1 }, confirmed)[0].pass, true)
+assert.equal(toleranceStatus(results, { deltaCorSingleMm: 1 }, { ...confirmed, limitSource: '' })[0].pass, null)
+const mixed = syntheticSeries(); mixed.frameMeta[1].rotationNumber = 2
+assert.throws(() => analyzeCor(mixed), /única rotación/)
+const repeated = syntheticSeries(); repeated.frameMeta[1].viewNumber = 1
+assert.throws(() => analyzeCor(repeated), /repetidas/)
+const dataset = { DetectorVector: [1, 1], AngularViewVector: [1, 2], DetectorInformationSequence: [{ StartAngle: 0, RadialPosition: [200] }],
+  RotationInformationSequence: [{ AngularStep: 30, RotationDirection: 'CC', NumberOfFramesInRotation: 2 }], EnergyWindowInformationSequence: [{}] }
+assert.deepEqual(readCorGeometry(dataset, 2).map(f => f.radialPositionMm), [200, 200], 'Scalar radius applies to every view')
+assert.throws(() => readCorGeometry({ ...dataset, RotationVector: [1, 2], RotationInformationSequence: [dataset.RotationInformationSequence[0], dataset.RotationInformationSequence[0]] }, 2), /única rotación/)
+
+// A 16 mm excursion used to push the PSF near the fixed axial ROI edge.
+// The known motion must be retained, never subtracted by the tracking process.
+const moving = syntheticSeries()
+for (let d = 0; d < 2; d++) for (let v = 0; v < 12; v++) {
+  const angle = (v * 30 + d * 180) * Math.PI / 180
+  moving.frames[d * 12 + v] = gaussianFrame(128, 128, [43, 64, 85].map((y, i) => ({
+    x: 63.5 + [0.4, -0.2][d] + [-22, 1.4, 21][i] * Math.cos(angle),
+    y: y + 8 * Math.sin(angle), amplitude: 6500
+  })))
+}
+const tracked = analyzeCor(moving)
+assert.ok(Math.abs(tracked.upperBounds.deltaAxialSingleMm - 32) < 0.15, 'Peak-to-peak motion is 32 mm')
+for (const d of tracked.detectors) for (const source of d.sources) for (const m of source.measurements) {
+  assert.ok(Math.abs((m.roi.minRow + m.roi.maxRow) / 2 - m.y) <= 0.5 + 1e-9, 'ROI recentred per view')
+}
+// Per-head seed detection must preserve a large physical offset between heads.
+const offset = syntheticSeries()
+for (let v = 0; v < 12; v++) {
+  const angle = (v * 30 + 180) * Math.PI / 180
+  offset.frames[12 + v] = gaussianFrame(128, 128, [43, 64, 85].map((y, i) => ({
+    x: 63.3 + [-22, 1.4, 21][i] * Math.cos(angle), y: y + 25, amplitude: 6500
+  })))
+}
+assert.ok(Math.abs(analyzeCor(offset).upperBounds.deltaAxialPairMm - 50) < 0.15)
+const csv = corCentroidsCsv(results).trim().split('\n')
+assert.equal(csv.length, 73, 'Every head/source/view measurement is exported')
+assert.equal(csv[0].split(',').length, csv[1].split(',').length)
+console.log('COR tracking, geometry, acquisition declarations and exports passed')
+assert.deepEqual(parseValidationCsv('filename,score_mm,label\n"a,b.dcm",0.4,0\n"quote""name.dcm",1.4,1'), [{ score: 0.4, label: 0 }, { score: 1.4, label: 1 }])
+assert.throws(() => parseValidationCsv('score_mm,label\n,0\n1,1'), /Fila 2/)
+assert.throws(() => parseValidationCsv('score_mm,label\n-1,0\n1,1'), /Fila 2/)

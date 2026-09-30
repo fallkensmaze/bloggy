@@ -244,3 +244,12 @@ Global styles live in `src/styles.css`. Feature-specific stylesheets live in `sr
 - `uniformidad.css`
 
 The UI uses CSS custom properties from `src/styles.css`, such as `--bg-secondary`, `--text-muted`, `--accent-blue` and `--border`.
+
+### COR source review
+
+`corValidation.js` and `CorAcquisitionForm.jsx` are shared by standalone COR and the
+monthly report. Unknown setup/radius/limits must stay unknown; a manual radius must
+never override incompatible DICOM geometry. Preserve measured axial motion when
+recentering the ROI. The 32 mm excursion and 50 mm inter-head displacement in
+`test-cor-analysis.mjs` are independent ground truth checks. Run `test:cor`,
+`test:gamma`, `test:nema` and `build:web` after changing this chain.
