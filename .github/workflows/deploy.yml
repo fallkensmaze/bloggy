@@ -57,6 +57,9 @@ jobs:
         env:
           MRI_CHROME: google-chrome
 
+      - name: Test MCC dosimetry
+        run: npm run test:mcc
+
       - name: Security checks and build
         run: npm run check:security
       

@@ -162,6 +162,8 @@ Firestore collections:
 
 ### Main modules
 
+- `src/pages/MccAnalyzer.jsx`, `src/utils/mcc*.js` — PTW MCC PDD and orthogonal profiles. Read `MCC_ANALYZER.md`; run `npm run test:mcc`. Keep electron ionization-to-dose conversion pointwise using TRS-398 Rev.1 Table 22, never apply it to already-converted dose, never extrapolate the table, and keep Sclin distinct from the uniform msr equivalent field in TRS-483. Unknown metadata must not inherit from another scan.
+
 - `src/pages/GammaCameraQC.jsx`, `src/components/GammaImage.jsx`, `src/utils/gamma*.js` — planar line-source resolution, sensitivity and the private monthly report. Read `GAMMA_CAMERA_QC.md`. Never start monthly analysis until every DICOM is readable and the acquisition month and camera identity match; do not substitute export dates or silently split a batch. Keep per-file declarations and per-frame count duration/background. Missing activity, limits, acquisition checks or tomography review cannot yield conformity. The report uses the existing owner login and memory-only data; no private Firestore collection or browser persistence is added. The ChatGPT helper is manual image/prompt preparation, not an API call. Run `test:gamma`, `test:nema`, `test:cor` after changing the batch adapters.
 - `src/utils/navigation.js` — common categorized catalog for desktop and mobile; private report and radio exam links require the existing admin session.
 

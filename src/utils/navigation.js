@@ -16,6 +16,7 @@ export const NAV_LINKS = [
   { href: '/rtplan-compare', icon: 'bi-file-earmark-diff', label: 'Comparar RT Plans', section: 'Radioterapia' },
   { href: '/tg43-calculator', icon: 'bi-radioactive', label: 'Calculador TG-43', section: 'Radioterapia' },
   { href: '/dosimetria-pelicula', icon: 'bi-film', label: 'Dosimetría de película', section: 'Radioterapia' },
+  { href: '/analizador-mcc', icon: 'bi-graph-up', label: 'Analizador MCC', section: 'Radioterapia' },
   { href: '/rt-anonymizer', icon: 'bi-shield-lock', label: 'Anonimizar RT', section: 'Radioterapia' },
   { href: '/comparar-protocolos-rm', icon: 'bi-file-earmark-diff', label: 'Comparar protocolos RM', section: 'Resonancia magnética' },
   { href: '/acr-qc', icon: 'bi-magnet', label: 'ACR MRI QC', section: 'Resonancia magnética' },
