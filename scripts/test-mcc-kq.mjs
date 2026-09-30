@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { KQ_TABLES } from '../src/utils/mccKqData.js'
-import { interpolateKq, calculateKq, resolvePhotonQuality, qualityFactorContext } from '../src/utils/mccKq.js'
+import { interpolateKq, calculateKq, resolvePhotonQuality, qualityFactorContext, manualElectronQuality } from '../src/utils/mccKq.js'
 import { parseMcc } from '../src/utils/mccParser.js'
 import { mccDemo } from '../src/utils/mccDemo.js'
 import { defaultMccOptions, analyzeMcc } from '../src/utils/mccAnalysis.js'
@@ -66,4 +66,18 @@ near(direct.value,.65);assert.equal(direct.tableKey,'398-photon')
 assert.equal(resolvePhotonQuality({source:'reference',filter:'FFF',energy:15,tpr:.65,confirmed:true},[],{}).value,null)
 assert.equal(resolvePhotonQuality({source:'reference',filter:'WFF',tpr:.65,confirmed:false},[],{}).value,null)
 assert.equal(qualityFactorContext({source:'electron',q0Type:'electron'},manual,{r50:3}).tableKey,'398-electron-cross')
+// A single ionization index uses Eq.37; an already dose-based index must not be corrected again.
+near(manualElectronQuality('3','ion').r50,3.027)
+near(manualElectronQuality('10','ion').r50,10.23)
+near(manualElectronQuality('11','ion').r50,11.279)
+near(manualElectronQuality('3','dose').r50,3)
+for(const input of ['',null,'abc','-1','0','0.01']) assert.equal(manualElectronQuality(input,'ion').r50,null)
+const manualContext=qualityFactorContext({source:'electron-manual',electronQuantity:'ion',electronQuality:'3',q0Type:'electron',q0Quantity:'ion',q0Quality:'4'},null,null)
+near(manualContext.quality,3.027);near(manualContext.q0Quality,4.056)
+const manualFactor=calculateKq({...manualContext,chamber:'PTW 34045',q0Type:'electron'})
+near(manualFactor.numerator.value,1.0409+(3.027-3)/.5*(1.0332-1.0409))
+near(manualFactor.value,manualFactor.numerator.value/manualFactor.denominator.value)
+const noQ0=calculateKq({...manualContext,q0Quality:null,chamber:'PTW 34045',q0Type:'electron'})
+assert.equal(noQ0.value,null);near(noQ0.numerator.value,manualFactor.numerator.value)
+assert.equal(calculateKq({...manualContext,quality:11.279,chamber:'PTW 34045',q0Type:'electron'}).value,null)
 console.log('MCC kQ: IAEA table entries, null cells, interpolation, Q0 ratios, provenance, no double correction, and invalidation passed.')

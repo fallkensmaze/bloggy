@@ -1,5 +1,5 @@
 import { KQ_TABLES } from './mccKqData.js'
-import { equivalentMsr, tprToReference } from './mccDosimetry.js'
+import { equivalentMsr, tprToReference, r50FromIon } from './mccDosimetry.js'
 import { mccNumber } from './mccParser.js'
 
 const finite = x => typeof x === 'number' && Number.isFinite(x)
@@ -25,7 +25,7 @@ export function calculateKq({tableKey,chamber,quality,q0Type='co60',q0Quality=nu
   const numerator=interpolateKq(tableKey,chamber,quality)
   if(!numerator) return {value:null,error:'Calidad Q ausente o fuera del intervalo publicado para esta cámara. No se extrapola.'}
   const denominator=cross?interpolateKq(tableKey,chamber,q0Quality):{value:1}
-  if(!denominator) return {value:null,error:'R₅₀ de calibración Q₀ ausente o fuera de tabla.'}
+  if(!denominator) return {value:null,numerator,error:'R₅₀ de calibración Q₀ ausente o fuera de tabla.'}
   const warnings=[]
   if(tableKey.startsWith('398-electron') && (quality<1.4 || cross && q0Quality<1.4)) warnings.push('R₅₀ < 1,4 g/cm²: incertidumbre mayor; TRS‑398 recomienda factores determinados experimentalmente.')
   if(tableKey==='483-fff') warnings.push('La tabla 13 incluye una corrección genérica de promediado de volumen. No añadir de nuevo ese mismo kvol; una corrección específica requiere revisar el formalismo.')
@@ -50,7 +50,16 @@ export function resolvePhotonQuality(msr,scans,results) {
   return value===null?{value:null,tableKey,error:'Completa y confirma el TPR(S) y un campo msr válido.'}:{value,input,s:square.value,tableKey,filter:msr.filter,origin:'TPR(S) medido → TPR(10), TRS‑483 ec.28',correctionApplied:true}
 }
 
+export function manualElectronQuality(value,quantity='dose') {
+  const input=mccNumber(value)
+  const r50=input!==null&&input>0?(quantity==='ion'?r50FromIon(input):quantity==='dose'?input:null):null
+  return {input,quantity,r50:finite(r50)&&r50>0?r50:null,conversion:quantity==='ion'?'TRS-398 Rev.1, ec.37':null}
+}
 export function qualityFactorContext(settings,photon,electron) {
-  if(settings.source==='electron') return {quality:electron?.r50??null,tableKey:settings.q0Type==='electron'?'398-electron-cross':'398-electron-co',origin:'R₅₀ del PDD de electrones activo',unit:'g/cm²'}
+  if(settings.source==='electron'||settings.source==='electron-manual') {
+    const manual=settings.source==='electron-manual',q=manual?manualElectronQuality(settings.electronQuality,settings.electronQuantity||'ion'):null
+    const q0=settings.q0Type==='electron'?manualElectronQuality(settings.q0Quality,settings.q0Quantity||'dose'):null
+    return {quality:manual?q.r50:electron?.r50??null,tableKey:settings.q0Type==='electron'?'398-electron-cross':'398-electron-co',origin:manual?'Calidad de electrones introducida manualmente':'R₅₀ del PDD de electrones activo',unit:'g/cm²',q0Quality:q0?.r50??null,manualQ:q,manualQ0:q0}
+  }
   return {quality:photon.value,tableKey:photon.tableKey,origin:photon.origin,unit:'',error:photon.error}
 }
