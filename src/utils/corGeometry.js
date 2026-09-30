@@ -19,6 +19,7 @@ export function readCorGeometry(dataset, frameCount) {
   const rotationIds = vector('RotationVector', rotations.length === 1)
   const energyIds = vector('EnergyWindowVector', windows.length === 1)
   if (new Set(energyIds).size !== 1 || !windows[energyIds[0] - 1]) throw new Error('COR: se requiere una única ventana de energía identificada.')
+  if (new Set(rotationIds).size !== 1) throw new Error('COR: se requiere una única rotación; no se combinan adquisiciones.')
   const seen = new Set()
   return heads.map((detectorNumber, frameIndex) => {
     const rotationNumber = rotationIds[frameIndex], viewNumber = views[frameIndex]
@@ -34,10 +35,12 @@ export function readCorGeometry(dataset, frameCount) {
     const key = `${detectorNumber}:${viewNumber}`
     if (seen.has(key)) throw new Error('COR: vistas repetidas por cabezal; selecciona una sola rotación.')
     seen.add(key)
+    const radii = list(detector.RadialPosition).length ? list(detector.RadialPosition) : list(rotation.RadialPosition)
+    if (radii.length > 1 && Number.isFinite(count) && radii.length !== count) throw new Error('COR: número de radios incompatible con las vistas declaradas.')
     return { frameIndex, detectorNumber, rotationNumber, viewNumber,
       angleDeg: ((start + (direction === 'CW' ? -1 : 1) * (viewNumber - 1) * step) % 360 + 360) % 360,
       angularStepDeg: step,
       frameDurationMs: number(rotation.ActualFrameDuration ?? dataset.ActualFrameDuration),
-      radialPositionMm: number(list(detector.RadialPosition)[viewNumber - 1] ?? list(rotation.RadialPosition)[viewNumber - 1]) }
+      radialPositionMm: number(radii.length === 1 ? radii[0] : radii[viewNumber - 1]) }
   })
 }

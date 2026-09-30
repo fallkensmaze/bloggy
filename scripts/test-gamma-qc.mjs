@@ -1,3 +1,4 @@
+import { COR_DECLARATIONS } from '../src/utils/corValidation.js'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import dcmjs from 'dcmjs'
@@ -103,14 +104,16 @@ test('Monthly COR blocks a missing central source in a nonzero view even with ve
   const encode = () => makeDicom({ Rows: 128, Columns: 128, NumberOfFrames: 24, BitsStored: 16, HighBit: 15,
     PixelSpacing: [2, 2], DetectorVector, AngularViewVector, EnergyWindowVector: Array(24).fill(1),
     DetectorInformationSequence: [{ StartAngle: 0 }, { StartAngle: 180 }],
-    RotationInformationSequence: [{ AngularStep: 30, RotationDirection: 'CC', ActualFrameDuration: 60000 }],
+    RotationInformationSequence: [{ AngularStep: 30, RotationDirection: 'CC', ActualFrameDuration: 60000, RadialPosition: [200] }],
     PixelData: [new Uint16Array(frames.flatMap(f => Array.from(f))).buffer] })
   const entry = buffer => {
     const image = parseGammaDicom(buffer)
     return { buffer, image, name: 'synthetic', id: 'cor', type: 'cor', options: {
-      ...initialGammaOptions(image), verified: true, protocol: 'synthetic test', limitSource: 'test only', corLimit: 1, axialLimit: 1 } }
+      ...initialGammaOptions(image), corDeclaration: Object.fromEntries(COR_DECLARATIONS.map(([id]) => [id, 'yes'])), verified: true, protocol: 'synthetic test', limitSource: 'test only', corLimit: 1, axialLimit: 1 } }
   }
   assert.equal(analyzeGammaEntry(entry(encode()))[0].status, 'Conforme')
+  const unchecked = entry(encode()); unchecked.options.corDeclaration = {}
+  assert.equal(analyzeGammaEntry(unchecked)[0].status, 'No evaluable')
   for (let row = 54; row <= 74; row++) frames[1].fill(0, row * 128, (row + 1) * 128)
   assert.throws(() => analyzeGammaEntry(entry(encode())), /Cabezal 1, frame 2, fuente 2/)
 })

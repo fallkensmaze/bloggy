@@ -85,3 +85,11 @@ lote con la fuente central ausente en 30°: solo el primero puede resultar confo
 La clasificación da prioridad a reconstrucciones tomográficas sobre «resolución»;
 wholebody y variación longitudinal de sensibilidad quedan como tipo desconocido,
 pues no equivalen a sensibilidad planar. La propuesta sigue siendo editable.
+
+### COR cor-qc-1.2
+
+El informe mensual comparte las nuevas declaraciones COR por archivo, el control de
+radio y reescalado, el recentrado por vista y el rechazo de rotaciones mezcladas.
+El visor COR permite comprobar los centroides y ROI. Si se editan las condiciones,
+el resultado se invalida y se recalcula con «Analizar / actualizar todas las pruebas».
+El JSON conserva los centroides y la versión COR junto con los datos de adquisición.

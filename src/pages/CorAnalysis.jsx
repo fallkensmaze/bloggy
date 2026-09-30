@@ -1,3 +1,6 @@
+import CorAcquisitionForm from '../components/CorAcquisitionForm'
+import CorProjectionReview from '../components/CorProjectionReview'
+import { evaluateCorAcquisition, corCentroidsCsv } from '../utils/corValidation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   CategoryScale,
@@ -304,11 +307,12 @@ function EllipsoidCanvas({ model }) {
 }
 
 function ProjectionChart({ results, pixelSpacing }) {
-  const central = results.centralSourceIndex
+  const [central, setCentral] = useState(results.centralSourceIndex)
+  const commonMeanY = results.detectors.reduce((sum, d) => sum + d.sources[central].meanAxialPixels, 0) / results.detectors.length
   const [pixelHeight, pixelWidth] = pixelSpacing
   const datasets = results.detectors.flatMap((detector, detectorIndex) => {
     const source = detector.sources[central]
-    const meanY = source.meanAxialPixels
+    const meanY = commonMeanY
     const color = COLORS[detectorIndex % COLORS.length]
     return [
       {
@@ -332,7 +336,9 @@ function ProjectionChart({ results, pixelSpacing }) {
     ]
   })
   return (
-    <div className="cor-chart">
+    <><label>Fuente de las curvas <select className="dark-select" value={central} onChange={e => setCentral(Number(e.target.value))}>
+      {[0, 1, 2].map(i => <option key={i} value={i}>Fuente {i + 1}{i === results.centralSourceIndex ? ' · central' : ''}</option>)}
+    </select></label><p className="cor-method-note">El eje axial usa un origen común para conservar el desplazamiento entre cabezales.</p><div className="cor-chart">
       <Line
         data={{ datasets }}
         options={{
@@ -346,11 +352,14 @@ function ProjectionChart({ results, pixelSpacing }) {
           plugins: { legend: { labels: { color: '#c3ccda', boxWidth: 16, boxHeight: 2 } } }
         }}
       />
-    </div>
+    </div></>
   )
 }
 
 function CorAnalysis() {
+  const [declaration, setDeclaration] = useState({})
+  const loadId = useRef(0)
+  const [busy, setBusy] = useState(false)
   const [series, setSeries] = useState(null)
   const [results, setResults] = useState(null)
   const [fileName, setFileName] = useState('')
@@ -360,45 +369,43 @@ function CorAnalysis() {
   const [validation, setValidation] = useState(null)
   const [validationName, setValidationName] = useState('')
   const [limits, setLimits] = useState({
-    deltaCorSingleMm: 1,
-    deltaCorPairMm: 1,
-    deltaAxialSingleMm: 1,
-    deltaAxialPairMm: 1,
-    ellipsoidDiameterMm: 2
+    deltaCorSingleMm: '',
+    deltaCorPairMm: '',
+    deltaAxialSingleMm: '',
+    deltaAxialPairMm: '',
+    ellipsoidDiameterMm: ''
   })
   const fileRef = useRef(null)
   const validationRef = useRef(null)
 
   const loadDicom = async (file) => {
     if (!file) return
+    const request = ++loadId.current
+    setBusy(true); setSeries(null); setResults(null); setDeclaration({}); setFileName('')
+    setValidation(null); setValidationName('')
+    setLimits({ deltaCorSingleMm: '', deltaCorPairMm: '', deltaAxialSingleMm: '', deltaAxialPairMm: '', ellipsoidDiameterMm: '' })
     setError('')
     setStatus('Leyendo el objeto NM y resolviendo la geometría angular…')
     try {
-      const parsed = parseCorDICOM(await file.arrayBuffer())
+      if (file.size > 128 * 1024 * 1024) throw new Error('El archivo supera 128 MB; exporta una serie más pequeña.')
+      const buffer = await file.arrayBuffer()
+      if (request !== loadId.current) return
+      const parsed = parseCorDICOM(buffer)
+      setSeries(parsed); setFileName(file.name)
       const analyzed = analyzeCor(parsed)
-      const halfPixel = 0.5 * Math.max(...parsed.pixelSpacing)
-      setSeries(parsed)
       setResults(analyzed)
-      setFileName(file.name)
-      setLimits({
-        deltaCorSingleMm: halfPixel,
-        deltaCorPairMm: halfPixel,
-        deltaAxialSingleMm: halfPixel,
-        deltaAxialPairMm: halfPixel,
-        ellipsoidDiameterMm: 2 * halfPixel
-      })
       setStatus(`Análisis completado: ${parsed.frames.length} vistas, ${analyzed.detectors.length} cabezal${analyzed.detectors.length === 1 ? '' : 'es'}`)
     } catch (caught) {
-      setSeries(null)
+      if (request !== loadId.current) return
       setResults(null)
       setError(caught.message)
       setStatus('No se pudo analizar el archivo')
-    }
+    } finally { if (request === loadId.current) setBusy(false) }
   }
 
-  const statuses = useMemo(() => toleranceStatus(results, limits), [results, limits])
+  const statuses = useMemo(() => toleranceStatus(results, limits, declaration), [results, limits, declaration])
   const performance = useMemo(() => (
-    validation ? diagnosticPerformance(validation, limits.ellipsoidDiameterMm) : null
+    validation ? diagnosticPerformance(validation, limits.ellipsoidDiameterMm === '' ? NaN : Number(limits.ellipsoidDiameterMm)) : null
   ), [validation, limits.ellipsoidDiameterMm])
   const roc = useMemo(() => validation ? rocAnalysis(validation) : null, [validation])
 
@@ -424,7 +431,12 @@ function CorAnalysis() {
       metadata: series.metadata,
       pixelSpacing: series.pixelSpacing,
       method: results.method,
-      methodVersion: 'cor-qc-1.1',
+      methodVersion: results.methodVersion,
+      declaration,
+      checks: evaluateCorAcquisition(results, declaration),
+      roiActualMm: results.roiActualMm,
+      detectors: results.detectors,
+      pairs: results.pairs,
       acquisition: results.acquisition,
       upperBounds: results.upperBounds,
       geometry3d: results.geometry3d,
@@ -436,7 +448,7 @@ function CorAnalysis() {
   const exportValidationRow = () => {
     const header = 'filename,score_mm,label,delta_cor_1_mm,delta_cor_12_mm,delta_axial_1_mm,delta_axial_12_mm\n'
     const row = [
-      fileName,
+      `"${fileName.replaceAll('"', '""')}"`,
       results.geometry3d.maximumDiameterMm,
       '',
       results.upperBounds.deltaCorSingleMm,
@@ -461,13 +473,15 @@ function CorAnalysis() {
 
       <section className="cor-section">
         <SectionHeading icon="bi-file-medical" title="Adquisición COR" subtitle="Objeto NM multiframe; se esperan tres fuentes puntuales coplanares" />
-        <input ref={fileRef} hidden type="file" accept=".dcm,.dicom,application/dicom" onChange={(event) => loadDicom(event.target.files?.[0])} />
+        <input ref={fileRef} hidden disabled={busy} type="file" accept=".dcm,.dicom,application/dicom" onChange={(event) => loadDicom(event.target.files?.[0])} />
         <div
           className={`cor-dropzone${dragging ? ' cor-dropzone-active' : ''}${series ? ' cor-dropzone-loaded' : ''}`}
-          onClick={() => fileRef.current?.click()}
+          role="button" tabIndex={0} aria-disabled={busy}
+          onKeyDown={event => { if (!busy && ['Enter', ' '].includes(event.key)) { event.preventDefault(); fileRef.current?.click() } }}
+          onClick={() => !busy && fileRef.current?.click()}
           onDragOver={(event) => { event.preventDefault(); setDragging(true) }}
           onDragLeave={() => setDragging(false)}
-          onDrop={(event) => { event.preventDefault(); setDragging(false); loadDicom(event.dataTransfer.files?.[0]) }}
+          onDrop={(event) => { event.preventDefault(); setDragging(false); if (!busy) loadDicom(event.dataTransfer.files?.[0]) }}
         >
           <i className={`bi bi-${series ? 'check2-circle' : 'cloud-arrow-up'}`}></i>
           <strong>{series ? fileName : 'Arrastra aquí el DICOM COR'}</strong>
@@ -479,6 +493,7 @@ function CorAnalysis() {
         </div>
       </section>
 
+      {series && <CorProjectionReview key={fileName} series={series} results={results} />}
       {series && results && (
         <>
           <section className="cor-section">
@@ -502,6 +517,10 @@ function CorAnalysis() {
                 </Badge>
               ))}
             </div>
+            <p className="cor-method-note">ROI efectiva: {results.roiActualMm.map(v => finite(v, 2)).join(' × ')} mm. Método {results.methodVersion}.</p>
+            <CorAcquisitionForm value={declaration} onChange={setDeclaration} />
+            <div className="cor-badges">{evaluateCorAcquisition(results, declaration).filter(c => ['radius', 'roi', 'scaling'].includes(c.id)).map(c => <Badge key={c.id} ok={c.pass}>{c.label}{c.detail ? ` · ${c.detail}` : ''}</Badge>)}</div>
+            <details><summary>Estado de todas las comprobaciones</summary><ul>{evaluateCorAcquisition(results, declaration).map(c => <li key={c.id}>{c.label}: {c.pass === true ? 'verificado' : c.pass === false ? 'no cumple' : 'pendiente'}</li>)}</ul></details>
             {results.acquisition.detectorChecks.some((check) => !check.enoughCountsAtZero) && (
               <p className="cor-warning"><i className="bi bi-exclamation-triangle"></i>NEMA pide al menos 5000 cuentas en el píxel máximo de cada fuente en la vista de 0°. El cálculo se muestra, pero la adquisición no cumple esa condición.</p>
             )}
@@ -532,11 +551,11 @@ function CorAnalysis() {
                 </tbody>
               </table>
             </div>
-            <ProjectionChart results={results} pixelSpacing={series.pixelSpacing} />
+            <ProjectionChart key={fileName} results={results} pixelSpacing={series.pixelSpacing} />
           </section>
 
           <section className="cor-section">
-            <SectionHeading icon="bi-bounding-box-circles" title="Modelo geométrico 3D" subtitle="Cada centroide define una línea paralela al colimador; se ajusta el punto de menor distancia conjunta" />
+            <SectionHeading icon="bi-bounding-box-circles" title="Modelo geométrico 3D · experimental" subtitle="Cada centroide define una línea paralela al colimador; se ajusta el punto de menor distancia conjunta" />
             <div className="cor-model-grid">
               <EllipsoidCanvas model={results.geometry3d} />
               <div className="cor-model-side">
@@ -554,7 +573,8 @@ function CorAnalysis() {
 
           <section className="cor-section">
             <SectionHeading icon="bi-sliders" title="Límites de trabajo" subtitle="NEMA define el método, pero remite la aceptación a la especificación del fabricante" />
-            <p className="cor-warning cor-warning-blue"><i className="bi bi-info-circle"></i>Los valores iniciales equivalen a medio píxel para las magnitudes NEMA y a un píxel para el diámetro 3D. Son puntos de partida editables, no límites publicados por NEMA.</p>
+            <p className="cor-warning cor-warning-blue"><i className="bi bi-info-circle"></i>Introduce las tolerancias del fabricante o del protocolo del servicio y su referencia. Un campo vacío significa sin tolerancia; el elipsoide 3D es experimental y su comparación no certifica conformidad NEMA.</p>
+            <label className="cor-method-note">Procedencia y versión de las tolerancias<input className="dark-input" type="text" value={declaration.limitSource || ''} onChange={e => setDeclaration(d => ({ ...d, limitSource: e.target.value }))} placeholder="Fabricante / protocolo del servicio y versión" /></label>
             <div className="cor-limit-grid">
               {[
                 ['deltaCorSingleMm', 'δCOR,1 (mm)'],
@@ -563,7 +583,7 @@ function CorAnalysis() {
                 ['deltaAxialPairMm', 'δAXIAL,12 (mm)'],
                 ['ellipsoidDiameterMm', 'Elipsoide 3D (mm)']
               ].map(([key, label]) => (
-                <label key={key}><span className="field-label">{label}</span><input className="dark-input" type="number" min="0" step="0.05" value={finite(limits[key])} onChange={(event) => setLimits((current) => ({ ...current, [key]: Number(event.target.value) }))} /></label>
+                <label key={key}><span className="field-label">{label}</span><input className="dark-input" type="number" min="0" step="0.05" value={limits[key] ?? ''} onChange={(event) => setLimits((current) => ({ ...current, [key]: event.target.value }))} /></label>
               ))}
             </div>
             {statuses.some(item => !item.acquisitionValid) && <p className="cor-warning">Adquisición no verificada o incumplida: la comparación numérica no permite declarar conformidad.</p>}
@@ -571,7 +591,7 @@ function CorAnalysis() {
               {statuses.map((item) => (
                 <div key={item.key} className={`cor-tolerance-${item.pass === null ? 'unknown' : item.pass ? 'pass' : 'fail'}`}>
                   <i className={`bi bi-${item.pass === null ? 'question-circle' : item.pass ? 'check-circle' : 'x-circle'}`}></i>
-                  <span><strong>{item.label}</strong>{finite(item.value, 3)} mm / límite {finite(item.limit, 3)} mm</span>
+                  <span><strong>{item.label}{item.experimental ? ' · experimental' : ''}</strong>{finite(item.value, 3)} mm / límite {finite(item.limit, 3)} mm · {item.pass === null ? 'Pendiente de adquisición o tolerancia documentada' : item.pass ? 'Dentro del límite' : 'Fuera del límite'}</span>
                 </div>
               ))}
             </div>
@@ -595,14 +615,14 @@ function CorAnalysis() {
                   <div><span>TN</span><strong>{performance.tn}</strong></div>
                 </div>
               ) : (
-                <div className="cor-empty-validation"><i className="bi bi-database"></i><span>Con una sola adquisición no pueden estimarse sensibilidad ni especificidad.</span></div>
+                <div className="cor-empty-validation"><i className="bi bi-database"></i><span>{validation ? 'Introduce un límite 3D para calcular la matriz de confusión.' : 'Con una sola adquisición no pueden estimarse sensibilidad ni especificidad.'}</span></div>
               )}
             </div>
-            {performance && roc && (
+            {roc && (
               <>
                 <div className="cor-metrics cor-validation-metrics">
-                  <Metric label="Sensibilidad" value={percent(performance.sensitivity)} detail={`IC95: ${percent(performance.sensitivityCi95[0])}–${percent(performance.sensitivityCi95[1])}`} />
-                  <Metric label="Especificidad" value={percent(performance.specificity)} detail={`IC95: ${percent(performance.specificityCi95[0])}–${percent(performance.specificityCi95[1])}`} accent="green" />
+                  <Metric label="Sensibilidad" value={percent(performance?.sensitivity)} detail={`IC95: ${percent(performance?.sensitivityCi95[0])}–${percent(performance?.sensitivityCi95[1])}`} />
+                  <Metric label="Especificidad" value={percent(performance?.specificity)} detail={`IC95: ${percent(performance?.specificityCi95[0])}–${percent(performance?.specificityCi95[1])}`} accent="green" />
                   <Metric label="AUC ROC" value={finite(roc.auc, 3)} detail="Discriminación global" accent="orange" />
                   <Metric label="Youden J" value={finite(roc.best.youden, 3)} detail={`Corte ${finite(roc.best.threshold, 3)} mm`} accent="purple" />
                 </div>
@@ -613,6 +633,7 @@ function CorAnalysis() {
           </section>
 
           <div className="cor-export">
+            <button className="cor-button" onClick={() => saveText('cor-centroides.csv', corCentroidsCsv(results), 'text/csv;charset=utf-8')}>Exportar todos los centroides CSV</button>
             <button className="cor-button" onClick={exportResults}><i className="bi bi-download"></i>Exportar análisis JSON</button>
             <button className="cor-button cor-button-secondary" onClick={exportValidationRow}><i className="bi bi-filetype-csv"></i>Añadir fila a la cohorte</button>
           </div>

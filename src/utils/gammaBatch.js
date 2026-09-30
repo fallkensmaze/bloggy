@@ -16,7 +16,7 @@ export function initialGammaOptions(image) {
     fwhmLimit: '', fwtmLimit: '', referenceSensitivity: '', sensitivityTolerance: '',
     limitSource: '', protocol: '', verified: false, notes: '',
     uniformityProfile: 'auto', targetSize: 'auto', declaration: createAcquisitionDeclaration(),
-    corLimit: '', axialLimit: '', tomoVerdict: '', tomoObservations: '' }
+    corDeclaration: {}, corLimit: '', axialLimit: '', tomoVerdict: '', tomoObservations: '' }
 }
 
 const metric = (key, label, value, unit, limit = null, operator = 'max') => ({ key, label, value, unit, limit: numberOrNull(limit), operator })
@@ -40,10 +40,10 @@ export function analyzeGammaEntry(entry) {
       metric('deltaCorPairMm', 'δCOR,12', result.upperBounds.deltaCorPairMm, 'mm', o.corLimit),
       metric('deltaAxialSingleMm', 'δAXIAL,1', result.upperBounds.deltaAxialSingleMm, 'mm', o.axialLimit),
       metric('deltaAxialPairMm', 'δAXIAL,12', result.upperBounds.deltaAxialPairMm, 'mm', o.axialLimit)]
-    const valid = corAcquisitionValid(result)
+    const valid = corAcquisitionValid(result, o.corDeclaration)
     return [{ ...base, id: `${entry.id}:cor`, detector: null, detectors: result.detectors.map(d => d.detectorNumber), metrics,
       method: result.method, ...evaluateGammaMetrics(metrics, { ...o, blocked: valid ? '' : 'Revisa los requisitos de adquisición COR; hay comprobaciones incumplidas o desconocidas.' }),
-      details: { acquisition: result.acquisition, roiSizeMm: result.roiSizeMm } }]
+      details: { acquisition: result.acquisition, declaration: o.corDeclaration, methodVersion: result.methodVersion, roiSizeMm: result.roiSizeMm, detectors: result.detectors } }]
   }
   const parsed = type === 'uniformity' ? parseDICOM(entry.buffer) : null
   return image.frames.map((_, i) => {

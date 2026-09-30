@@ -15,13 +15,24 @@ Condiciones que comprueba la interfaz:
 - menos de 20 000 cps;
 - al menos 5000 cuentas en el píxel máximo de cada fuente en la vista de 0°.
 
-Para cada fuente, vista y detector se busca el pico transversal en una banda axial
-de unos 45 mm de alto y todo el ancho de la matriz. El perfil axial se integra
-en una ventana de unos 45 mm de ancho centrada en ese pico, dentro de la banda.
-El centroide de cada perfil se calcula sobre un
-número impar de píxeles centrado en el máximo que incluye ambos cruces de la
-semialtura, conforme a la ecuación 2-3. Las coordenadas se mantienen en
-subpíxel y solo se convierten a milímetros al final.
+Las tres fuentes se identifican por separado en la vista más próxima a 0° de cada
+cabezal. Su orden axial define regiones de búsqueda separadas por los puntos medios
+entre fuentes. Cada proyección vuelve a localizar cada fuente dentro de su región;
+no utiliza como posición de respaldo el centroide de la vista anterior. Después
+recentra una ROI física de 45 mm (número impar de píxeles más cercano), con hasta
+seis iteraciones y convergencia al mismo centro de píxel. El tamaño efectivo por
+eje se informa explícitamente y debe permanecer entre 40 y 50 mm.
+
+El perfil X integra una banda axial centrada en la fuente, en todo el ancho de la
+matriz. El perfil Y integra una ventana transversal centrada en el pico, dentro de
+esa banda. El centroide usa una ventana simétrica impar alrededor del máximo que
+incluye ambos cruces de semialtura (ecuación 2-3). No se suaviza el perfil medido ni
+se resta el movimiento axial al resultado. La localización inicial sí usa suavizado.
+
+La identidad se conserva por orden axial: fuentes que cruzan regiones, ejes invertidos
+y configuraciones distintas requieren revisión y pueden no ser analizables. La
+comprobación de picos no distingue de forma infalible una fuente de contaminación;
+por eso se requiere revisar todas las proyecciones con las superposiciones.
 
 La aplicación informa los cuatro límites superiores de §4.1.5:
 
@@ -31,8 +42,8 @@ La aplicación informa los cuatro límites superiores de §4.1.5:
 - `δAXIAL,12`: máximo desalineamiento axial medio entre detectores.
 
 NEMA especifica el método de medida, pero no un límite de aceptación universal:
-los valores deben compararse con la especificación del sistema. Por eso la
-interfaz etiqueta como provisionales los límites iniciales de medio píxel.
+los valores deben compararse con la especificación del sistema. Las tolerancias
+empiezan vacías y necesitan una procedencia documentada; vacío nunca significa cero.
 
 ## Rama geométrica 3D
 
@@ -96,3 +107,31 @@ no una tolerancia NEMA. No depende del intervalo entre vistas. La tasa de cuenta
 usa la duración de cada frame. Los límites individuales quedan sin veredicto si
 alguna comprobación de adquisición falla o es desconocida; el informe mensual usa
 la misma condición. El método 3D sigue siendo experimental.
+
+## Revisión cor-qc-1.2
+
+- `corGeometry.js` rechaza combinaciones de RotationVector y conserva un radio escalar
+  de RadialPosition en todas las vistas. El motor también rechaza vistas repetidas y
+  mezclas de rotación si recibe datos directamente.
+- El radio debe ser 200 mm. El margen de 0,5 mm es una decisión explícita de la herramienta
+  para redondeo, **no una tolerancia publicada por NEMA**. Un valor manual solo completa
+  radios DICOM ausentes; jamás sobreescribe un valor conocido incompatible.
+- `corValidation.js` comparte el mismo veredicto en la página individual y el informe
+  mensual. Exige tamaño de ROI, cuentas sin reescalado, muestreo, cuentas/tasa, radio y
+  declaraciones de fuentes/montaje, colimador/ventana, mesa, calibración, orientación
+  y revisión visual. Estas declaraciones documentan comprobaciones humanas, no una
+  verificación automática del montaje. Los datos reescalados no permiten conformidad.
+- La interfaz no hereda declaraciones, límites ni cohorte al cargar otro DICOM. Un
+  fallo de medición conserva la imagen legible para inspeccionarla, sin centroides.
+- El visor recorre todas las vistas y superpone bandas, ROI y centroides, con perfiles
+  X/Y y ventanas de semialtura. Las curvas permiten elegir cualquiera de las tres
+  fuentes; el origen axial común conserva el desfase entre cabezales.
+- El CSV contiene las 72 medidas de una serie 2×3×12, coordenadas de píxel en base cero
+  y límites de ROI inclusivos. El JSON incluye resultados por fuente/vista/cabezal,
+  condiciones, declaraciones, parejas, geometría experimental y versión del método.
+- La diferencia axial entre cabezales usa la diferencia de las medias: cada vista se
+  utiliza una sola vez; no se reutilizan vecinos angulares para rellenar vistas.
+- Las pruebas incluyen excursión axial analítica de 32 mm, desfase entre cabezales de
+  50 mm, radio conocido erróneo/desconocido, rotaciones mezcladas, fuentes perdidas,
+  ROI inválida, límites vacíos y declaraciones independientes. Son datos sintéticos;
+  queda pendiente la comparación con una adquisición real y su referencia independiente.
