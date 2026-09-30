@@ -107,8 +107,51 @@ no la generaliza automáticamente ni la encadena a una corrección msr.
 No se presenta una corrección de inverso del cuadrado como conversión general de
 PDD a TPR: faltarían la geometría de campo y la contribución de dispersión.
 
-No se calculan kQ, dosis absoluta ni output factors de perfiles. Antes de usar en
-clínica se necesita validación con archivos y resultados de referencia del servicio.
+El botón **Vincular este TPR al cálculo de kQ** fija el barrido de origen y mantiene
+el vínculo con su resultado calculado, no con una copia redondeada del número.
+Ese resultado ya es TPR(10) WFF: no vuelve a pasar por ec.28. Cambiar de barrido
+activo no cambia el vínculo; editar el PDD lo recalcula, e invalidar sus condiciones,
+vaciar o cargar otro lote invalida el resultado. Se informa archivo y número de scan.
+Para trabajar directamente con un TPR de referencia medido hay un tercer origen,
+**TPR medido · referencia 10×10 (TRS-398)**, sin corrección msr.
+
+## kQ,Q0 por cámara
+
+`mccKqData.js` contiene las entradas numéricas publicadas y celdas vacías explícitas.
+`mccKq.js` calcula por interpolación lineal sin extrapolación y devuelve la procedencia,
+la tabla y los extremos de cada interpolación. Selección explícita del modelo exacto:
+no se infiere por semejanza ni del detector que midió el MCC, que puede ser distinto
+de la cámara de referencia.
+
+| Índice/origen | Tabla | Q0 admitida |
+|---|---|---|
+| TPR de referencia vinculado a PDD WFF o medido directamente | TRS-398 Rev.1, 16, pp.90–93; 26 modelos | Co-60 |
+| TPR(10) obtenido desde TPR(S) msr WFF | TRS-483, 12, pp.83–85; 28 entradas | Co-60 |
+| TPR(10) obtenido desde TPR(S) msr FFF | TRS-483, 13, pp.88–90; 28 entradas | Co-60 |
+| R50 activo de electrones | TRS-398 Rev.1, 20, pp.110–111; 8 modelos | Co-60 |
+| R50 activo de electrones | TRS-398 Rev.1, 21, pp.115–116; 16 modelos | Haz de electrones con R50,Q0 explícito |
+
+En fotones de referencia, TRS-398 Rev.1 usa TPR para WFF y FFF convencional hasta
+10 MV (§6.3.1). En ese caso kvol se trata separadamente. La tabla 13 de TRS-483 ya
+incluye un promediado de volumen genérico: el programa lo advierte para evitar una
+doble corrección. No se mezclan esas tablas con el índice de otro formalismo ni se
+implementan las columnas CyberKnife/TomoTherapy en este módulo.
+
+En calibración cruzada de electrones se usa
+k(Q,Q0)=k(Q,Qint)/k(Q0,Qint) de tabla 21 (§7.6), con Qint definido como R50=7.5 g/cm².
+Se inserta el punto de normalización exacto (7.5,1) entre los nodos 7 y 8; los demás
+valores se interpolan. Las cámaras cilíndricas sin valores por debajo de R50=3 se
+mantienen sin resultado en ese intervalo. Advanced Markus no aparece en tabla 20;
+no se reutiliza su fila de calibración cruzada como si correspondiera a Co-60.
+Para R50<1.4 se muestra la nota de mayor incertidumbre y recomendación de factores
+experimentales del protocolo. Se muestran cuatro decimales para cálculo, no como
+declaración de incertidumbre.
+
+El JSON incluye el estado de origen, el barrido vinculado, el índice final, el
+formalismo, Q0, cámara y los valores usados para interpolar numerador/denominador.
+El certificado individual tiene prioridad sobre factores genéricos. Este módulo
+no importa certificados ni calcula dosis absoluta u output factors de perfiles.
+Antes de usar en clínica se necesita validación con resultados de referencia del servicio.
 
 ## Verificación
 
@@ -116,6 +159,9 @@ clínica se necesita validación con archivos y resultados de referencia del ser
 valores de tabla, interpolación bilineal, ambas ramas R50, unidades mm/cm,
 corrección punto a punto y ausencia de doble corrección, límites de tabla,
 perfil trapezoidal analítico, tablas FFF, Sclin y restricciones TPR. CI ejecuta esta
-suite además de los controles existentes. `npm run build:web` verifica la integración
+suite además de los controles existentes. La suite adicional `test-mcc-kq.mjs`
+verifica valores de las cinco tablas, interpolación, celdas nulas, normalización Qint,
+cociente de calibración cruzada, incompatibilidad de Q0, trazabilidad y ausencia de
+doble corrección del TPR. `npm run build:web` verifica la integración
 React/Vite y la auditoría de artefactos públicos. La compilación Rust/WASM existente
 se mantiene en el workflow de CI.
