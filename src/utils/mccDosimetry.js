@@ -1,6 +1,6 @@
 import { R50_GRID, STOPPING_ROWS, MSR_TABLES } from './mccProtocolData.js'
 
-export const MCC_METHOD = 'mcc-1.3 / TRS-398 Rev.1 (2024) / TRS-483 (2017)'
+export const MCC_METHOD = 'mcc-1.4 / TRS-398 Rev.1 (2024) / TRS-483 (2017)'
 const valid = n => typeof n === 'number' && Number.isFinite(n)
 const lerp = (a,b,t) => a+(b-a)*t
 function bracket(grid, x) {
