@@ -3,7 +3,9 @@ import { Chart as ChartJS, LinearScale, PointElement, LineElement, Tooltip, Lege
 import { Scatter } from 'react-chartjs-2'
 import { parseMcc, mccNumber, MAX_MCC_BYTES } from '../utils/mccParser.js'
 import { analyzeMcc, defaultMccOptions, profilePairIssues } from '../utils/mccAnalysis.js'
-import { equivalentMsr, equivalentSmallField, tprToReference, lcpeRadius, MCC_METHOD } from '../utils/mccDosimetry.js'
+import { equivalentMsr, equivalentSmallField, lcpeRadius, MCC_METHOD } from '../utils/mccDosimetry.js'
+import MccKqPanel from '../components/MccKqPanel.jsx'
+import { calculateKq, resolvePhotonQuality, qualityFactorContext } from '../utils/mccKq.js'
 import { mccDemo } from '../utils/mccDemo.js'
 import { triggerDownload } from '../utils/zipDownload'
 import '../styles/mcc.css'
@@ -20,7 +22,8 @@ export default function MccAnalyzer() {
   const [scans,setScans]=useState([]),[selected,setSelected]=useState(''),[settings,setSettings]=useState({})
   const [overlay,setOverlay]=useState([]),[error,setError]=useState(''),[busy,setBusy]=useState(false)
   const [pairKey,setPairKey]=useState(''),[pairConfirmed,setPairConfirmed]=useState(false)
-  const [msr,setMsr]=useState({x:'10',y:'10',filter:'FFF',energy:'6',tpr:'',confirmed:false})
+  const [msr,setMsr]=useState({x:'10',y:'10',filter:'FFF',energy:'6',tpr:'',confirmed:false,source:'manual',pddKey:''})
+  const [kSettings,setKSettings]=useState({source:'photon',chamber:'',q0Type:'co60',q0Quality:''})
   const [small,setSmall]=useState({tpr:'',detector:''})
   const loadId=useRef(0)
   const current=scans.find(s=>s.key===selected)
@@ -32,6 +35,11 @@ export default function MccAnalyzer() {
   const result=results[selected]
   const edit=(key,value)=>{setSettings(v=>({...v,[selected]:{...options,referenceConfirmed:false,[key]:value}}));setPairConfirmed(false)}
   const choose=key=>{setSelected(key);setPairKey('');setPairConfirmed(false);setOverlay([])}
+  function resetPddLink() { setMsr(v=>v.source==='pdd'?{...v,pddKey:''}:v) }
+  function linkPdd() {
+    setMsr(v=>({...v,source:'pdd',pddKey:selected,confirmed:false}))
+    setKSettings(v=>({...v,source:'photon',chamber:'',q0Type:'co60',q0Quality:''}))
+  }
   async function load(files) {
     const token=++loadId.current;setBusy(true);setError('')
     try {
@@ -46,15 +54,15 @@ export default function MccAnalyzer() {
         if(parsed.length>1000 || parsed.reduce((n,s)=>n+s.points.length,0)>250000) throw new Error('Máximo 1000 barridos y 250000 puntos por lote.')
       }
       if(token!==loadId.current) return
-      setScans(parsed);setSettings({});choose(parsed[0]?.key||'')
+      resetPddLink();setScans(parsed);setSettings({});choose(parsed[0]?.key||'')
     } catch(e) { if(token===loadId.current)setError(e.message) }
     finally { if(token===loadId.current)setBusy(false) }
   }
   function demo() {
     const data=parseMcc(mccDemo(),'DEMO_sintetica.mcc').scans.map((s,i)=>({...s,key:`demo-${i}`}))
-    setScans(data);setSettings(Object.fromEntries(data.map(s=>[s.key,{...defaultMccOptions(s),quantity:s.id==='2'?'ion':'dose'}])));choose(data[0].key);setError('')
+    resetPddLink();setScans(data);setSettings(Object.fromEntries(data.map(s=>[s.key,{...defaultMccOptions(s),quantity:s.id==='2'?'ion':'dose'}])));choose(data[0].key);setError('')
   }
-  function clear() {loadId.current++;setBusy(false);setScans([]);setSettings({});choose('');setError('')}
+  function clear() {loadId.current++;setBusy(false);resetPddLink();setScans([]);setSettings({});choose('');setError('')}
   const other=scans.find(s=>s.key===pairKey),otherResult=results[pairKey]
   const pairIssues=current&&other?profilePairIssues(current,other):['Selecciona el perfil ortogonal.']
   if(other && options?.modality!=='photon')pairIssues.push('Sclin de TRS-483 se aplica a fotones.')
@@ -62,11 +70,14 @@ export default function MccAnalyzer() {
   const pairWidths=current?.type==='INPLANE_PROFILE'?[result?.metrics?.width/10,otherResult?.metrics?.width/10]:[otherResult?.metrics?.width/10,result?.metrics?.width/10]
   const equivalent=pairConfirmed&&!pairIssues.length?equivalentSmallField(...pairWidths):null
   const msrEq=equivalentMsr(mccNumber(msr.x),mccNumber(msr.y),msr.filter,mccNumber(msr.energy))
-  const tprRef=msr.confirmed?tprToReference(mccNumber(msr.tpr),msrEq?.value):null
+  const photonQuality=resolvePhotonQuality(msr,scans,results)
+  const tprRef=photonQuality.value
+  const kContext=qualityFactorContext(kSettings,photonQuality,options?.modality==='electron'?result?.electron:null)
+  const kResult=calculateKq({...kContext,chamber:kSettings.chamber,q0Type:kSettings.q0Type,q0Quality:mccNumber(kSettings.q0Quality)})
   const radius=lcpeRadius(mccNumber(small.tpr)),detector=mccNumber(small.detector)
   const lcpeClear=equivalent&&radius!==null&&detector!==null&&detector>=0?Math.min(result.metrics.width,otherResult.metrics.width)/20>=radius+detector/20:null
   function exportJson() {
-    triggerDownload(new Blob([JSON.stringify({method:MCC_METHOD,date:new Date().toISOString(),scans:scans.map(s=>({...s,options:settings[s.key]||defaultMccOptions(s),result:results[s.key]})),pair:{selected,pairKey,pairConfirmed,pairIssues,equivalent,small,lcpeClear},msr:{...msr,equivalent:msrEq,tprRef}},null,2)],{type:'application/json'}),'mcc-analisis.json')
+    triggerDownload(new Blob([JSON.stringify({method:MCC_METHOD,date:new Date().toISOString(),scans:scans.map(s=>({...s,options:settings[s.key]||defaultMccOptions(s),result:results[s.key]})),pair:{selected,pairKey,pairConfirmed,pairIssues,equivalent,small,lcpeClear},msr:{...msr,equivalent:msr.source==='manual'?msrEq:null,tprRef,quality:photonQuality},kqqo:{settings:kSettings,context:kContext,result:kResult}},null,2)],{type:'application/json'}),'mcc-analisis.json')
   }
   function exportCsv() {
     const esc=v=>'"'+String(typeof v==='string' && /^[=+@\-\t\r]/.test(v)?"'"+v:v??'').replaceAll('"','""')+'"'
@@ -106,7 +117,7 @@ export default function MccAnalyzer() {
         <p className="mcc-note">{current.points.length} puntos · intervalo máximo {fmt(result?.maxGap)} mm · interpolación lineal · — = no evaluable.</p>
         {pdd?<><div className="mcc-metrics"><Metric title={metric?'dₘáx dosis':'Máximo de señal'} value={metric?.dmax??result.rawMetrics.dmax} unit="mm"/><Metric title="PDD(5 cm)" value={metric?.pdd5} unit="%"/><Metric title="PDD(10 cm)" value={metric?.pdd10} unit="%"/><Metric title="PDD(20 cm)" value={metric?.pdd20} unit="%"/><Metric title="R₉₀ dosis" value={metric?.r90} unit="mm"/><Metric title="R₈₀ dosis" value={metric?.r80} unit="mm"/><Metric title="R₅₀ curva de dosis" value={metric?.r50} unit="mm"/><Metric title="R₂₀ dosis" value={metric?.r20} unit="mm"/></div>
           {result.electron&&<><h3>Electrones · TRS‑398 Rev.1</h3><div className="mcc-metrics"><Metric title="R₅₀,ion" value={result.electron.r50ion} unit="g/cm²"/><Metric title={options.quantity==='ion'?'R₅₀ por ec. 37 (tabla)':'R₅₀ dosis'} value={result.electron.r50} unit="g/cm²"/><Metric title="Rp estimado · secante 60–40 / cola" value={metric?.rp} unit="mm"/><Metric title="zref = 0,6 R₅₀ − 0,1" value={result.electron.zref} unit="g/cm²"/></div><p className="mcc-note">La ecuación 37 selecciona la calidad para interpolar s(w,air). R₅₀ de la curva corregida se informa aparte; puede diferir por muestreo e interpolación. La curva verde solo abarca el dominio tabulado. Rp requiere cola de dosis distal suficiente; no se extrapola la tabla para obtenerla.</p></>}
-          {options.modality==='photon'&&<div className="mcc-subpanel"><h3>PDD → TPR₂₀,₁₀ · WFF</h3><div className="mcc-fields"><Field title="Campo X en superficie (cm)"><Num value={options.xSurface} onChange={v=>edit('xSurface',v)}/></Field><Field title="Campo Y en superficie (cm)"><Num value={options.ySurface} onChange={v=>edit('ySurface',v)}/></Field><Metric title="TPR₂₀,₁₀ estimado" value={result.tpr}/></div><label><input type="checkbox" checked={options.referenceConfirmed} onChange={e=>edit('referenceConfirmed',e.target.checked)}/> Confirmo medida central sin cuña, agua, WFF, SSD 100 cm y campo 10 × 10 cm en superficie</label><p className="mcc-formula">TPR₂₀,₁₀ = 1,2661 · PDD(20)/PDD(10) − 0,0595</p></div>}
+          {options.modality==='photon'&&<div className="mcc-subpanel"><h3>PDD → TPR₂₀,₁₀ · WFF</h3><div className="mcc-fields"><Field title="Campo X en superficie (cm)"><Num value={options.xSurface} onChange={v=>edit('xSurface',v)}/></Field><Field title="Campo Y en superficie (cm)"><Num value={options.ySurface} onChange={v=>edit('ySurface',v)}/></Field><Metric title="TPR₂₀,₁₀ estimado" value={result.tpr}/></div><label><input type="checkbox" checked={options.referenceConfirmed} onChange={e=>edit('referenceConfirmed',e.target.checked)}/> Confirmo medida central sin cuña, agua, WFF, SSD 100 cm y campo 10 × 10 cm en superficie</label><p className="mcc-formula">TPR₂₀,₁₀ = 1,2661 · PDD(20)/PDD(10) − 0,0595</p><button disabled={result.tpr===null} onClick={linkPdd}>Vincular este TPR al cálculo de kQ</button></div>}
         </>:metric&&<><div className="mcc-metrics"><Metric title="FWHM (50% máximo global)" value={metric.width} unit="mm"/><Metric title="Desviación centro 50% / CAX" value={metric.centerDeviation} unit="mm"/><Metric title="Penumbra izquierda 80–20" value={metric.penumbraLeft} unit="mm"/><Metric title="Penumbra derecha 80–20" value={metric.penumbraRight} unit="mm"/><Metric title="Planitud WFF · 80% central" value={metric.flatness} unit="%"/><Metric title="Simetría máx. |L−R| / CAX" value={metric.symmetry} unit="%"/><Metric title="FFF · CAX / media a ±80%" value={metric.unflatness}/><Metric title="Distancia entre inflexiones estimadas" value={metric.inflectionWidth} unit="mm"/></div><p className="mcc-note">La planitud no se evalúa en FFF ni campos pequeños. Las inflexiones se estiman con pendiente local de 5 muestras; revisar muestreo y curva. En FFF amplio, la penumbra al máximo global es descriptiva.</p></>}
         {!!result.warnings?.length&&<ul className="mcc-warnings">{result.warnings.map((w,i)=><li key={i}>{w}</li>)}</ul>}</section>
         {!pdd&&<section className="mcc-card"><h2>4. Campo pequeño · Sclin de TRS‑483</h2><p>Usa dos FWHM ortogonales en el mismo plano de medida. Sclin = √(FWHMₓ · FWHMᵧ).</p><Field title="Perfil ortogonal"><select value={pairKey} onChange={e=>{setPairKey(e.target.value);setPairConfirmed(false)}}><option value="">Seleccionar…</option>{scans.filter(s=>s.key!==selected&&s.type!== 'PDD').map(s=><option key={s.key} value={s.key}>{label(s)}</option>)}</select></Field>
@@ -115,12 +126,22 @@ export default function MccAnalyzer() {
         </section>}
       </>}
     </>}
-    <section className="mcc-card"><h2>{scans.length?'5. ':'2. '}Equivalente uniforme FFF / WFF y TPR de referencia</h2><p>Calculadora independiente para el campo de referencia de la máquina (msr). Introduce las dimensiones del campo en el plano del detector. No utiliza Sclin ni la FWHM de un FFF amplio.</p><div className="mcc-fields">
-      <Field title="Haz"><select value={msr.filter} onChange={e=>setMsr(v=>({...v,filter:e.target.value,confirmed:false}))}><option value="FFF">FFF · linac convencional</option><option value="WFF">WFF</option></select></Field>
-      <Field title="Energía nominal (MV)"><Num value={msr.energy} onChange={energy=>setMsr(v=>({...v,energy,confirmed:false}))}/></Field>
-      <Field title="X en plano detector (cm)"><Num value={msr.x} onChange={x=>setMsr(v=>({...v,x,confirmed:false}))}/></Field><Field title="Y en plano detector (cm)"><Num value={msr.y} onChange={y=>setMsr(v=>({...v,y,confirmed:false}))}/></Field>
-      <Metric title={`S uniforme · tabla ${msrEq?.table||'—'}`} value={msrEq?.value} unit="cm"/>
-    </div><p className="mcc-note">Tablas 15–17: rectángulos de 3 a 12 cm por lado; interpolación bilineal sin extrapolación. FFF: solo 6–7 MV o 10 MV. Valores genéricos publicados, no personalizados a tu perfil. No aplicables a CyberKnife.</p><div className="mcc-fields"><Field title="TPR₂₀,₁₀(S) medido · no PDD₂₀,₁₀"><Num value={msr.tpr} onChange={tpr=>setMsr(v=>({...v,tpr,confirmed:false}))}/></Field><Metric title="TPR₂₀,₁₀(10) · ec. 28" value={tprRef}/></div><label className="mcc-checks"><input type="checkbox" checked={msr.confirmed} onChange={e=>setMsr(v=>({...v,confirmed:e.target.checked}))}/> Confirmo TPR medido a distancia fuente–detector constante, campo msr con suficiente equilibrio lateral y condiciones de TRS‑483</label><p className="mcc-formula">TPR₂₀,₁₀(10) = [TPR₂₀,₁₀(S) + 0,01615(10 − S)] / [1 + 0,01615(10 − S)]</p><p className="mcc-note">La ecuación solo se calcula para 4 ≤ S ≤ 12 cm. Un cociente PDD(20)/PDD(10) medido a SSD constante no es un TPR medido.</p></section>
-    <section className="mcc-card"><h2>Método y referencias</h2><details><summary>Fórmulas, alcance y trazabilidad</summary><p><strong>Electrones:</strong> R₅₀ = 1,029 R₅₀,ion − 0,06 si R₅₀,ion ≤ 10 g/cm²; 1,059 R₅₀,ion − 0,37 si es mayor. Después D(z) ∝ I(z) · s(w,air)[R₅₀,z/R₅₀], normalizada al máximo corregido. Tabla 22 de TRS‑398 Rev.1, interpolada en ambas variables.</p><p><strong>PDD:</strong> dₘáx corresponde al máximo muestreado; R₉₀/R₈₀/R₅₀/R₂₀ son los primeros cruces distales tras el máximo. Rp es la intersección de la secante distal 60–40% con una regresión de la cola (≥5 muestras por debajo del 10%, más allá de 1,3 R₅₀, extensión ≥5 mm); es una estimación dependiente del muestreo, no un ajuste de tangente exacta. No se extrapolan profundidades ausentes. La incertidumbre del muestreo y las correcciones de detector no se incluyen.</p><p><strong>Perfiles:</strong> FWHM respecto al máximo global. Simetría sobre el 80% central disponible a ambos lados del CAX declarado. Planitud = 100(Dmax − Dmin)/(Dmax + Dmin) en esa región. El cociente FFF es descriptivo, sin tolerancia universal.</p><p><strong>PDD → TPR:</strong> la ecuación empírica WFF de TRS‑398 necesita su geometría específica. No se extiende automáticamente a FFF, campos pequeños u otras SSD. TRS‑483 corrige un TPR ya medido a campo equivalente; no convierte por sí sola un PDD en TPR.</p><p>No se calculan dosis absolutas, kQ ni factores de output a partir de perfiles. Los resultados requieren contraste con datos de referencia del servicio antes de su uso clínico.</p><p><a href={REF398} target="_blank" rel="noreferrer">IAEA TRS‑398 Rev.1 (2024): §6.3, ec. 37 y tabla 22</a> · <a href={REF483} target="_blank" rel="noreferrer">IAEA TRS‑483 (2017): §5.3.3, tablas 15–17 y ec. 28</a> · <a href="https://github.com/tbezo/pymcc" target="_blank" rel="noreferrer">pymcc · Thomas Bezold (MIT), referencia para el formato MCC</a></p><p className="mcc-note">{MCC_METHOD}. Sin envío de MCC al servidor ni persistencia de datos de medida.</p></details></section>
+    <section className="mcc-card"><h2>{scans.length?'5. ':'2. '}TPR de referencia · origen y equivalente de campo</h2>
+      <Field title="Origen del TPR"><select aria-label="Origen del TPR" value={msr.source} onChange={e=>{if(e.target.value==='pdd')linkPdd();else setMsr(v=>({...v,source:e.target.value,pddKey:'',tpr:'',confirmed:false}))}}><option value="manual">TPR(S) medido · campo msr (TRS‑483)</option><option value="reference">TPR medido · referencia 10×10 (TRS‑398)</option><option value="pdd" disabled={msr.source!=='pdd'&&!Number.isFinite(result?.tpr)}>Vincular TPR estimado del PDD activo (TRS‑398)</option></select></Field>
+      {msr.source==='pdd'?<div className="mcc-subpanel"><p><strong>Enlace al PDD:</strong> {photonQuality.fileName||'sin barrido válido'} {photonQuality.scanId?`· #${photonQuality.scanId}`:''}</p><p>El resultado anterior ya es un TPR de referencia para WFF 10×10 cm. Se transfiere sin volver a aplicar la ecuación 28 de TRS‑483. Se actualiza al cambiar los ajustes del PDD y queda invalidado si este deja de cumplir las condiciones.</p><Metric title="TPR₂₀,₁₀(10) vinculado · estimado desde PDD" value={tprRef}/>{photonQuality.error&&<p className="mcc-warnings">{photonQuality.error}</p>}</div>:<>
+        <p>{msr.source==='manual'?'Introduce las dimensiones del campo msr en el plano del detector. No utiliza Sclin ni la FWHM de un FFF amplio.':'Introduce el TPR medido en agua con un campo físico de 10×10 cm en el plano del detector y distancia fuente–detector constante de 100 cm. No se aplica corrección de tamaño.'}</p>
+        <div className="mcc-fields">
+          <Field title="Haz"><select value={msr.filter} onChange={e=>setMsr(v=>({...v,filter:e.target.value,confirmed:false}))}><option value="FFF">FFF · linac convencional</option><option value="WFF">WFF</option></select></Field>
+          <Field title="Energía nominal (MV)"><Num value={msr.energy} onChange={energy=>setMsr(v=>({...v,energy,confirmed:false}))}/></Field>
+          {msr.source==='manual'&&<><Field title="X en plano detector (cm)"><Num value={msr.x} onChange={x=>setMsr(v=>({...v,x,confirmed:false}))}/></Field><Field title="Y en plano detector (cm)"><Num value={msr.y} onChange={y=>setMsr(v=>({...v,y,confirmed:false}))}/></Field><Metric title={`S uniforme · tabla ${msrEq?.table||'—'}`} value={msrEq?.value} unit="cm"/></>}
+        </div>
+        {msr.source==='manual'&&<p className="mcc-note">Tablas 15–17: rectángulos de 3 a 12 cm por lado; interpolación bilineal sin extrapolación. FFF: solo 6–7 MV o 10 MV. Valores genéricos publicados, no personalizados a tu perfil. No aplicables a CyberKnife.</p>}
+        <div className="mcc-fields"><Field title={msr.source==='manual'?'TPR₂₀,₁₀(S) medido · no PDD₂₀,₁₀':'TPR₂₀,₁₀ de referencia medido'}><Num value={msr.tpr} onChange={tpr=>setMsr(v=>({...v,tpr,confirmed:false}))}/></Field><Metric title={msr.source==='manual'?'TPR₂₀,₁₀(10) · ec. 28':'TPR₂₀,₁₀ de referencia'} value={tprRef}/></div>
+        <label className="mcc-checks"><input type="checkbox" checked={msr.confirmed} onChange={e=>setMsr(v=>({...v,confirmed:e.target.checked}))}/>{msr.source==='manual'?'Confirmo TPR medido a distancia fuente–detector constante, campo msr con suficiente equilibrio lateral y condiciones de TRS‑483':'Confirmo TPR de referencia en agua, campo físico 10×10 cm, SDD 100 cm y condiciones de TRS‑398 Rev.1'}</label>
+        {msr.source==='manual'?<><p className="mcc-formula">TPR₂₀,₁₀(10) = [TPR₂₀,₁₀(S) + 0,01615(10 − S)] / [1 + 0,01615(10 − S)]</p><p className="mcc-note">La ecuación solo se calcula para 4 ≤ S ≤ 12 cm. Un cociente PDD(20)/PDD(10) medido a SSD constante no es un TPR medido.</p></>:<p className="mcc-note">Para FFF convencional, TRS‑398 Rev.1 utiliza TPR como índice hasta 10 MV. El promediado de volumen se trata por separado.</p>}
+      </>}
+    </section>
+    <MccKqPanel settings={kSettings} onChange={setKSettings} context={kContext} result={kResult} onExport={exportJson}/>
+    <section className="mcc-card"><h2>Método y referencias</h2><details><summary>Fórmulas, alcance y trazabilidad</summary><p><strong>Electrones:</strong> R₅₀ = 1,029 R₅₀,ion − 0,06 si R₅₀,ion ≤ 10 g/cm²; 1,059 R₅₀,ion − 0,37 si es mayor. Después D(z) ∝ I(z) · s(w,air)[R₅₀,z/R₅₀], normalizada al máximo corregido. Tabla 22 de TRS‑398 Rev.1, interpolada en ambas variables.</p><p><strong>PDD:</strong> dₘáx corresponde al máximo muestreado; R₉₀/R₈₀/R₅₀/R₂₀ son los primeros cruces distales tras el máximo. Rp es la intersección de la secante distal 60–40% con una regresión de la cola (≥5 muestras por debajo del 10%, más allá de 1,3 R₅₀, extensión ≥5 mm); es una estimación dependiente del muestreo, no un ajuste de tangente exacta. No se extrapolan profundidades ausentes. La incertidumbre del muestreo y las correcciones de detector no se incluyen.</p><p><strong>Perfiles:</strong> FWHM respecto al máximo global. Simetría sobre el 80% central disponible a ambos lados del CAX declarado. Planitud = 100(Dmax − Dmin)/(Dmax + Dmin) en esa región. El cociente FFF es descriptivo, sin tolerancia universal.</p><p><strong>PDD → TPR:</strong> la ecuación empírica WFF de TRS‑398 necesita su geometría específica. No se extiende automáticamente a FFF, campos pequeños u otras SSD. TRS‑483 corrige un TPR ya medido a campo equivalente; no convierte por sí sola un PDD en TPR.</p><p>kQ,Q₀ se calcula seleccionando la cámara y la calidad Q₀, con tablas 16/20/21 de TRS‑398 Rev.1 o 12/13 de TRS‑483 según el origen del índice. No se calculan dosis absolutas ni factores de output a partir de perfiles. Los resultados requieren contraste con datos de referencia del servicio antes de su uso clínico.</p><p><a href={REF398} target="_blank" rel="noreferrer">IAEA TRS‑398 Rev.1 (2024): §6.3, ec. 37 y tabla 22</a> · <a href={REF483} target="_blank" rel="noreferrer">IAEA TRS‑483 (2017): §5.3.3, tablas 15–17 y ec. 28</a> · <a href="https://github.com/tbezo/pymcc" target="_blank" rel="noreferrer">pymcc · Thomas Bezold (MIT), referencia para el formato MCC</a></p><p className="mcc-note">{MCC_METHOD}. Sin envío de MCC al servidor ni persistencia de datos de medida.</p></details></section>
   </main>
 }
