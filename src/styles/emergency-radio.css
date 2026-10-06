@@ -106,8 +106,32 @@
 .em-checkbox input { accent-color: var(--em-cyan); width: 17px; height: 17px; }
 .em-counter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 19px 0; font-size: 11px; color: var(--text-secondary); }
 .em-counter-grid b { display: block; font: 18px var(--font-mono); color: var(--text-primary); }
-.em-protocol { margin-top: 30px; border-top: 1px solid var(--border); padding-top: 12px; }
-.em-explanation p { color: var(--text-secondary); margin: 12px 0; max-width: 920px; }
+.em-traffic-breakdown { border-top: 1px solid var(--border); padding: 15px 0; }
+.em-traffic-breakdown p { font-size: 12px; line-height: 1.7; color: var(--text-secondary); margin: 6px 0; }
+.em-message-list .em-observer { border-left: 2px solid var(--em-cyan); padding-left: 9px; margin: 8px 0; line-height: 1.6; }
+.em-message-trace { margin-top: 8px; }
+.em-protocol-guide { margin-top: 30px; border-top: 1px solid var(--border); padding-top: 24px; scroll-margin-top: 80px; }
+.em-protocol-guide h2 { font-size: 20px; margin-bottom: 14px; }
+.em-protocol-guide p, .em-protocol-guide li { color: var(--text-secondary); font-size: 13px; line-height: 1.85; }
+.em-protocol-guide p { margin: 12px 0; }
+.em-protocol-guide > details { border-top: 1px solid var(--border); padding: 8px 0; }
+.em-protocol-guide summary { font-size: 14px; font-weight: 600; }
+.em-protocol-guide ul, .em-protocol-guide ol { padding-left: 23px; }
+.em-protocol-guide li { margin: 8px 0; }
+.em-protocol-guide b { color: var(--text-primary); }
+.em-guide-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 25px; }
+.em-protocol-guide .em-equation { font-family: var(--font-mono); font-size: 12px; color: var(--em-cyan); background: #222b35; border-radius: 6px; padding: 14px; overflow-wrap: anywhere; }
+.em-guide-byte { max-width: 310px; margin: 15px 0; }
+.em-bit-signal { width: 100%; display: block; background: #222b35; border-radius: 6px; }
+.em-bit-signal .em-bit-one { fill: #e6b66c0e; }.em-bit-signal .em-bit-zero { fill: #88d2d80c; }
+.em-bit-signal line { stroke: #8393a255; stroke-dasharray: 4 5; }
+.em-bit-signal path { stroke: var(--em-cyan); fill: none; stroke-width: 1.3; }
+.em-bit-signal text { fill: #d8e5ed; font-size: 11px; font-family: var(--font-mono); }
+.em-guide-live { background: #222b3560; border: 1px solid var(--border); border-radius: 6px; padding: 17px; margin: 15px 0; }
+.em-protocol-guide .em-table-scroll { max-height: 440px; margin: 15px 0; }
+.em-protocol-guide .em-guide-types { max-height: none; }
+.em-guide-sources { overflow-wrap: anywhere; }
+@media (max-width: 900px) { .em-guide-columns { grid-template-columns: 1fr; gap: 0; } }
 .em-log { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 10px; }
 .em-log ol { list-style: none; max-height: 250px; overflow: auto; margin-top: 10px; }
 .em-log li { display: flex; gap: 12px; font-size: 11px; padding: 5px 0; border-bottom: 1px solid var(--border-sub); }
