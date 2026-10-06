@@ -46,6 +46,9 @@ jobs:
       - name: Test Morse learning
         run: npm run test:morse
 
+      - name: Test emergency radio simulation
+        run: npm run test:emergency-radio
+
       - name: Test gamma-camera quality control
         run: npm run test:gamma && npm run test:nema && npm run test:cor
 

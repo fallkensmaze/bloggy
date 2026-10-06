@@ -13,6 +13,7 @@
     "test:morse": "node scripts/test-morse.mjs",
     "test:nema": "node scripts/test-nema-uniformity.mjs",
     "test:radio": "node scripts/test-radio.mjs",
+    "test:emergency-radio": "node scripts/test-emergency-radio.mjs",
     "test:paste": "node scripts/test-paste.mjs",
     "test:cpt": "node scripts/test-cpt.mjs",
     "test:pet": "node scripts/test-pet-nema.mjs && node scripts/test-pet-rois.mjs",

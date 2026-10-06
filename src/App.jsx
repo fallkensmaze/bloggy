@@ -19,6 +19,7 @@ import QCodes from './pages/QCodes'
 import MorseTrainer from './pages/MorseTrainer'
 import RadioExam from './pages/RadioExam'
 import FdtdSimulator from './pages/FdtdSimulator'
+import EmergencyRadioLab from './pages/EmergencyRadioLab'
 import Admin from './pages/Admin'
 import QuizCreator from './pages/QuizCreator'
 import QuizList from './pages/QuizList'
@@ -60,6 +61,7 @@ function App() {
         <Route path="morse" element={<MorseTrainer />} />
         <Route path="radioaficionado" element={<RadioExam />} />
         <Route path="fdtd-simulator" element={<FdtdSimulator />} />
+        <Route path="red-emergencia" element={<EmergencyRadioLab />} />
         <Route path="dosimetria-pelicula" element={<FilmDosimetry />} />
         <Route path="analizador-mcc" element={<MccAnalyzer />} />
       </Route>
