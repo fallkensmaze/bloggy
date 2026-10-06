@@ -2,7 +2,7 @@
 // The channel model supplies ideal symbol timing. This is not a live modem.
 export const SAMPLE_RATE = 9600
 export const TONES = [1200, 2400]
-export const FRAME_TYPES = { HELLO: 1, TOPOLOGY: 2, DATA: 3, ACK: 4, PROBE: 5 }
+export const FRAME_TYPES = { HELLO: 1, TOPOLOGY: 2, DATA: 3, ACK: 4, PROBE: 5, LINK_ACK: 6 }
 const PREFIX = [0xaa, 0xaa, 0xaa, 0xaa, 0xd3, 0x91]
 const encoder = new TextEncoder()
 const decoder = new TextDecoder('utf-8', { fatal: true })

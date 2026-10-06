@@ -2,9 +2,10 @@ import { FRAME_TYPES as T, SAMPLE_RATE, bytesText, decodeFrame, demodulate, enco
   mixReceiverAudio, modulate, receivedDb, seededRandom, textBytes } from './emergencyRadioAudio.js'
 
 export const RADIO_DEFAULTS = Object.freeze({ seed: 42, baud: 600, noiseDb: 0, senseDb: 4,
-  squelchDb: 4, helloInterval: 20, topologyInterval: 60, strategy: 'mpr', carrierSense: true,
-  automatic: true, ttl: 12, messageLifetime: 180, maxAttempts: 3 })
-export const TYPE_LABELS = { 1: 'HELLO', 2: 'TOPOLOGÍA', 3: 'MENSAJE', 4: 'ACUSE', 5: 'PRUEBA' }
+  squelchDb: 4, helloInterval: 60, topologyInterval: 180, strategy: 'mpr', carrierSense: true,
+  automatic: true, ttl: 12, messageLifetime: 180, maxAttempts: 3, maxHopAttempts: 4,
+  controlDuty: 0.04 })
+export const TYPE_LABELS = { 1: 'HELLO', 2: 'TOPOLOGÍA', 3: 'MENSAJE', 4: 'ACUSE FINAL', 5: 'PRUEBA', 6: 'ACUSE DE SALTO' }
 export const PRIORITIES = ['Socorro', 'Urgente', 'Rutina']
 export const STATUS_LABELS = { waiting: 'Esperando ruta', queued: 'En cola', sent: 'Esperando acuse',
   confirmed: 'Recepción confirmada', unconfirmed: 'Sin confirmación', expired: 'Caducado' }
@@ -13,6 +14,13 @@ const keyOf = p => `${p.origin}:${p.epoch}:${p.seq}`
 const frameKey = p => `${p.type}:${keyOf(p)}:${p.attempt || 0}`
 const overlaps = (a, b) => a.start < b.end - 1e-8 && b.start < a.end - 1e-8
 const sorted = iterable => [...iterable].sort((a, b) => a - b)
+const isControl = p => p.type === T.HELLO || p.type === T.TOPOLOGY
+const reliable = p => p.type === T.DATA || p.type === T.ACK
+const rank = p => p.type === T.LINK_ACK ? -2 : p.type === T.ACK ? -1 : isControl(p) ? 3 + (p.type === T.TOPOLOGY ? 1 : 0) : p.priority
+const ackId = b => b.length >= 5 ? `${b[0]}:${b[1] << 8 | b[2]}:${b[3] << 8 | b[4]}` : null
+const reverseKey = p => p.type === T.DATA ? `${keyOf(p)}:${p.attempt}` : `${ackId(p.payload)}:${p.payload[5] || 0}`
+const newer = (p, old) => !old || p.epoch > old.epoch || (p.epoch === old.epoch && p.seq !== old.seq && ((p.seq - old.seq + 65536) % 65536) < 32768)
+const trafficClass = p => isControl(p) ? 'control' : p.type === T.DATA ? 'data' : p.type === T.ACK ? 'ack' : p.type === T.LINK_ACK ? 'linkAck' : 'probe'
 
 export function createScenario(name = 'neighborhood', count = 25, seed = 42) {
   const rng = seededRandom(seed)
@@ -87,13 +95,15 @@ export class EmergencyRadioSimulation {
     this.config = { ...RADIO_DEFAULTS, ...config }
     this.random = seededRandom(this.config.seed)
     this.time = 0; this.events = []; this.eventSequence = 0; this.txSequence = 0
-    this.history = []; this.receptions = []; this.logs = []; this.messages = []; this.losses = new Map()
-    this.stats = { transmissions: 0, valid: 0, corrupt: 0, halfDuplex: 0, suppressed: 0, busy: 0, discarded: 0 }
+    this.history = []; this.receptions = []; this.logs = []; this.messages = []; this.losses = new Map(); this.traces = new Map()
+    this.stats = { transmissions: 0, valid: 0, corrupt: 0, halfDuplex: 0, suppressed: 0, busy: 0, discarded: 0,
+      control: 0, data: 0, ack: 0, linkAck: 0, linkRetries: 0, linkFailures: 0 }
     this.nodes = nodes.map(n => ({ ...n, powerDb: n.powerDb || 0, online: false, epoch: 0, seq: 0,
       neighbors: new Map(), topology: new Map(), mpr: new Set(), routes: new Map(), graph: new Map(),
       queue: [], seen: new Map(), forwarded: new Map(), inbox: new Map(), pending: new Map(), txUntil: 0,
       helloDue: Infinity, tcDue: Infinity, fingerprint: '', topologyFingerprint: '', lastHello: -Infinity,
-      lastTc: -Infinity, advertised: false, tickScheduled: false }))
+      lastTc: -Infinity, advertised: false, tickScheduled: false, startedAt: 0,
+      controlUntil: 0, trafficUntil: 0, hopWait: null, reverse: new Map(), failedLinks: new Map(), tryDue: Infinity }))
     for (const node of this.nodes) this.schedule(node.joinAt || 0, 'join', () => { if (!node.epoch) this.setOnline(node.id, true) })
   }
   node(id) { return this.nodes.find(n => n.id === Number(id)) }
@@ -119,7 +129,7 @@ export class EmergencyRadioSimulation {
     if (!n || n.online === online) return
     n.online = online
     if (!online) {
-      n.queue = []
+      n.queue = []; n.hopWait = null; n.tryDue = Infinity
       for (const tx of this.history) if (tx.sender === id && tx.end > this.time) { tx.end = this.time; tx.aborted = true }
       for (const m of n.pending.values()) if (!['confirmed', 'expired'].includes(m.status)) m.status = 'unconfirmed'
       this.log(`${n.label} se apaga. Los demás lo descubrirán por sus mensajes o por caducidad.`, 'change', id)
@@ -129,6 +139,7 @@ export class EmergencyRadioSimulation {
     n.neighbors.clear(); n.topology.clear(); n.mpr.clear(); n.routes.clear(); n.graph.clear()
     n.seen.clear(); n.forwarded.clear(); n.pending.clear(); n.fingerprint = ''; n.topologyFingerprint = ''
     n.lastHello = -Infinity; n.lastTc = -Infinity; n.advertised = false
+    n.startedAt = this.time; n.controlUntil = this.time; n.trafficUntil = this.time; n.hopWait = null; n.reverse.clear(); n.failedLinks.clear(); n.tryDue = Infinity
     n.helloDue = this.time + this.random() * 5; n.tcDue = this.time + 10 + this.random() * 8
     this.log(`${n.label} entra y comienza a escuchar.`, 'change', id)
     if (!n.tickScheduled) { n.tickScheduled = true; this.schedule(this.time + 0.1, 'tick', () => this.tick(n)) }
@@ -144,22 +155,27 @@ export class EmergencyRadioSimulation {
     for (const [id, v] of n.neighbors) if (this.time - v.heardAt > hold) n.neighbors.delete(id)
     for (const [id, v] of n.topology) if (this.time - v.receivedAt > 3 * this.config.topologyInterval) n.topology.delete(id)
     for (const map of [n.seen, n.forwarded]) for (const [k, at] of map) if (this.time - at > 300) map.delete(k)
+    for (const [key, value] of n.reverse) if (value.expires <= this.time) n.reverse.delete(key)
+    for (const [id, until] of n.failedLinks) if (until <= this.time) n.failedLinks.delete(id)
     const neighbors = this.symmetricNeighbors(n)
     const previous = sorted(n.mpr).join(',')
     n.mpr = selectMpr(neighbors, n.id, n.mpr)
     const fingerprint = `${neighbors.map(v => v.id).sort((a, b) => a - b)}|${sorted(n.mpr)}`
     if (fingerprint !== n.fingerprint) {
       n.fingerprint = fingerprint
-      n.helloDue = Math.min(n.helloDue, Math.max(n.lastHello + 5, this.time + 2 + this.random() * 5))
+      const minimum = this.time - n.startedAt < 60 ? 10 : Math.max(10, this.config.helloInterval / 2)
+      n.helloDue = Math.min(n.helloDue, Math.max(n.lastHello + minimum, this.time + 2 + this.random() * 5))
       if (previous !== sorted(n.mpr).join(',')) this.log(`${n.label} selecciona enlaces: ${sorted(n.mpr).map(id => this.label(id)).join(', ') || 'ninguno necesario'}.`, 'mpr', n.id)
     }
-    const selectedByNeighbor = neighbors.some(v => v.report.some(r => r.id === n.id && r.mpr))
-    const topologyFingerprint = `${neighbors.map(v => v.id).sort((a, b) => a - b)}|${selectedByNeighbor}`
+    const selectors = neighbors.filter(v => v.report.some(r => r.id === n.id && r.mpr)).map(v => v.id)
+    // A new selector or relay can open a previously unavailable flooding path.
+    // Testing only "selected by someone" left that path waiting a full period.
+    const topologyFingerprint = `${sorted(neighbors.map(v => v.id))}|${sorted(selectors)}|${sorted(n.mpr)}`
     if (topologyFingerprint !== n.topologyFingerprint) {
       n.topologyFingerprint = topologyFingerprint
-      n.tcDue = Math.min(n.tcDue, Math.max(n.lastTc + 15, this.time + 5 + this.random() * 6))
+      n.tcDue = Math.min(n.tcDue, Math.max(n.lastTc + Math.max(30, this.config.topologyInterval / 2), this.time + 5 + this.random() * 6))
     }
-    Object.assign(n, computeRoutes(n.id, neighbors, n.topology))
+    Object.assign(n, computeRoutes(n.id, neighbors.filter(v => !n.failedLinks.has(v.id)), n.topology))
   }
   packet(n, type, payload = [], extra = {}) {
     n.seq = (n.seq + 1) & 0xffff
@@ -176,7 +192,11 @@ export class EmergencyRadioSimulation {
     if (!n.online) return
     this.refresh(n)
     if (this.config.automatic) {
-      if (this.time >= n.helloDue) { this.hello(n); n.lastHello = this.time; n.helloDue = this.time + this.config.helloInterval * (0.8 + 0.4 * this.random()) }
+      if (this.time >= n.helloDue) {
+        this.hello(n); n.lastHello = this.time
+        const interval = this.time - n.startedAt < 60 ? Math.min(20, this.config.helloInterval) : this.config.helloInterval
+        n.helloDue = this.time + interval * (0.8 + 0.4 * this.random())
+      }
       if (this.time >= n.tcDue) {
         const neighbors = this.symmetricNeighbors(n)
         const relay = neighbors.some(v => v.report.some(r => r.id === n.id && r.mpr))
@@ -193,50 +213,78 @@ export class EmergencyRadioSimulation {
       if (['confirmed', 'expired', 'unconfirmed'].includes(m.status)) continue
       if (this.time >= m.expires) { m.status = 'expired'; continue }
       if (this.time < m.due) continue
+      // Do not launch a new end-to-end attempt while its first hop is still
+      // queued or being recovered locally.
+      if (n.queue.some(e => e.packet.type === T.DATA && keyOf(e.packet) === m.id) || (n.hopWait?.packet.type === T.DATA && keyOf(n.hopWait.packet) === m.id)) { m.due = this.time + 1; continue }
       if (m.attempts >= this.config.maxAttempts) { m.status = 'unconfirmed'; this.log(`${n.label}: ${m.id} queda sin confirmación.`, 'loss', n.id); continue }
       const route = n.routes.get(m.dst)
       if (!route) { m.status = 'waiting'; m.due = this.time + 2; continue }
       m.status = 'queued'; m.due = Infinity
-      this.enqueue(n, { ...m.packet, attempt: m.attempts, next: route.next }, { expires: m.expires })
+      if (!this.enqueue(n, { ...m.packet, attempt: m.attempts, next: route.next }, { expires: m.expires })) { m.status = 'waiting'; m.due = this.time + 1 }
     }
     n.tickScheduled = true; this.schedule(this.time + 1, 'tick', () => this.tick(n))
   }
   enqueue(n, packet, options = {}) {
-    if (!n.online) return
+    if (!n.online) return false
     if (options.replaceType) n.queue = n.queue.filter(e => !(e.packet.type === options.replaceType && e.packet.origin === n.id))
-    if (n.queue.length >= 48) { this.stats.discarded++; return }
+    // A queued older topology announcement is obsolete when a newer one from
+    // the same origin is available. Do not flood both after channel contention.
+    if (packet.type === T.TOPOLOGY) n.queue = n.queue.filter(e => e.packet.type !== T.TOPOLOGY || e.packet.origin !== packet.origin || !newer(packet, e.packet))
+    if (n.queue.length >= 48) {
+      const index = n.queue.findIndex(e => isControl(e.packet) && !isControl(packet))
+      this.stats.discarded++
+      if (index < 0) return false
+      n.queue.splice(index, 1)
+    }
     n.queue.push({ packet: { ...packet }, added: this.time, expires: options.expires ?? this.time + 60,
-      ready: options.ready ?? this.time + 0.12 + this.random() * (packet.priority === 0 ? 0.2 : 0.65) })
-    this.schedule(Math.max(this.time + 0.001, Math.min(...n.queue.map(e => e.ready))), 'try', () => this.tryTransmit(n))
+      ready: options.ready ?? this.time + 0.2 + this.random() * (packet.priority === 0 ? 0.3 : 0.8), linkTries: 0 })
+    this.wakeQueue(n)
+    return true
+  }
+  readyAt(n, entry) {
+    return Math.max(entry.ready, isControl(entry.packet) ? Math.max(n.controlUntil, n.trafficUntil) : 0)
+  }
+  wakeQueue(n) {
+    if (!n.online || !n.queue.length) return
+    const candidates = n.queue.filter(e => e.expires > this.time && (!n.hopWait || e.packet.type === T.LINK_ACK))
+    if (!candidates.length) return
+    const at = Math.max(this.time + 0.001, n.txUntil + 0.001, Math.min(...candidates.map(e => this.readyAt(n, e))))
+    if (at >= n.tryDue) return
+    n.tryDue = at
+    this.schedule(at, 'try', () => { if (n.tryDue === at) { n.tryDue = Infinity; this.tryTransmit(n) } })
   }
   tryTransmit(n) {
     if (!n.online || this.time < n.txUntil) return
     n.queue = n.queue.filter(e => e.expires > this.time)
-    const entry = n.queue.filter(e => e.ready <= this.time + 1e-8)
-      .sort((a, b) => a.packet.priority - b.packet.priority || a.added - b.added)[0]
-    if (!entry) return
-    if (this.config.carrierSense && this.channelBusy(n)) {
-      this.stats.busy++; entry.ready = this.time + 0.15 + this.random() * 1.2
-      this.schedule(entry.ready, 'try', () => this.tryTransmit(n)); return
-    }
+    const entry = n.queue.filter(e => this.readyAt(n, e) <= this.time + 1e-8 && (!n.hopWait || e.packet.type === T.LINK_ACK))
+      .sort((a, b) => rank(a.packet) - rank(b.packet) || a.added - b.added)[0]
+    if (!entry) { this.wakeQueue(n); return }
     const p = entry.packet
-    if (p.type === T.DATA || p.type === T.ACK) {
-      const route = n.routes.get(p.dst)
+    // Link acknowledgements use a shorter turnaround. Other senders require
+    // a quiet guard interval after locally audible energy, leaving room for it.
+    if (this.config.carrierSense && this.channelBusy(n, p.type === T.LINK_ACK ? 0.015 : 0.16)) {
+      this.stats.busy++; entry.ready = this.time + 0.15 + this.random() * 1.2
+      this.wakeQueue(n); return
+    }
+    if (reliable(p) && !entry.linkTries) {
+      const breadcrumb = p.type === T.ACK ? n.reverse.get(reverseKey(p)) : null
+      const route = breadcrumb && breadcrumb.destination === p.origin && breadcrumb.expires > this.time ? { next: breadcrumb.next } : n.routes.get(p.dst)
       if (!route) {
         entry.ready = this.time + 2
-        this.schedule(entry.ready, 'try', () => this.tryTransmit(n)); return
+        this.wakeQueue(n); return
       }
       p.next = route.next
     }
     n.queue.splice(n.queue.indexOf(entry), 1)
-    this.startTransmission(n, p)
+    entry.linkTries++
+    this.startTransmission(n, p, entry)
   }
-  channelBusy(n) {
+  channelBusy(n, guard = 0) {
     let power = 0
-    for (const tx of this.history) if (tx.start <= this.time && tx.end > this.time && tx.sender !== n.id) power += (tx.gains[n.id] || 0) ** 2
+    for (const tx of this.history) if (tx.start <= this.time && tx.end + guard > this.time && tx.sender !== n.id) power += (tx.gains[n.id] || 0) ** 2
     return power > 10 ** ((this.config.noiseDb + this.config.senseDb) / 10)
   }
-  startTransmission(n, packet) {
+  startTransmission(n, packet, entry = null) {
     const p = { ...packet, sender: n.id }
     const bytes = encodeFrame(p)
     const samples = modulate(bytes, this.config.baud, this.random() * Math.PI * 2)
@@ -249,17 +297,43 @@ export class EmergencyRadioSimulation {
     const tx = { id: ++this.txSequence, sender: n.id, start, end: start + samples.length / SAMPLE_RATE,
       packet: p, bytes, samples, gains, receivers, baud: this.config.baud, noiseDb: this.config.noiseDb, outcomes: {} }
     n.txUntil = tx.end + 0.15; this.history.push(tx); this.stats.transmissions++
+    const category = trafficClass(p); this.stats[category] = (this.stats[category] || 0) + 1
+    if (isControl(p)) n.controlUntil = tx.start + (tx.end - tx.start) / this.config.controlDuty
+    if (reliable(p) && entry) {
+      n.trafficUntil = Math.max(n.trafficUntil, tx.end + 2)
+      if (entry.linkTries > 1) this.stats.linkRetries++
+      const wait = { packet: p, entry, next: p.next, epoch: n.epoch }
+      n.hopWait = wait
+      // 31-byte link ACK plus receiver turnaround and a contention margin.
+      this.schedule(tx.end + 31 * 8 / this.config.baud + 1.2, 'hop-timeout', () => {
+        if (n.hopWait !== wait || !n.online || n.epoch !== wait.epoch) return
+        n.hopWait = null
+        if (entry.linkTries < this.config.maxHopAttempts && entry.expires > this.time) {
+          entry.ready = this.time + (0.4 + this.random()) * 2 ** entry.linkTries
+          n.queue.push(entry)
+        } else {
+          this.stats.linkFailures++
+          // A missing local ACK is feedback about this node's own first hop,
+          // not global knowledge of a broken link. Try another learned path.
+          n.failedLinks.set(p.next, this.time + 30); this.refresh(n)
+          this.log(`${n.label} agota los reintentos de salto hacia ${this.label(p.next)}.`, 'loss', n.id)
+          const own = n.pending.get(keyOf(p))
+          if (p.type === T.DATA && p.origin === n.id && own && !['confirmed', 'expired'].includes(own.status)) own.due = this.time + 1 + this.random() * 2
+        }
+        this.wakeQueue(n)
+      })
+    }
     const own = n.pending.get(keyOf(p))
-    if (p.type === T.DATA && p.origin === n.id && own) {
+    if (p.type === T.DATA && p.origin === n.id && own && (!entry || entry.linkTries === 1)) {
       own.attempts++; own.status = 'sent'
-      own.due = this.time + Math.max(25, 4 * (n.routes.get(p.dst)?.hops || 1) * (tx.end - tx.start + 0.8))
+      own.due = this.time + Math.max(35, 5 * (n.routes.get(p.dst)?.hops || 1) * (tx.end - tx.start + 31 * 8 / this.config.baud + 1)) + this.random() * 3
       own.path = n.routes.get(p.dst)?.path || []
     }
     this.schedule(tx.end, 'end', () => this.finishTransmission(tx))
-    this.schedule(n.txUntil + 0.01, 'try', () => this.tryTransmit(n))
+    this.wakeQueue(n)
   }
   finishTransmission(tx) {
-    if (tx.aborted) return
+    if (tx.aborted) { this.traceTransmission(tx, 'aborted'); return }
     for (const [idString, epoch] of Object.entries(tx.receivers)) {
       const id = Number(idString); const n = this.node(id)
       if (!n.online || n.epoch !== epoch) continue
@@ -284,7 +358,19 @@ export class EmergencyRadioSimulation {
         if ([T.DATA, T.ACK, T.PROBE].includes(tx.packet.type)) this.log(`${n.label} pierde ${TYPE_LABELS[tx.packet.type]} de ${this.label(tx.sender)}: ${half ? 'estaba transmitiendo' : interfering.length ? 'solapamiento' : 'ruido'}.`, 'loss', id)
       }
     }
+    this.traceTransmission(tx)
   }
+  // Observer diagnostics never feed route discovery, retries or confirmation.
+  traceTransmission(tx, reason = null) {
+    const p = tx.packet
+    const id = p.type === T.DATA ? keyOf(p) : p.type === T.ACK ? ackId(p.payload) : null
+    const trace = this.traces.get(id)
+    if (!trace) return
+    trace.push({ time: this.time, sender: p.sender, next: p.next, type: p.type, attempt: p.attempt,
+      ok: tx.outcomes[p.next] === 'ok', reason: reason || tx.outcomes[p.next] || 'unheard' })
+    if (trace.length > 128) trace.shift()
+  }
+  messageTrace(id) { return this.traces.get(id) || [] }
   receive(n, p) {
     if (p.net !== 7 || p.sender === n.id || p.ttl === 0) return
     const neighbor = n.neighbors.get(p.sender) || { id: p.sender, helloAt: -Infinity, report: [] }
@@ -296,23 +382,46 @@ export class EmergencyRadioSimulation {
       this.refresh(n); return
     }
     if (p.type === T.PROBE) { this.log(`${n.label} decodifica la prueba de ${this.label(p.sender)} (CRC válido).`, 'received', n.id); return }
+    if (p.type === T.LINK_ACK) {
+      if (p.next !== n.id || p.dst !== n.id || p.origin !== p.sender || p.payload.length !== 7) return
+      const b = p.payload
+      const acknowledged = `${b[0]}:${b[1]}:${b[2] << 8 | b[3]}:${b[4] << 8 | b[5]}:${b[6]}`
+      const waiting = n.hopWait?.next === p.sender && frameKey(n.hopWait.packet) === acknowledged
+      const queued = n.queue.some(e => e.linkTries && e.packet.next === p.sender && frameKey(e.packet) === acknowledged)
+      if (waiting) n.hopWait = null
+      if ((waiting || queued) && n.failedLinks.delete(p.sender)) this.refresh(n)
+      // A late ACK can arrive during the retry backoff; it still cancels that
+      // local retransmission, but can never confirm an end-to-end message.
+      n.queue = n.queue.filter(e => !(e.linkTries && e.packet.next === p.sender && frameKey(e.packet) === acknowledged))
+      this.wakeQueue(n); return
+    }
     const key = frameKey(p)
     if (p.type === T.TOPOLOGY) {
       const old = n.topology.get(p.origin)
-      if (p.origin !== n.id && (!old || p.epoch > old.epoch || (p.epoch === old.epoch && ((p.seq - old.seq + 65536) % 65536) < 32768 && p.seq !== old.seq))) {
+      const fresh = newer(p, old) || (old && p.epoch === old.epoch && p.seq === old.seq)
+      if (p.origin !== n.id && newer(p, old)) {
         n.topology.set(p.origin, { neighbors: p.payload, epoch: p.epoch, seq: p.seq, receivedAt: this.time })
         this.refresh(n)
       }
       // Processing and retransmission duplicates are separate: a later copy
       // from a selector can still authorize forwarding.
       const selected = this.symmetricNeighbors(n).some(v => v.id === p.sender && v.report.some(r => r.id === n.id && r.mpr))
-      if (p.origin !== n.id && p.ttl > 1 && !n.forwarded.has(key) && (this.config.strategy === 'flood' || selected)) {
-        n.forwarded.set(key, this.time)
-        this.enqueue(n, { ...p, ttl: p.ttl - 1 })
+      if (fresh && p.origin !== n.id && p.ttl > 1 && !n.forwarded.has(key) && (this.config.strategy === 'flood' || selected)) {
+        if (this.enqueue(n, { ...p, ttl: p.ttl - 1 })) n.forwarded.set(key, this.time)
       } else this.stats.suppressed++
       return
     }
+    if (reliable(p)) n.trafficUntil = Math.max(n.trafficUntil, this.time + 2 + 31 * 8 / this.config.baud)
     if (p.next !== n.id) return
+    if (reliable(p)) {
+      this.enqueue(n, this.packet(n, T.LINK_ACK,
+        [p.type, p.origin, p.epoch >> 8, p.epoch & 255, p.seq >> 8, p.seq & 255, p.attempt],
+        { dst: p.sender, next: p.sender, ttl: 1, priority: 0 }),
+      { ready: this.time + 0.05 + this.random() * 0.01, expires: this.time + 2 + 31 * 8 / this.config.baud })
+      if (p.type === T.DATA && !n.reverse.has(reverseKey(p))) {
+        n.reverse.set(reverseKey(p), { next: p.sender, destination: p.dst, expires: this.time + this.config.messageLifetime })
+      }
+    }
     if (p.dst === n.id && p.type === T.DATA) {
       const id = keyOf(p)
       const text = bytesText(Uint8Array.from(p.payload))
@@ -323,18 +432,33 @@ export class EmergencyRadioSimulation {
         this.log(`${n.label} recibe de ${this.label(p.origin)}: ${text}`, 'received', n.id)
       }
       // Re-ACK duplicate DATA: the first ACK may have been lost.
-      this.enqueue(n, this.packet(n, T.ACK, [p.origin, p.epoch >> 8, p.epoch & 255, p.seq >> 8, p.seq & 255], { dst: p.origin, priority: 0 }))
+      // If the same end ACK is still queued/in flight, keep just that copy.
+      const pendingAck = [...n.queue.map(e => e.packet), ...(n.hopWait ? [n.hopWait.packet] : [])]
+        .some(ack => ack.type === T.ACK && reverseKey(ack) === reverseKey(p))
+      if (!pendingAck) this.enqueue(n, this.packet(n, T.ACK, [p.origin, p.epoch >> 8, p.epoch & 255, p.seq >> 8, p.seq & 255, p.attempt], { dst: p.origin, priority: 0 }))
       return
+    }
+    if (p.type === T.ACK && (p.payload.length === 5 || p.payload.length === 6)) {
+      // Receiving the destination's end ACK is also evidence that DATA reached
+      // it. Stop redundant local DATA retries even if a link ACK was lost.
+      const completed = candidate => candidate.type === T.DATA && candidate.dst === p.origin && keyOf(candidate) === ackId(p.payload)
+      n.queue = n.queue.filter(e => !completed(e.packet))
+      if (n.hopWait && completed(n.hopWait.packet)) n.hopWait = null
+      this.wakeQueue(n)
     }
     if (n.seen.has(key)) return
     n.seen.set(key, this.time)
     if (p.dst === n.id && p.type === T.ACK) {
       const b = p.payload
-      if (b.length !== 5) return
-      const own = n.pending.get(`${b[0]}:${b[1] << 8 | b[2]}:${b[3] << 8 | b[4]}`)
+      if (b.length !== 5 && b.length !== 6) return
+      const own = n.pending.get(ackId(b))
       if (own && own.dst === p.origin && this.time <= own.expires) {
-        own.status = 'confirmed'; own.confirmedAt = this.time
-        this.log(`${n.label} recibe el acuse de ${this.label(p.origin)}.`, 'confirmed', n.id)
+        const first = own.status !== 'confirmed'
+        own.status = 'confirmed'; own.confirmedAt ??= this.time
+        n.queue = n.queue.filter(e => !(e.packet.type === T.DATA && e.packet.origin === n.id && keyOf(e.packet) === own.id))
+        if (n.hopWait?.packet.type === T.DATA && keyOf(n.hopWait.packet) === own.id) n.hopWait = null
+        this.wakeQueue(n)
+        if (first) this.log(`${n.label} recibe el acuse de ${this.label(p.origin)}.`, 'confirmed', n.id)
       }
     } else if (p.ttl > 1) this.enqueue(n, { ...p, ttl: p.ttl - 1 })
   }
@@ -348,7 +472,8 @@ export class EmergencyRadioSimulation {
     const m = { id: keyOf(packet), origin: n.id, dst: Number(dst), text: text.trim(), priority, packet,
       createdAt: this.time, expires: this.time + this.config.messageLifetime, due: this.time, attempts: 0, status: 'waiting', path: [] }
     n.pending.set(m.id, m); this.messages.push(m)
-    if (this.messages.length > 100) this.messages.shift()
+    this.traces.set(m.id, [])
+    if (this.messages.length > 100) this.traces.delete(this.messages.shift().id)
     // Retain terminal states in the visible log, bound protocol storage too.
     if (n.pending.size > 100) for (const [id, old] of n.pending) if (['confirmed', 'expired', 'unconfirmed'].includes(old.status)) { n.pending.delete(id); break }
     return m
@@ -368,10 +493,10 @@ export class EmergencyRadioSimulation {
     return { start, end, samples: mixReceiverAudio(this.history, Number(id), start, end - start, this.config.noiseDb, this.config.seed) }
   }
   snapshot() {
-    return { version: 'EMERGENCY_RADIO_LAB_V1', scope: 'Simulación de canal equivalente de audio; reloj de símbolos ideal; no transmisión RF.',
+    return { version: 'EMERGENCY_RADIO_LAB_V2', scope: 'Simulación de canal equivalente de audio; reloj de símbolos ideal; no transmisión RF.',
       time: this.time, config: { ...this.config }, stats: { ...this.stats },
       nodes: this.nodes.map(n => ({ id: n.id, label: n.label, x: n.x, y: n.y, powerDb: n.powerDb, online: n.online,
         neighbors: this.symmetricNeighbors(n).map(v => v.id), mpr: sorted(n.mpr), routes: [...n.routes], inbox: [...n.inbox.values()] })),
-      messages: this.messages.map(({ packet, ...m }) => m), receptions: this.receptions, logs: this.logs }
+      messages: this.messages.map(({ packet, ...m }) => ({ ...m, observedAtDestination: this.node(m.dst)?.inbox.get(m.id)?.time ?? null, trace: this.messageTrace(m.id) })), receptions: this.receptions, logs: this.logs }
   }
 }

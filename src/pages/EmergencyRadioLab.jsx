@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { EmergencyRadioSimulation, createScenario, PRIORITIES, RADIO_DEFAULTS, STATUS_LABELS, TYPE_LABELS } from '../utils/emergencyRadio'
 import { normalizedAudio, SAMPLE_RATE, textBytes, wavBytes } from '../utils/emergencyRadioAudio'
+import EmergencyProtocolGuide from '../components/EmergencyProtocolGuide'
 import '../styles/emergency-radio.css'
 
-const REASONS = { ok: 'CRC válido', overlap: 'Trama corrupta con solapamiento', noise: 'Trama corrupta por ruido', 'half-duplex': 'Estaba transmitiendo' }
+const REASONS = { ok: 'CRC válido', overlap: 'Trama corrupta con solapamiento', noise: 'Trama corrupta por ruido', 'half-duplex': 'Estaba transmitiendo', unheard: 'Sin recepción completa', aborted: 'Transmisión interrumpida' }
 const SCENARIOS = { neighborhood: 'Barrio · red distribuida', hidden: 'Terminal oculto · A, B y C', bridge: 'Dos grupos y un enlace' }
 const sec = n => `${n.toFixed(1)} s`
 const initial = () => new EmergencyRadioSimulation(createScenario())
@@ -152,11 +153,13 @@ export default function EmergencyRadioLab() {
 
   return <div className="page-body emergency-lab">
     <header className="em-header">
-      <div><div className="em-eyebrow">RADIOAFICIÓN <span>LABORATORIO · V0.1</span></div>
+      <div><div className="em-eyebrow">RADIOAFICIÓN <span>LABORATORIO · V0.2</span></div>
         <h1>Red de emergencia</h1><p>Descubre la red. Escucha cada estación. Comprueba qué mensajes llegan.</p></div>
       <span className="em-clock" aria-label={`Tiempo simulado ${sec(sim.time)}`}><i className={running ? 'em-live' : ''} />{sec(sim.time)}</span>
     </header>
     <p className="em-scope">Simulación experimental de datos por audio. Los acuses confirman recepción en la estación, no lectura ni asistencia.</p>
+    <p className="em-help">Al arrancar se intercambian balizas para descubrir la red; después se espacian. La velocidad ×{speed} acelera también su apariencia en pantalla.
+      {' '}<a href="#em-protocol-guide">Ver el protocolo y la modulación paso a paso</a>.</p>
     {error && <p role="alert" className="em-error">{error}</p>}
 
     <div className="em-toolbar">
@@ -190,7 +193,7 @@ export default function EmergencyRadioLab() {
           {transmitting.map(tx => { const n = sim.node(tx.sender); return <circle key={tx.id} cx={n.x} cy={n.y} r={38 + ((sim.time - tx.start) * 90) % 140} className="em-wave" /> })}
           {sim.nodes.map(n => {
             const tx = transmitting.some(t => t.sender === n.id)
-            const relay = [...n.neighbors.values()].some(v => v.report.some(r => r.id === n.id && r.mpr))
+            const relay = sim.symmetricNeighbors(n).some(v => v.report.some(r => r.id === n.id && r.mpr))
             return <g key={n.id} role="button" tabIndex={0} aria-label={`${n.label}, ${n.online ? 'encendida' : 'apagada'}`} aria-pressed={n.id === selected}
               className={`em-node ${n.online ? '' : 'em-off'} ${tx ? 'em-tx' : ''} ${n.id === selected ? 'em-selected' : ''} ${relay ? 'em-relay' : ''}`}
               transform={`translate(${n.x},${n.y})`} onClick={() => { stopAudio(); setSelected(n.id) }}
@@ -200,7 +203,7 @@ export default function EmergencyRadioLab() {
                 const delta = { ArrowLeft: [-20, 0], ArrowRight: [20, 0], ArrowUp: [0, -20], ArrowDown: [0, 20] }[e.key]
                 if (delta) { e.preventDefault(); sim.move(n.id, Math.min(960, Math.max(30, n.x + delta[0])), Math.min(610, Math.max(30, n.y + delta[1]))); redraw() }
               }}><circle r="24" /><circle r="5" className="em-node-dot" /><text y="45" textAnchor="middle">{n.label}</text>
-              {tx && <text y="-35" className="em-tx-label" textAnchor="middle">TX</text>}</g>
+              {tx && <text y="-35" className="em-tx-label" textAnchor="middle">{TYPE_LABELS[transmitting.find(t => t.sender === n.id).packet.type]}</text>}</g>
           })}
         </svg>
         <div className="em-legend"><span><i className="em-dot selected" />Estación seleccionada</span><span><i className="em-dot relay" />Retransmisor elegido</span><span><i className="em-dot tx" />Transmitiendo</span></div>
@@ -255,8 +258,18 @@ export default function EmergencyRadioLab() {
         </form>
         <div className="em-message-list" aria-live="polite">{sim.messages.slice(-5).reverse().map(m => <article key={m.id}>
           <div><b>{sim.label(m.origin)} → {sim.label(m.dst)}</b><span>{PRIORITIES[m.priority]}</span></div><p>{m.text}</p>
-          <small className={m.status === 'confirmed' ? 'em-success' : ''}>{STATUS_LABELS[m.status]} · {m.attempts} intento{m.attempts === 1 ? '' : 's'}{m.confirmedAt != null ? ` · ${sec(m.confirmedAt - m.createdAt)}` : ''}</small>
-          {!!m.path.length && <small>Última ruta calculada: {m.path.map(id => sim.label(id)).join(' → ')}</small>}</article>)}
+          <small className={m.status === 'confirmed' ? 'em-success' : ''}>Estado en origen: {STATUS_LABELS[m.status]} · {m.attempts} intento{m.attempts === 1 ? '' : 's'} completo{m.attempts === 1 ? '' : 's'}{m.confirmedAt != null ? ` · ${sec(m.confirmedAt - m.createdAt)}` : ''}</small>
+          <small className="em-observer">Observación del simulador: {sim.node(m.dst).inbox.has(m.id)
+            ? `el texto llegó a ${sim.label(m.dst)} en ${sec(sim.node(m.dst).inbox.get(m.id).time - m.createdAt)}${m.status === 'confirmed' ? ' y el acuse volvió al origen.' : '; el acuse final todavía no ha vuelto al origen.'}`
+            : `todavía no consta recepción del texto en ${sim.label(m.dst)}.`}</small>
+          {!!m.path.length && <small>Última ruta calculada: {m.path.map(id => sim.label(id)).join(' → ')}</small>}
+          <details className="em-message-trace"><summary>Recorrido y pérdidas observadas · {sim.messageTrace(m.id).length} emisiones</summary>
+            <p className="em-help">Cada fila corresponde al receptor previsto de un DATA o un acuse final. Esta observación no equivale a información disponible en el emisor.</p>
+            <div className="em-table-scroll"><table><thead><tr><th>Tiempo</th><th>Trama</th><th>Salto</th><th>Recepción</th></tr></thead><tbody>
+              {sim.messageTrace(m.id).map((r, i) => <tr key={i}><td>{sec(r.time - m.createdAt)}</td><td>{TYPE_LABELS[r.type]}</td><td>{sim.label(r.sender)} → {sim.label(r.next)}</td><td className={r.ok ? 'em-success' : 'em-danger'}>{REASONS[r.reason]}</td></tr>)}
+              {!sim.messageTrace(m.id).length && <tr><td colSpan="4">Todavía no ha terminado ninguna emisión de este mensaje.</td></tr>}
+            </tbody></table></div></details>
+        </article>)}
           {!sim.messages.length && <p className="em-empty">El origen conserva el mensaje mientras busca una ruta. La confirmación debe volver desde el destino.</p>}</div>
       </section>
       <section className="em-settings"><h2>Condiciones del ensayo</h2><p className="em-help">Cambiar estos parámetros reinicia el ensayo. La potencia de cada nodo y su posición se cambian desde el mapa.</p>
@@ -269,18 +282,14 @@ export default function EmergencyRadioLab() {
         <label>Difusión de la topología<select value={config.strategy} onChange={e => parameter('strategy', e.target.value)}><option value="mpr">Solo retransmisores MPR</option><option value="flood">Todos retransmiten una vez</option></select></label>
         <label className="em-checkbox"><input type="checkbox" checked={config.carrierSense} onChange={e => parameter('carrierSense', e.target.checked)} />Escuchar el canal antes de emitir</label>
         <div className="em-counter-grid"><span><b>{sim.stats.transmissions}</b> emisiones</span><span><b>{sim.stats.corrupt}</b> recepciones corruptas</span><span><b>{sim.stats.busy}</b> esperas por canal ocupado</span><span><b>{sim.stats.halfDuplex}</b> pérdidas por transmitir</span></div>
+        <div className="em-traffic-breakdown"><h3>En qué se está usando el canal</h3>
+          <p>{sim.stats.control} anuncios de mantenimiento · {sim.stats.data} emisiones de mensajes · {sim.stats.ack} acuses finales · {sim.stats.linkAck} acuses de salto · {sim.stats.probe || 0} emisiones de prueba.</p>
+          <p>{sim.stats.linkRetries} reintentos de salto · {sim.stats.linkFailures} saltos con intentos agotados. Son contadores acumulados de la red.</p></div>
         <button onClick={() => download('ensayo-red-emergencia.json', JSON.stringify(sim.snapshot(), null, 2), 'application/json')}>Exportar ensayo JSON</button>
       </section>
     </div>
 
-    <details className="em-protocol"><summary>Cómo funciona esta primera versión</summary>
-      <div className="em-explanation"><p>Cada estación aprende vecinos mediante HELLO, comprueba enlaces en ambos sentidos y elige MPR con información a dos saltos. Los anuncios de topología viajan por esos retransmisores. Los mensajes dirigidos y sus acuses utilizan las rutas descubiertas.</p>
-        <p>Las prioridades ordenan la cola local y no interrumpen una emisión ya iniciada. Hay espera aleatoria, hasta tres intentos y caducidad del mensaje a los 180 s. Un acuse perdido puede provocar un reenvío: el destino evita presentar duplicados y vuelve a confirmar.</p>
-        <p>El escenario de terminal oculto desactiva las balizas para aislar el fenómeno. A y C pueden considerar libre el canal al mismo tiempo. Cambia la potencia de C para explorar cuándo una señal más fuerte permite recuperar una trama.</p>
-        <p><b>Modelo físico:</b> mezcla lineal de tonos BFSK de 1200 y 2400 Hz y ruido blanco uniforme reproducible. Se demodulan las muestras y se comprueba CRC-16. La sincronización de símbolos es ideal; la geometría se fija al empezar cada transmisión. Este canal equivalente no reproduce un receptor FM real, el VOX, un módem con FEC ni la propagación de un lugar concreto.</p>
-        <p>La simulación no usa micrófono ni transmite por radio. No es una implementación oficial de Romeo Echo ni de OLSR. La futura aplicación sobre equipos reales requiere validación del módem, funcionamiento sin conexión y condiciones de uso de la banda.</p>
-        <p>Referencias: <a href="https://www.rfc-editor.org/rfc/rfc3626" target="_blank" rel="noreferrer">OLSR y MPR</a> · <a href="https://github.com/OpenResearchInstitute/ribbit_webapp" target="_blank" rel="noreferrer">Ribbit Web App</a></p></div>
-    </details>
+    <EmergencyProtocolGuide sim={sim} node={node} />
     <details className="em-log"><summary>Registro de eventos · {sim.logs.length} recientes</summary><ol>{sim.logs.slice(-60).reverse().map((item, i) => <li key={`${item.time}-${i}`} className={item.kind === 'loss' ? 'em-danger' : ''}><time>{sec(item.time)}</time>{item.text}</li>)}</ol></details>
   </div>
 }
