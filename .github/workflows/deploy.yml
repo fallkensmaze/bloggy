@@ -50,7 +50,7 @@ jobs:
         run: npm run test:emergency-radio
 
       - name: Test gamma-camera quality control
-        run: npm run test:gamma && npm run test:nema && npm run test:cor
+        run: npm run test:gamma && npm run test:nema && npm run test:cor && npm run test:tomo
 
       - name: Test ACR Medium quality control
         run: npm run test:acr

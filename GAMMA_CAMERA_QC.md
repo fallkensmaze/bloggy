@@ -4,6 +4,8 @@
 
 - `/resolucion-espacial-gamma`: fuentes lineales, por cabezal/frame y eje de medida.
 - `/sensibilidad-gamma`: sensibilidad planar, por cabezal/frame/ventana.
+- `/uniformidad-tomografica`: uniformidad SPECT 3D con esferas manuales y barrido
+  por diámetro. Método cuantitativo complementario; ver `TOMO_UNIFORMITY.md`.
 - `/informe-mensual-gamma`: lote mensual privado; usa el mismo `useAuthUser`/propietario que Examen radio.
 - Uniformidad y COR conservan sus páginas existentes. El lote mensual reutiliza sus motores puros y comprobaciones de adquisición.
 
