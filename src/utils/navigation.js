@@ -6,6 +6,7 @@ export const NAV_LINKS = [
   { href: '/decay-calculator', icon: 'bi-clock-history', label: 'Decay Calculator', section: 'Medicina nuclear' },
   { href: '/restricciones-lu177', icon: 'bi-activity', label: 'Lu-177 Restricciones', section: 'Medicina nuclear' },
   { href: '/uniformidad-gamma', icon: 'bi-grid-1x2-fill', label: 'Uniformidad NEMA', section: 'Medicina nuclear' },
+  { href: '/uniformidad-tomografica', icon: 'bi-stack', label: 'Uniformidad tomográfica 3D', section: 'Medicina nuclear' },
   { href: '/centro-rotacion-spect', icon: 'bi-crosshair', label: 'Centro rotación SPECT', section: 'Medicina nuclear' },
   { href: '/resolucion-espacial-gamma', icon: 'bi-rulers', label: 'Resolución espacial', section: 'Medicina nuclear' },
   { href: '/sensibilidad-gamma', icon: 'bi-speedometer2', label: 'Sensibilidad', section: 'Medicina nuclear' },

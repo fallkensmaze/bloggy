@@ -19,6 +19,7 @@ npm run test:pet       # PET DICOM calibration and NEMA NU 2 background ROI plac
 npm run test:cor       # SPECT COR centroids, NEMA upper bounds, 3D geometry and ROC
 npm run test:acr       # ACR Medium ROIs, DICOM calibration, completeness and export
 npm run test:gamma     # Planar resolution, sensitivity, monthly batch identity and report states
+npm run test:tomo      # 3D SPECT sphere uniformity, anisotropic geometry and reconstructed NM loading
 npm run test:fdtd      # FDTD fallback, PEC geometry and JSON configuration
 npm run check:security # Anonymizer and paste tests, then build and audit the GitHub Pages artifact
 npm run deploy         # Build, audit and deploy dist/ to GitHub Pages
@@ -118,6 +119,7 @@ Routes inside `<Layout />` use the shared sidebar and mobile topbar:
 - `/decay-calculator` - radioactive decay
 - `/restricciones-lu177` - Lu-177 restrictions
 - `/uniformidad-gamma` - intrinsic gamma-camera uniformity
+- `/uniformidad-tomografica` - reconstructed SPECT uniformity with moving 3D spheres
 - `/centro-rotacion-spect` - SPECT center-of-rotation NEMA and 3D backprojection analysis
 - `/pet-nema-fraccionamiento` - PET NEMA image-quality phantom fill planning and timers
 - `/pet-nema-analisis` - PET NEMA NU 2-2018 image-quality analysis of the acquired series
@@ -163,6 +165,16 @@ Firestore collections:
 - `RADIO_TEMAS` - private radio-exam topics, admin-only in both directions.
 
 ### Main modules
+
+- `src/pages/TomoUniformity.jsx`, `src/components/TomoVolumeViews.jsx`, `src/utils/tomoDicom.js`
+  and `src/utils/tomoUniformity.js` - reconstructed SPECT cylinder analysis. Read
+  `TOMO_UNIFORMITY.md`; run `test:tomo` and `build:web`. Spheres use physical X/Y/Z
+  spacing and must fit completely inside the selected radial/axial margins. Keep
+  interior cold defects and negative reconstructed values; never threshold them out.
+  These are extrema of sphere means, not single voxels or planar uniformity limits.
+  Preserve the geometry review gate, result invalidation and execution-snapshot exports.
+  The experimental metric has no normative conformity verdict. Do not replace the
+  strict NM loader with a PET reader that silently selects a series or invents spacing.
 
 - `src/pages/EmergencyRadioLab.jsx`, `src/components/EmergencyProtocolGuide.jsx`, `src/utils/emergencyRadio.js` and `src/utils/emergencyRadioAudio.js` - experimental distributed radio network. Read `EMERGENCY_RADIO.md` and run `npm run test:emergency-radio`. Protocol decisions must use received neighbor/topology reports and local ACK feedback, never the physical graph or node coordinates. Audio replay and frame decoding must share receiver samples; distinguish an end-to-end ACK from a hop ACK or observer evidence of receipt. Preserve bounded control traffic, MPR updates on selector changes, reverse ACK paths and the dense-network regression. Keep the on-page guide consistent with timing, framing and routing changes, and the equivalent linear audio model, ideal symbol timing and absence of RF transmission explicit.
 

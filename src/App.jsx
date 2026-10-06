@@ -5,6 +5,7 @@ import ConvertUnits from './pages/ConvertUnits'
 import DecayCalculator from './pages/DecayCalculator'
 import RestricionesLu177 from './pages/RestricionesLu177'
 import UniformidadGamma from './pages/UniformidadGamma'
+import TomoUniformity from './pages/TomoUniformity'
 import CorAnalysis from './pages/CorAnalysis'
 import RTPlanCompare from './pages/RTPlanCompare'
 import Tg43Calculator from './pages/Tg43Calculator'
@@ -44,6 +45,7 @@ function App() {
         <Route path="decay-calculator" element={<DecayCalculator />} />
         <Route path="restricciones-lu177" element={<RestricionesLu177 />} />
         <Route path="uniformidad-gamma" element={<UniformidadGamma />} />
+        <Route path="uniformidad-tomografica" element={<TomoUniformity />} />
         <Route path="centro-rotacion-spect" element={<CorAnalysis />} />
         <Route path="resolucion-espacial-gamma" element={<GammaCameraQC mode="resolution" />} />
         <Route path="sensibilidad-gamma" element={<GammaCameraQC mode="sensitivity" />} />

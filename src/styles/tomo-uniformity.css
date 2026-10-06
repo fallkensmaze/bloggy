@@ -1,0 +1,38 @@
+.tomo-qc { margin: 0 auto; padding-bottom: 3rem; }
+.tomo-qc .calc-card { margin: 22px 0; }
+.tomo-qc p { line-height: 1.65; font-size: .9rem; }
+.tomo-intro { padding: 18px 22px; border-left: 3px solid var(--accent-blue); background: var(--bg-secondary); border-radius: 8px; }
+.tomo-intro p { margin-bottom: 0; }
+.tomo-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 18px; }
+.tomo-wide { grid-column: span 2; }
+.tomo-metadata { display: flex; flex-wrap: wrap; gap: 10px 24px; padding: 15px 0; font-size: .8rem; color: var(--text-secondary); }
+.tomo-status { font-size: .85rem; color: var(--accent-blue); margin: 12px 0; }
+.tomo-qc progress { width: 100%; accent-color: var(--accent-blue); }
+.tomo-cancel { margin-top: 12px; }
+.tomo-margin-explanation { background: var(--bg-tertiary); padding: 12px 16px; border-radius: 7px; }
+.tomo-mpr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.tomo-slice { margin: 0; min-width: 0; display: flex; flex-direction: column; }
+.tomo-slice figcaption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: .77rem; margin-bottom: 10px; }
+.tomo-slice figcaption span { color: var(--text-muted); }
+.tomo-slice canvas { width: 100%; background: #000; cursor: crosshair; image-rendering: pixelated; border-radius: 6px; touch-action: none; }
+.tomo-slice input { width: 100%; margin-top: auto; padding-top: 12px; }
+.tomo-legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-bottom: 20px; font-size: .73rem; }
+.tomo-legend span::before { content: '●'; margin-right: 6px; }
+.tomo-explore { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(200px, 1fr); gap: 25px; margin-top: 16px; }
+.tomo-explore .tomo-fields { grid-template-columns: 1fr 1fr; }
+.tomo-geometry { background: #111722; border: 1px solid var(--border); border-radius: 9px; padding: 15px; }
+.tomo-geometry h3 { margin: 0; }
+.tomo-geometry svg { width: 100%; max-height: 280px; }
+.tomo-geometry .gamma-field { margin-bottom: 0; }
+.tomo-chart { height: 370px; position: relative; }
+.tomo-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 18px 0; }
+.tomo-metrics > div { padding: 18px; border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
+.tomo-metrics span, .tomo-metrics small { font-size: .75rem; color: var(--text-muted); }
+.tomo-metrics strong { font-size: 1.35rem; }
+.tomo-details { border: 1px solid var(--border); border-radius: 8px; margin-top: 18px; padding: 16px 20px; }
+.tomo-details summary { cursor: pointer; font-size: .9rem; }
+.tomo-details li { font-size: .83rem; line-height: 1.6; margin: 8px 0; }
+.tomo-selected-details { border-left: 2px solid var(--accent-blue); padding-left: 14px; }
+.tomo-results td button { margin-bottom: 5px; font-size: .73rem; white-space: nowrap; }
+@media (max-width: 850px) { .tomo-fields { grid-template-columns: 1fr 1fr; } .tomo-mpr { grid-template-columns: 1fr; } .tomo-slice { max-width: 480px; width: 100%; margin: 0 auto 14px; } }
+@media (max-width: 550px) { .tomo-fields, .tomo-explore, .tomo-explore .tomo-fields, .tomo-metrics { grid-template-columns: 1fr; } .tomo-wide { grid-column: auto; } .tomo-chart { height: 320px; } }

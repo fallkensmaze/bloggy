@@ -18,6 +18,7 @@
     "test:cpt": "node scripts/test-cpt.mjs",
     "test:pet": "node scripts/test-pet-nema.mjs && node scripts/test-pet-rois.mjs",
     "test:gamma": "node scripts/test-gamma-qc.mjs",
+    "test:tomo": "node scripts/test-tomo-uniformity.mjs",
     "test:cor": "node scripts/test-cor-analysis.mjs",
     "test:tg43": "node scripts/test-tg43.mjs",
     "test:fdtd": "node scripts/test-fdtd.mjs",
