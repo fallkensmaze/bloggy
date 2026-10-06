@@ -13,6 +13,7 @@ npm run test:anon      # DICOM anonymizer regression suite (PHI, conformance, RT
 npm run test:morse     # Morse trainer assertions (CW timing, Koch decks, quiz invariants)
 npm run test:nema      # NEMA NU 1 intrinsic uniformity (edge rule, CFOV, DICOM geometry, states)
 npm run test:radio     # Radio-exam XML parsing and quiz building
+npm run test:emergency-radio # Per-receiver audio, hidden terminals, routing and ACKs
 npm run test:paste     # Secure Paste crypto (the document id must not decrypt anything)
 npm run test:pet       # PET DICOM calibration and NEMA NU 2 background ROI placement
 npm run test:cor       # SPECT COR centroids, NEMA upper bounds, 3D geometry and ROC
@@ -129,6 +130,7 @@ Routes inside `<Layout />` use the shared sidebar and mobile topbar:
 - `/q-codes` - amateur radio Q-code study quiz
 - `/morse` - Morse code (CW) trainer
 - `/fdtd-simulator` - 3D FDTD antenna simulator powered by Rust/WebAssembly
+- `/red-emergencia` - experimental emergency-radio network and per-receiver audio simulation
 
 Standalone routes:
 
@@ -161,6 +163,8 @@ Firestore collections:
 - `RADIO_TEMAS` - private radio-exam topics, admin-only in both directions.
 
 ### Main modules
+
+- `src/pages/EmergencyRadioLab.jsx`, `src/utils/emergencyRadio.js` and `src/utils/emergencyRadioAudio.js` - experimental distributed radio network. Read `EMERGENCY_RADIO.md` and run `npm run test:emergency-radio`. Protocol decisions must use received neighbor/topology reports, never the physical graph or node coordinates. Audio replay and frame decoding must share receiver samples; distinguish an end-to-end ACK from a calculated route or a relay reception. Keep the equivalent linear audio model, ideal symbol timing and absence of RF transmission explicit.
 
 - `src/pages/MccAnalyzer.jsx`, `src/utils/mcc*.js` — PTW MCC PDD and orthogonal profiles. Read `MCC_ANALYZER.md`; run `npm run test:mcc`. Keep electron ionization-to-dose conversion pointwise using TRS-398 Rev.1 Table 22, never apply it to already-converted dose, never extrapolate the table, and keep Sclin distinct from the uniform msr equivalent field in TRS-483. Unknown metadata must not inherit from another scan.
 
