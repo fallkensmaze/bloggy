@@ -1,4 +1,5 @@
 import { Routes, Route } from 'react-router-dom'
+import { lazy, Suspense } from 'react'
 import Layout from './components/Layout'
 import Blog from './pages/Blog'
 import ConvertUnits from './pages/ConvertUnits'
@@ -37,9 +38,12 @@ import FilmDosimetry from './pages/FilmDosimetry'
 import GammaCameraQC, { GammaMonthly } from './pages/GammaCameraQC'
 import MccAnalyzer from './pages/MccAnalyzer'
 
+const ShieldingPage = lazy(() => import('./pages/ShieldingPage'))
+
 function App() {
   return (
     <Routes>
+      <Route path="/blindajes" element={<Suspense fallback={<p role="status">Abriendo el taller…</p>}><ShieldingPage /></Suspense>} />
       <Route path="/" element={<Layout />}>
         <Route index element={<Blog />} />
         <Route path="convert-units" element={<ConvertUnits />} />

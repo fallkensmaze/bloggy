@@ -28,5 +28,6 @@ export const NAV_LINKS = [
   { href: '/estacion-radio', icon: 'bi-mic', label: 'Estación de audio VOX', section: 'Radioafición' },
   { href: '/radioaficionado', icon: 'bi-mortarboard', label: 'Examen radio', section: 'Radioafición', admin: true },
   { href: '/lector', icon: 'bi-speedometer2', label: 'Lector rápido', section: 'Herramientas' },
+  { href: '/blindajes', icon: 'bi-bounding-box', label: 'Taller de blindajes', section: 'Herramientas', admin: true },
   { href: '/quizzes', icon: 'bi-trophy', label: 'Quizzes', section: 'Juegos' }
 ]

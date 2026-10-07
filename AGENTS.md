@@ -22,6 +22,8 @@ npm run test:acr       # ACR Medium ROIs, DICOM calibration, completeness and ex
 npm run test:gamma     # Planar resolution, sensitivity, monthly batch identity and report states
 npm run test:tomo      # 3D SPECT sphere uniformity, anisotropic geometry and reconstructed NM loading
 npm run test:fdtd      # FDTD fallback, PEC geometry and JSON configuration
+npm run test:shielding # Shielding geometry, transient history, file bounds and CSN/NCRP arithmetic
+npm run test:shielding:browser # Real Chrome: access, local imports, calibration and editor interactions
 npm run check:security # Anonymizer and paste tests, then build and audit the GitHub Pages artifact
 npm run deploy         # Build, audit and deploy dist/ to GitHub Pages
 ```
@@ -138,6 +140,8 @@ Routes inside `<Layout />` use the shared sidebar and mobile topbar:
 
 Standalone routes:
 
+- `/blindajes` - owner-only, memory-only room drafting and unshielded CSN/NCRP comparison
+
 - `/quiz-creator` - quiz editor
 - `/quizzes` - public quiz list
 - `/quiz/:quizId` - single-player quiz
@@ -167,6 +171,8 @@ Firestore collections:
 - `RADIO_TEMAS` - private radio-exam topics, admin-only in both directions.
 
 ### Main modules
+
+- `src/pages/ShieldingPage.jsx`, `src/components/shielding/`, `src/utils/shielding*.js` — private shielding workshop. Read `SHIELDING_WORKSHOP.md`. Work is transient: do not add uploads, browser storage, database records, hashes or clinical defaults. Keep geometry, scene history and physical calculations pure. One action evaluates both methods; primary, scatter and leakage are contributions, not alternatives. NCRP secondary already includes leakage; do not add it twice or multiply patient counts by CSN workload shares. The first version is explicitly 2D and unshielded; drawn barriers do not attenuate. PDF.js 6 requires Node 24 in CI; destroy the loading task, not the document proxy. Run both shielding suites and `build:web`. `dev:shielding` is a development-only harness; never add its auth-free route to the production router.
 
 - `src/pages/RadioAudioStation.jsx`, `src/utils/radioAudioBrowser.js`, `src/utils/radioAudioModem.js`, `src/utils/radioAudioStation.js` and `src/worklets/radioCapture.worklet.js` - real microphone/speaker transport, independent of the simulator. Read `RADIO_AUDIO_STATION.md` and run `test:radio-audio`, `test:emergency-radio` and `build:web`. Keep frame synchronization inside the streaming receiver, all audio processing local, directed delivery dependent on a received matching ACK, and shutdown cancellation immediate. Direct TTL-1 v0.1 has no routing or MPR; never imply that a software test validates an RF link. Worklet imports must not instantiate browser-only APIs such as TextEncoder at module load.
 

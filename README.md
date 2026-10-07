@@ -14,6 +14,8 @@ Blog y herramientas de Física Médica y Medicina Nuclear.
 
 ## Instalación
 
+Usa Node.js 24 LTS (también usado en CI).
+
 ```bash
 npm install
 ```
@@ -48,10 +50,13 @@ Los archivos compilados se generan en `dist/`. La configuración de producción 
 | `/tg43-calculator` | Calculador TG-43 | Verificación de dosis HDR para Ir-192. |
 | `/dosimetria-pelicula` | Dosimetría de película | Calibración EBT3, análisis multicanal de TIFF RGB de 48 bits y exportación DICOM RT Dose. |
 | `/acr-qc` | ACR MRI QC | Análisis DICOM del maniquí ACR Medium. |
+| `/blindajes` | Taller privado de blindajes | Plano local, calibración, dibujo, orientaciones y comparación CSN/NCRP en planta sin blindaje. Acceso del propietario; sesión efímera. |
 | `/lector` | Lector rápido | Lectura RSVP con persistencia local del progreso. |
 | `/informe-tanques` | Tanques Lu-177 | Informe interactivo para residuos líquidos. |
 
 El detalle técnico del nuevo módulo PET está en [PET_NEMA_FRACTIONATION.md](PET_NEMA_FRACTIONATION.md).
+
+El [taller de blindajes](SHIELDING_WORKSHOP.md) prioriza la edición de la sala. Importa PDF, PNG o JPEG sin subirlos y conserva todo solo en memoria. Por ahora compara kerma sin atenuación; las paredes dibujadas no calculan espesores. Pruebas: `npm run test:shielding` y `npm run test:shielding:browser` (Chrome). `npm run dev:shielding` abre un servidor de desarrollo con el editor aislado para revisar su interfaz, sin Firebase; esa ruta de pruebas no se publica.
 
 ## Otras funciones
 
