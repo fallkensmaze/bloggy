@@ -1,0 +1,42 @@
+.ra-station { max-width: 1380px; margin: 0 auto; color: var(--text-primary); padding: 1.5rem 1.6rem 2rem; box-sizing: border-box; }
+.ra-station h1 { font-size: clamp(1.65rem, 3vw, 2.3rem); margin: .25rem 0 .8rem; }
+.ra-station h2 { font-size: 1.1rem; margin: 0 0 1.2rem; }
+.ra-station h3 { font-size: .95rem; margin-top: 1.3rem; }
+.ra-station p { line-height: 1.65; }
+.ra-header { display: flex; gap: 2rem; align-items: flex-start; justify-content: space-between; }
+.ra-header p { max-width: 800px; }
+.ra-eyebrow { color: var(--accent-blue); text-transform: uppercase; font-size: .7rem; letter-spacing: .08em; }
+.ra-lab-link { white-space: nowrap; border: 1px solid var(--border); border-radius: 7px; padding: .75rem; text-decoration: none; font-size: .8rem; margin-top: .4rem; }
+.ra-intro { display: flex; flex-wrap: wrap; gap: .8rem 1.5rem; color: var(--accent-blue); font-size: .8rem; margin: .8rem 0; }
+.ra-description { color: var(--text-muted); font-size: .85rem; }
+.ra-panel { padding: 1.3rem; border: 1px solid var(--border); border-radius: 9px; margin: 1.2rem 0; background: var(--bg-secondary); min-width: 0; }
+.ra-settings { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
+.ra-station label { display: flex; flex-direction: column; gap: .45rem; font-size: .78rem; min-width: 0; }
+.ra-station input, .ra-station select, .ra-station textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; padding: .6rem; color: var(--text-primary); background: var(--bg-primary); font: inherit; }
+.ra-station textarea { resize: vertical; font-size: .9rem; }
+.ra-station input[type=range] { padding: .4rem 0; accent-color: var(--accent-blue); }
+.ra-station input[type=checkbox] { width: 17px; height: 17px; flex-shrink: 0; accent-color: var(--accent-blue); }
+.ra-station .ra-check { flex-direction: row; align-items: center; line-height: 1.6; }
+.ra-audio-config { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 1.3rem; align-items: end; }
+.ra-hint, .ra-station small { color: var(--text-muted); font-size: .74rem; line-height: 1.6; }
+.ra-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .7rem; margin-top: 1rem; }
+.ra-station button { cursor: pointer; padding: .65rem .9rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-size: .8rem; }
+.ra-station button:hover:not(:disabled) { border-color: var(--accent-blue); }
+.ra-station button:disabled { opacity: .45; cursor: default; }
+.ra-station .ra-primary { color: #12343b; background: #8bd0d7; font-weight: 700; border-color: #8bd0d7; }
+.ra-station .ra-stop { color: #ffc3be; border-color: #b66464; }
+.ra-console { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; padding: 1.2rem; border-radius: 9px; background: var(--bg-primary); border: 1px solid var(--border); }
+.ra-live strong { font-size: .95rem; }.ra-live p { margin: .4rem 0 0; font-size: .78rem; color: var(--text-muted); }
+.ra-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #78848c; margin-right: .6rem; }.ra-dot.ra-on { background: #85d6ab; }.ra-dot.ra-tx { background: #ffc369; }
+.ra-meter { height: 10px; background: var(--bg-secondary); border-radius: 5px; overflow: hidden; margin-top: .3rem; }.ra-meter div { height: 100%; background: #85d6ab; transition: width .1s; }.ra-meter .ra-clipping { background: #ed8b8b; }
+.ra-counters { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 1.5rem; font-size: .75rem; color: var(--text-muted); }.ra-counters b { color: var(--text-primary); font-size: 1.1rem; margin-right: .25rem; }
+.ra-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.2rem; }.ra-columns .ra-panel { margin-bottom: 0; }
+.ra-message-options { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: .7rem; margin-bottom: 1rem; }
+.ra-history { margin-top: 1.2rem; max-height: 420px; overflow-y: auto; }.ra-history article { padding: .9rem 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }.ra-history article p { margin: .65rem 0; font-size: .88rem; white-space: pre-wrap; }
+.ra-message-heading { display: flex; justify-content: space-between; gap: .8rem; font-size: .75rem; }.ra-message-heading time { color: var(--text-muted); font-size: .7rem; white-space: nowrap; }.ra-station .ra-confirmed { color: #85d6ab; }
+.ra-empty { color: var(--text-muted); font-size: .8rem; padding: .8rem 0; }.ra-peers { display: flex; flex-wrap: wrap; gap: .6rem; }.ra-peers button { text-align: left; }.ra-peers span { display: block; color: var(--text-muted); font-size: .7rem; margin-top: .3rem; }
+.ra-panel summary { cursor: pointer; font-size: .9rem; font-weight: 700; color: var(--accent-blue); }.ra-panel[open] summary { margin-bottom: 1.2rem; }.ra-calibration { margin-top: .5rem; }
+.ra-alert { padding: .8rem 1rem; border-left: 3px solid var(--accent-blue); background: var(--bg-secondary); font-size: .85rem; }.ra-error { border-color: #ed8b8b; color: #ffb4af; }.ra-invalid { color: #ffb4af; font-size: .75rem; }.ra-test-result { color: #85d6ab; font-size: .8rem; }
+.ra-guide p, .ra-guide li, .ra-calibration ~ p { font-size: .83rem; line-height: 1.75; }.ra-guide li { margin-bottom: .7rem; }.ra-guide ol { padding-left: 1.3rem; }.ra-events { font-size: .77rem; padding-left: 1.4rem; }.ra-events li { margin-bottom: .7rem; }.ra-events time { color: var(--accent-blue); }
+@media (max-width: 1000px) { .ra-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); }.ra-header { flex-direction: column; gap: .2rem; }.ra-lab-link { margin-bottom: .8rem; } }
+@media (max-width: 700px) { .ra-station { padding: 1rem; }.ra-columns, .ra-console, .ra-audio-config { grid-template-columns: minmax(0, 1fr); }.ra-panel { padding: 1rem; }.ra-message-options { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }.ra-message-options label:first-child { grid-column: 1 / -1; }.ra-counters { gap: .75rem 1.3rem; }.ra-header h1 { font-size: 1.65rem; }.ra-lab-link { white-space: normal; } }

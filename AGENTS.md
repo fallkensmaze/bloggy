@@ -14,6 +14,7 @@ npm run test:morse     # Morse trainer assertions (CW timing, Koch decks, quiz i
 npm run test:nema      # NEMA NU 1 intrinsic uniformity (edge rule, CFOV, DICOM geometry, states)
 npm run test:radio     # Radio-exam XML parsing and quiz building
 npm run test:emergency-radio # Per-receiver audio, hidden terminals, routing and ACKs
+npm run test:radio-audio # Streaming microphone modem, direct stations and end-to-end ACKs
 npm run test:paste     # Secure Paste crypto (the document id must not decrypt anything)
 npm run test:pet       # PET DICOM calibration and NEMA NU 2 background ROI placement
 npm run test:cor       # SPECT COR centroids, NEMA upper bounds, 3D geometry and ROC
@@ -133,6 +134,7 @@ Routes inside `<Layout />` use the shared sidebar and mobile topbar:
 - `/morse` - Morse code (CW) trainer
 - `/fdtd-simulator` - 3D FDTD antenna simulator powered by Rust/WebAssembly
 - `/red-emergencia` - experimental emergency-radio network and per-receiver audio simulation
+- `/estacion-radio` - client-side microphone/speaker BFSK station with VOX and direct acknowledgments
 
 Standalone routes:
 
@@ -165,6 +167,8 @@ Firestore collections:
 - `RADIO_TEMAS` - private radio-exam topics, admin-only in both directions.
 
 ### Main modules
+
+- `src/pages/RadioAudioStation.jsx`, `src/utils/radioAudioBrowser.js`, `src/utils/radioAudioModem.js`, `src/utils/radioAudioStation.js` and `src/worklets/radioCapture.worklet.js` - real microphone/speaker transport, independent of the simulator. Read `RADIO_AUDIO_STATION.md` and run `test:radio-audio`, `test:emergency-radio` and `build:web`. Keep frame synchronization inside the streaming receiver, all audio processing local, directed delivery dependent on a received matching ACK, and shutdown cancellation immediate. Direct TTL-1 v0.1 has no routing or MPR; never imply that a software test validates an RF link. Worklet imports must not instantiate browser-only APIs such as TextEncoder at module load.
 
 - `src/pages/TomoUniformity.jsx`, `src/components/TomoVolumeViews.jsx`, `src/utils/tomoDicom.js`
   and `src/utils/tomoUniformity.js` - reconstructed SPECT cylinder analysis. Read
