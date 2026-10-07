@@ -13,6 +13,7 @@ export class BrowserRadioAudio {
     const epoch = crypto.getRandomValues(new Uint16Array(1))[0]
     this.protocol = new AudioStationProtocol({ ...config, epoch })
     this.lastEnergy = now(); this.muteUntil = 0; this.source = null; this.receiving = false
+    this.recording = false; this.recordingId = 0
   }
   notify() { this.callbacks.onChange?.(this.protocol.snapshot()) }
   async start() {
@@ -22,6 +23,7 @@ export class BrowserRadioAudio {
     this.context = new Audio({ latencyHint: 'interactive' })
     try {
       await this.context.resume()
+      if (this.closed) return
       this.stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: {
         channelCount: { ideal: 1 }, echoCancellation: false, noiseSuppression: false, autoGainControl: false,
         ...(this.config.deviceId ? { deviceId: { exact: this.config.deviceId } } : {})
@@ -46,10 +48,21 @@ export class BrowserRadioAudio {
           this.callbacks.onLevel?.(data)
         } else if (data.type === 'frame' && now() >= this.muteUntil) {
           this.lastEnergy = now(); this.protocol.receive(data.packet, data.quality, now()); this.notify()
+        } else if (data.type === 'recording' && this.recording && data.id === this.recordingId) {
+          clearTimeout(this.recordingTimer); this.recording = false
+          this.callbacks.onRecording?.({ ...data, config: { ...this.config }, capture: this.captureInfo })
         }
       }
-      this.active = true
       const track = this.stream.getAudioTracks()[0]
+      // Opening the microphone can change/suspend the audio route after the
+      // first resume (which belongs to the user's activation gesture). Settle
+      // that startup transition before enabling the runtime suspension guard.
+      await this.context.resume()
+      if (this.closed) return
+      if (document.hidden) throw new Error('Vuelve a esta pestaña y pulsa Activar estación para iniciar la escucha.')
+      if (this.context.state !== 'running') throw new Error('No se ha podido activar el audio después del permiso. Pulsa Activar estación de nuevo.')
+      if (!track || track.readyState === 'ended') throw new Error('El micrófono se ha desconectado durante el inicio. Vuelve a activar la estación.')
+      this.active = true
       track.onended = () => this.stopWithReason('El micrófono se ha desconectado. Vuelve a activar la estación.')
       this.context.onstatechange = () => { if (this.active && this.context.state !== 'running') this.stopWithReason('El navegador ha suspendido el audio. Vuelve a activar la estación.') }
       this.visibilityHandler = () => { if (document.hidden) this.stopWithReason('Se ha detenido la estación al ocultar la pestaña. Mantén la app en primer plano.') }
@@ -61,11 +74,12 @@ export class BrowserRadioAudio {
         try { this.wakeLock = await navigator.wakeLock.request('screen'); if (this.closed) await this.wakeLock.release() } catch { /* screen lock is optional */ }
       }
       if (this.closed) return
-      this.callbacks.onStarted?.({ sampleRate: this.context.sampleRate, settings: track.getSettings() }); this.notify()
+      this.captureInfo = { sampleRate: this.context.sampleRate, settings: track.getSettings() }
+      this.callbacks.onStarted?.(this.captureInfo); this.notify()
     } catch (error) { await this.stop(); throw error }
   }
   tick() {
-    if (!this.active || this.context.state !== 'running' || now() < this.muteUntil || this.source) return
+    if (!this.active || this.recording || this.context.state !== 'running' || now() < this.muteUntil || this.source) return
     try {
       const entry = this.protocol.take(now(), now() - this.lastEnergy, this.receiving)
       this.notify()
@@ -102,10 +116,27 @@ export class BrowserRadioAudio {
     this.protocol.announce(now()); this.notify()
   }
   setAutoAck(value) { this.protocol.setAutoAck(value); this.notify() }
+  recordDiagnostic() {
+    if (!this.active || this.context.state !== 'running') throw new Error('Activa la estación antes de grabar.')
+    if (this.recording || this.source || now() < this.muteUntil) throw new Error('Espera a que termine la emisión o la grabación.')
+    if (this.protocol.queue.length || this.protocol.messages.some(m => m.status === 'waitingAck')) throw new Error('Espera a que terminen los envíos pendientes antes de grabar.')
+    this.recording = true
+    this.capture.port.postMessage({ type: 'record', id: ++this.recordingId })
+    this.recordingTimer = setTimeout(() => {
+      if (!this.active || !this.recording) return
+      this.cancelRecording()
+      this.callbacks.onRecordingError?.('La captura no ha completado 10 s de audio. Comprueba el micrófono y repite la prueba.')
+    }, 15000)
+  }
+  cancelRecording() {
+    clearTimeout(this.recordingTimer); this.recording = false
+    this.capture?.port.postMessage({ type: 'cancel-record' })
+  }
   stopWithReason(reason) { void this.stop(); this.callbacks.onStopped?.(reason) }
   async stop() {
     if (this.closed) return
     this.closed = true; this.active = false; clearInterval(this.timer); clearTimeout(this.releaseTimer)
+    this.cancelRecording()
     document.removeEventListener('visibilitychange', this.visibilityHandler)
     window.removeEventListener('pagehide', this.pageHandler)
     if (this.source) { this.source.onended = null; try { this.source.stop() } catch { /* already ended */ } this.source.disconnect(); this.source = null }

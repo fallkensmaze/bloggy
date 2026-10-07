@@ -102,11 +102,47 @@ del micrófono o fallo del procesador cancelan audio, captura, cola y reintentos
 No hay reinicio automático al volver a la pestaña. Se solicita un bloqueo de
 pantalla si está disponible, sin depender de que sea concedido.
 
+El arranque reactiva el AudioContext tras obtener el permiso y conectar la
+captura: abrir el micrófono puede suspender o cambiar la ruta de audio después
+de la activación inicial. Solo se declara la estación activa si la pestaña
+sigue visible, el micrófono sigue conectado y el contexto está en ejecución.
+La recuperación es exclusiva del arranque: una suspensión posterior conserva
+la parada inmediata y requiere una nueva activación manual. Cancelar durante
+el permiso o la activación no debe iniciar una captura tardía.
+
 Solo las preferencias se guardan en localStorage. Una sesión nueva o recarga
 borra los mensajes. El JSON `RADIO_AUDIO_STATION_V1` incluye la configuración
 de la sesión y estados locales, sin grabación de muestras. Descargar un WAV
 genera una señal de prueba y no cuenta como envío confirmado. La autoprueba
 verifica el DSP local sin usar micrófono ni reproducir audio.
+
+### Diagnóstico de recepción
+
+El panel muestra el nivel de 1200 y 2400 Hz, los candidatos que adquirieron el
+prefijo, los rechazados y las tramas con CRC válido de cualquier grupo. Los
+candidatos se cuentan por fase de símbolo (hasta ocho por emisión), no como
+paquetes independientes. Los contadores duran toda la sesión, incluido el
+retorno de TX, para no perder sincronismos demasiado breves para la pantalla.
+Los niveles son el máximo RMS de las ventanas de símbolo en cada intervalo de
+reporte de unos 100 ms, después de los filtros; no son SPL ni SNR calibrado.
+Durante TX o parada se identifica la lectura como pausada.
+
+«Grabar recepción · 10 s» captura únicamente por solicitud explícita las
+muestras mono a 9600 Hz que entran al decodificador. No es una grabación cruda:
+ya incluye el procesamiento del dispositivo, los filtros y el remuestreo.
+El búfer está limitado a 96 000 muestras y queda solo en memoria; puede contener
+voces del entorno. Las descargas WAV y JSON son manuales, sin subida ni
+persistencia automática. Se puede cancelar o descartar y una sesión nueva
+borra la grabación anterior. La parada cancela y descarta una toma incompleta.
+Una toma que no termina en 15 s de tiempo real se cancela con un aviso.
+
+Durante esos diez segundos se aplaza la transmisión local, incluidos los
+acuses, por lo que esta prueba debe usar un anuncio HELLO remoto y no medir
+tiempos de confirmación. No se inicia mientras haya emisiones pendientes.
+El JSON de diagnóstico incluye ajustes de captura, configuración y contadores
+antes/después; no incluye muestras. El JSON general de sesión sigue sin audio.
+No se altera el prefijo ni se relaja el CRC: el panel permite investigar un
+fallo real, pero no constituye una corrección validada en iPhone ni en RF.
 
 ## Verificación y límites
 
@@ -115,6 +151,11 @@ desconocidos, captura a 44,1/48 kHz, ruido y pequeñas diferencias de reloj,
 CRC corrupto y recuperación, VOX, intercambio DATA/ACK mediante muestras,
 identidades de acuse incorrectas, acuse perdido, reintentos y caducidad,
 difusión, silencio sin tráfico, canal ocupado, parada, IDs duplicados y límites.
+También ejecuta cuatro pruebas de diagnóstico: niveles RMS de tonos conocidos,
+contadores de sincronismo y CRC, captura acotada a diez segundos a 44,1/48 kHz,
+y cancelación sin retención de audio ni reproducción del micrófono.
+Las pruebas del ciclo de vida reproducen suspensión durante el permiso,
+cancelación durante el arranque y parada por suspensión u ocultación posterior.
 `npm run test:emergency-radio` verifica la compatibilidad del formato compartido.
 
 La prueba del navegador usa entrada PCM de micrófono de prueba a 48 kHz,

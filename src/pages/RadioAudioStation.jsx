@@ -11,6 +11,7 @@ const initial = () => { try { return { ...defaults, ...JSON.parse(localStorage.g
 const empty = { messages: [], inbox: [], peers: [], logs: [], stats: { tx: 0, rx: 0, retries: 0, acks: 0 }, conflict: false }
 const clock = time => new Date(Date.now() - performance.now() + time * 1000).toLocaleTimeString('es-ES')
 const typeLabel = type => type === T.ACK ? 'acuse' : type === T.HELLO ? 'anuncio' : 'mensaje'
+const toneLevel = db => Number.isFinite(db) && db > -99 ? `${db.toFixed(0)} dBFS` : 'sin nivel medible'
 function download(name, data, type) {
   const url = URL.createObjectURL(new Blob([data], { type })); const a = document.createElement('a')
   a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
@@ -25,6 +26,7 @@ export default function RadioAudioStation() {
   const [level, setLevel] = useState({ db: -100, receiving: false, clipping: false, accepted: 0, rejected: 0 })
   const [transmitting, setTransmitting] = useState(false); const [txType, setTxType] = useState(T.DATA)
   const [devices, setDevices] = useState([]); const [capture, setCapture] = useState(null); const [test, setTest] = useState('')
+  const [recording, setRecording] = useState(false); const [recorded, setRecorded] = useState(null)
   const controller = useRef(null); const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; void controller.current?.stop() } }, [])
   function change(key, value) {
@@ -33,6 +35,7 @@ export default function RadioAudioStation() {
   }
   async function start() {
     setError(''); setNotice(''); setStarting(true); setLevel({ db: -100, accepted: 0, rejected: 0 })
+    setRecorded(null); setRecording(false); setCapture(null)
     let session
     try {
       session = new BrowserRadioAudio(config, {
@@ -40,7 +43,9 @@ export default function RadioAudioStation() {
         onLevel: v => { if (mounted.current && controller.current === session) setLevel(v) },
         onTransmit: (v, type) => { if (mounted.current && controller.current === session) { setTransmitting(v); if (type) setTxType(type) } },
         onStarted: v => { if (mounted.current && controller.current === session) setCapture(v) },
-        onStopped: reason => { if (mounted.current && controller.current === session) { setActive(false); setStarting(false); setNotice(reason) } }
+        onRecording: v => { if (mounted.current && controller.current === session) { setRecorded(v); setRecording(false) } },
+        onRecordingError: reason => { if (mounted.current && controller.current === session) { setRecording(false); setError(reason) } },
+        onStopped: reason => { if (mounted.current && controller.current === session) { setActive(false); setStarting(false); setRecording(false); setNotice(reason) } }
       })
       controller.current = session; await session.start()
       if (!mounted.current || session.closed || controller.current !== session) return
@@ -53,7 +58,12 @@ export default function RadioAudioStation() {
       }
     } finally { if (mounted.current && (!session || controller.current === session)) setStarting(false) }
   }
-  async function stop() { await controller.current?.stop(); setActive(false); setStarting(false); setNotice('Micrófono y emisiones detenidos.') }
+  async function stop() { await controller.current?.stop(); setActive(false); setStarting(false); setRecording(false); setNotice('Micrófono y emisiones detenidos. Las grabaciones incompletas se han descartado.') }
+  function recordDiagnostic() {
+    setError('')
+    try { controller.current.recordDiagnostic(); setRecorded(null); setRecording(true) }
+    catch (e) { setError(e.message) }
+  }
   function send(e) { e.preventDefault(); setError(''); try { controller.current.send(text, destination, priority) } catch (e) { setError(e.message) } }
   function announce() { setError(''); try { controller.current.announce() } catch (e) { setError(e.message) } }
   function examplePacket() {
@@ -72,10 +82,10 @@ export default function RadioAudioStation() {
     } catch (e) { setError(e.message) }
   }
   const locked = active || starting
-  const canSend = active && !snapshot.conflict
+  const canSend = active && !snapshot.conflict && !recording
   const bytes = textBytes(text.trim()).length
   const bar = Math.max(0, Math.min(100, (level.db + 80) / 80 * 100))
-  const state = !active ? 'Detenida' : snapshot.conflict ? 'ID duplicado · emisión bloqueada' : transmitting ? `Emitiendo ${typeLabel(txType)} / retorno a escucha` : level.receiving ? 'Recibiendo trama' : level.db > config.busyDb ? 'Canal con audio' : 'Escuchando'
+  const state = !active ? 'Detenida' : snapshot.conflict ? 'ID duplicado · emisión bloqueada' : transmitting ? `Emitiendo ${typeLabel(txType)} / retorno a escucha` : recording ? 'Grabando prueba de recepción' : level.receiving ? 'Recibiendo trama' : level.db > config.busyDb ? 'Canal con audio' : 'Escuchando'
 
   return <div className="ra-station">
     <header className="ra-header"><div><p className="ra-eyebrow">Radioafición · audio real · versión 0.1</p><h1>Estación de audio · VOX</h1>
@@ -108,6 +118,34 @@ export default function RadioAudioStation() {
       <div className="ra-counters"><span><b>{snapshot.stats.tx}</b> emisiones</span><span><b>{snapshot.stats.rx}</b> tramas del grupo</span><span><b>{snapshot.stats.acks}</b> confirmados</span><span><b>{snapshot.stats.retries}</b> reintentos</span></div>
     </section>
 
+    <section className="ra-panel ra-diagnostics" aria-label="Diagnóstico de recepción"><h2>Diagnóstico de recepción</h2>
+      <p className="ra-hint">{active && !transmitting ? 'Niveles de los tonos recibidos, actualizados durante la escucha.' : 'Lectura pausada; los niveles mostrados corresponden a la última escucha.'}
+        {' '}Un nivel alto no garantiza que el sonido contenga una trama.</p>
+      <div className="ra-tones">{[1200, 2400].map((hz, i) => <div key={hz}>
+        <span>{hz} Hz · tono {i}</span><strong>{toneLevel(level.tonesDb?.[i])}</strong>
+        <div className="ra-meter" aria-hidden="true"><div style={{ width: `${Math.max(0, Math.min(100, ((level.tonesDb?.[i] ?? -100) + 80) / 80 * 100))}%` }} /></div>
+      </div>)}</div>
+      <div className="ra-counters"><span><b>{level.prefixes || 0}</b> candidatos con prefijo</span><span><b>{level.rejected || 0}</b> candidatos rechazados</span><span><b>{level.accepted || 0}</b> tramas válidas de cualquier grupo</span></div>
+      <p className="ra-hint">Los candidatos corresponden a ocho posibles alineaciones: una emisión puede producir varios.
+        {' '}Los niveles son máximos por intervalo de 0,1 s después del filtro, no una medida de señal/ruido.</p>
+      <p className="ra-hint">{level.accepted > 0 ? 'Se han descifrado tramas. Si no aparece el mensaje esperado, comprueba su grupo y destino.'
+        : level.prefixes > 0 ? 'Se ha reconocido al menos un prefijo, pero todavía no hay tramas válidas. Prueba con menos volumen y otra posición entre los equipos.'
+        : 'Todavía no se ha reconocido un prefijo. Comprueba 300 bit/s en ambos equipos y observa si llegan los dos tonos durante el anuncio remoto.'}</p>
+      <p>Para investigar un fallo: pulsa «Grabar recepción · 10 s» aquí y después «Anunciar mi presencia» en el otro dispositivo.
+        Mantén esta página visible. Durante la grabación se aplazan las emisiones y los acuses de esta estación.</p>
+      <div className="ra-actions"><button type="button" disabled={!active || transmitting || recording} onClick={recordDiagnostic}>Grabar recepción · 10 s</button>
+        {recording && <><span role="status">Grabando {Math.min(10, level.recordingSeconds ?? 0).toFixed(1)} / 10 s…</span>
+          <button type="button" onClick={() => { controller.current?.cancelRecording(); setRecording(false) }}>Cancelar grabación</button></>}
+        {recorded && <><button type="button" onClick={() => download('radio-recepcion-10s.wav', wavBytes(recorded.samples), 'audio/wav')}>Descargar audio recibido</button>
+          <button type="button" onClick={() => { const { samples, type, id, ...metadata } = recorded; download('radio-recepcion-diagnostico.json', JSON.stringify({ version: 'RADIO_AUDIO_RX_DIAGNOSTIC_V1', ...metadata,
+            durationSeconds: samples.length / recorded.sampleRate, scope: 'Audio recibido tras filtros y remuestreo a 9600 Hz. No es audio crudo del micrófono. Contadores de sesión antes y después de la grabación.' }, null, 2), 'application/json') }}>Descargar datos de la prueba</button>
+          <button type="button" onClick={() => setRecorded(null)}>Descartar grabación</button></>}
+      </div>
+      {recorded && <p role="status">Grabación lista: {recorded.after.prefixes - recorded.before.prefixes} candidatos con prefijo y {recorded.after.accepted - recorded.before.accepted} tramas válidas durante la prueba.</p>}
+      <p className="ra-hint">Solo se graba al pulsar el botón. Son 10 s de audio recibido tras el filtro y remuestreo a 9600 Hz; puede incluir voces del entorno.
+        No se sube a Internet ni se guarda automáticamente. Puedes descargarlo o descartarlo. Una sesión nueva borra la grabación anterior.</p>
+    </section>
+
     <div className="ra-columns"><section className="ra-panel"><h2>2. Envía un mensaje</h2>
       <form onSubmit={send}><div className="ra-message-options"><label>Destino<select value={destination} onChange={e => setDestination(Number(e.target.value))}>
         <option value="255">Todas las estaciones · sin acuse</option>{[...new Set([2, ...snapshot.peers.map(p => p.id), Number(destination)])].filter(id => id >= 1 && id < 255).sort((a, b) => a - b).map(id => <option key={id} value={id}>{snapshot.peers.find(p => p.id === id)?.name || `Estación ${id}`} · ID {id}</option>)}</select></label>
@@ -133,7 +171,8 @@ export default function RadioAudioStation() {
       <label>Volumen digital · {Math.round(config.volume * 100)} %<input type="range" min="0.05" max="0.8" step="0.05" value={config.volume} disabled={locked} onChange={e => change('volume', Number(e.target.value))} /></label>
       <label>Canal ocupado por encima de {config.busyDb} dBFS<input type="range" min="-60" max="-15" step="1" value={config.busyDb} disabled={locked} onChange={e => change('busyDb', Number(e.target.value))} /></label></div>
       <p>El tono previo activa VOX antes de la trama. La espera de retorno debe superar el tiempo que el walkie mantiene la transmisión después del sonido.
-        Si falla el acuse, aumenta esa espera en ambos equipos. Si el ambiente mantiene el canal ocupado, ajusta el umbral por encima de su nivel de reposo.</p>
+        Si falla el acuse, aumenta esa espera en ambos equipos. Si el ambiente mantiene el canal ocupado, ajusta el umbral por encima de su nivel de reposo.
+        Ese umbral controla cuándo emitir; no cambia la sensibilidad del decodificador.</p>
       <p>El altavoz de salida se elige en el dispositivo. Se pide captura sin cancelación de eco, supresión de ruido ni ganancia automática, porque pueden alterar los tonos.
         Durante la emisión y el retorno se bloquea la recepción. Nunca se reproduce el micrófono por el altavoz.</p>
       {capture && <p className="ra-hint">Captura: {capture.sampleRate} muestras/s. Procesamiento informado por el navegador: eco {String(capture.settings.echoCancellation ?? 'no informado')},

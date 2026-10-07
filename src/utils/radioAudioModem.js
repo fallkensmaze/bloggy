@@ -55,14 +55,22 @@ export class FskAudioReceiver {
     if (!LIVE_BAUDS.includes(baud)) throw new Error('Usa 300 o 600 bit/s.')
     this.baud = baud; this.spb = SAMPLE_RATE / baud; this.hop = this.spb / 8
     this.kernels = TONES.map(f => Array.from({ length: this.spb }, (_, i) => [Math.cos(2 * Math.PI * f * i / SAMPLE_RATE), Math.sin(2 * Math.PI * f * i / SAMPLE_RATE)]))
-    this.rejected = 0; this.accepted = 0; this.reset()
+    this.rejected = 0; this.accepted = 0; this.prefixes = 0; this.reset()
   }
   reset() {
     this.index = 0; this.window = new Float32Array(this.spb); this.power = 0
     this.sums = [[0, 0], [0, 0]]
+    this.tonePeaks = [0, 0]
     this.banks = Array.from({ length: 8 }, () => ({ hi: 0, lo: 0, quality: 0, frame: null, byte: 0, bits: 0, total: null, score: 0, scored: 0 }))
   }
   get receiving() { return this.banks.some(b => b.frame) }
+  // Peak symbol-window RMS in each report interval, after the capture filters.
+  // These are tone levels, not acoustic SPL, calibrated SNR or proof of a frame.
+  diagnostics() {
+    const tonesDb = this.tonePeaks.map(power => 10 * Math.log10(Math.max(1e-10, power)))
+    this.tonePeaks = [0, 0]
+    return { tonesDb, prefixes: this.prefixes, rejected: this.rejected, accepted: this.accepted }
+  }
   clearBank(b) { b.hi = 0; b.lo = 0; b.frame = null; b.bits = 0; b.byte = 0; b.total = null; b.score = 0; b.scored = 0 }
   push(samples) {
     const frames = []
@@ -78,13 +86,14 @@ export class FskAudioReceiver {
       const b = this.banks[(this.index % this.spb) / this.hop]
       if (this.power / this.spb < 1e-10) { this.clearBank(b); continue }
       const energies = this.sums.map(([re, im]) => re * re + im * im)
+      for (let t = 0; t < 2; t++) this.tonePeaks[t] = Math.max(this.tonePeaks[t], 2 * energies[t] / (this.spb * this.spb))
       const confidence = Math.abs(energies[1] - energies[0]) / (energies[0] + energies[1] + 1e-20)
       const bit = energies[1] > energies[0] ? 1 : 0
       b.quality = b.quality * 0.95 + confidence * 0.05
       if (!b.frame) {
         b.hi = ((b.hi << 1) | (b.lo >>> 31)) & 0xffff
         b.lo = ((b.lo << 1) | bit) >>> 0
-        if (b.hi === 0xaaaa && b.lo === 0xaaaad391 && b.quality > 0.55) b.frame = [...PREFIX]
+        if (b.hi === 0xaaaa && b.lo === 0xaaaad391 && b.quality > 0.55) { b.frame = [...PREFIX]; this.prefixes++ }
         continue
       }
       b.score += confidence; b.scored++; b.byte = (b.byte << 1) | bit

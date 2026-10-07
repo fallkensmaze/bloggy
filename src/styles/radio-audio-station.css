@@ -30,6 +30,9 @@
 .ra-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #78848c; margin-right: .6rem; }.ra-dot.ra-on { background: #85d6ab; }.ra-dot.ra-tx { background: #ffc369; }
 .ra-meter { height: 10px; background: var(--bg-secondary); border-radius: 5px; overflow: hidden; margin-top: .3rem; }.ra-meter div { height: 100%; background: #85d6ab; transition: width .1s; }.ra-meter .ra-clipping { background: #ed8b8b; }
 .ra-counters { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 1.5rem; font-size: .75rem; color: var(--text-muted); }.ra-counters b { color: var(--text-primary); font-size: 1.1rem; margin-right: .25rem; }
+.ra-tones { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin: 1rem 0 1.4rem; }
+.ra-tones span, .ra-tones strong { display: block; font-size: .85rem; margin-bottom: .4rem; }
+.ra-diagnostics > p { font-size: .83rem; }
 .ra-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.2rem; }.ra-columns .ra-panel { margin-bottom: 0; }
 .ra-message-options { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: .7rem; margin-bottom: 1rem; }
 .ra-history { margin-top: 1.2rem; max-height: 420px; overflow-y: auto; }.ra-history article { padding: .9rem 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }.ra-history article p { margin: .65rem 0; font-size: .88rem; white-space: pre-wrap; }
