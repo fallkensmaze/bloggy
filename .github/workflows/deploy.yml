@@ -49,6 +49,9 @@ jobs:
       - name: Test emergency radio simulation
         run: npm run test:emergency-radio
 
+      - name: Test live audio station
+        run: npm run test:radio-audio
+
       - name: Test gamma-camera quality control
         run: npm run test:gamma && npm run test:nema && npm run test:cor && npm run test:tomo
 

@@ -4,8 +4,10 @@ export const SAMPLE_RATE = 9600
 export const TONES = [1200, 2400]
 export const FRAME_TYPES = { HELLO: 1, TOPOLOGY: 2, DATA: 3, ACK: 4, PROBE: 5, LINK_ACK: 6 }
 const PREFIX = [0xaa, 0xaa, 0xaa, 0xaa, 0xd3, 0x91]
-const encoder = new TextEncoder()
-const decoder = new TextDecoder('utf-8', { fatal: true })
+// AudioWorkletGlobalScope does not expose TextEncoder/TextDecoder in all
+// browsers. Frame/CRC decoding must also load there without creating them.
+let encoder
+let decoder
 
 export function crc16(bytes) {
   let crc = 0xffff
@@ -16,8 +18,8 @@ export function crc16(bytes) {
   return crc
 }
 
-export function textBytes(text) { return encoder.encode(text) }
-export function bytesText(bytes) { try { return decoder.decode(bytes) } catch { return null } }
+export function textBytes(text) { encoder ??= new TextEncoder(); return encoder.encode(text) }
+export function bytesText(bytes) { try { decoder ??= new TextDecoder('utf-8', { fatal: true }); return decoder.decode(bytes) } catch { return null } }
 
 export function encodeFrame(packet) {
   const payload = Uint8Array.from(packet.payload || [])
