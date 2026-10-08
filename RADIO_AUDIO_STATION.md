@@ -58,7 +58,10 @@ considerar sus circunstancias y el marco aplicable.
   navegador informa, porque el dispositivo puede no respetarlos.
 - El receptor usa correlación deslizante de ambas frecuencias y ocho fases de
   símbolo. Encuentra el prefijo en el flujo continuo sin una marca externa de
-  inicio o fin. Solo entrega una trama tras comprobar cabecera y CRC.
+  inicio o fin. Adquiere un candidato cuando coinciden los 48 bits del prefijo;
+  solo entrega una trama tras comprobar cabecera, longitud y CRC. El contraste
+  de tonos se informa, pero no bloquea la adquisición: un eco puede reducirlo
+  aunque el prefijo y la trama completa sigan siendo correctos.
 - Mantiene la tasa nominal dentro de cada trama. No tiene PLL, compensación de
   grandes diferencias de reloj, FEC, cifrado ni autenticación. CRC detecta errores
   accidentales; no impide suplantación. El contraste de tonos no es SNR calibrado.
@@ -146,11 +149,13 @@ fallo real, pero no constituye una corrección validada en iPhone ni en RF.
 
 ## Verificación y límites
 
-`npm run test:radio-audio` cubre 16 casos: sincronización con comienzo y bloques
+`npm run test:radio-audio` cubre 18 casos: sincronización con comienzo y bloques
 desconocidos, captura a 44,1/48 kHz, ruido y pequeñas diferencias de reloj,
 CRC corrupto y recuperación, VOX, intercambio DATA/ACK mediante muestras,
 identidades de acuse incorrectas, acuse perdido, reintentos y caducidad,
 difusión, silencio sin tráfico, canal ocupado, parada, IDs duplicados y límites.
+Incluye eco sintético de un símbolo a 300/600 bit/s: recepción con bajo contraste
+de tonos y rechazo de una trama con CRC corrupto bajo el mismo canal.
 También ejecuta cuatro pruebas de diagnóstico: niveles RMS de tonos conocidos,
 contadores de sincronismo y CRC, captura acotada a diez segundos a 44,1/48 kHz,
 y cancelación sin retención de audio ni reproducción del micrófono.

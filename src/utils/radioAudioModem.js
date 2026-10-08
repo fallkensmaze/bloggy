@@ -61,7 +61,7 @@ export class FskAudioReceiver {
     this.index = 0; this.window = new Float32Array(this.spb); this.power = 0
     this.sums = [[0, 0], [0, 0]]
     this.tonePeaks = [0, 0]
-    this.banks = Array.from({ length: 8 }, () => ({ hi: 0, lo: 0, quality: 0, frame: null, byte: 0, bits: 0, total: null, score: 0, scored: 0 }))
+    this.banks = Array.from({ length: 8 }, () => ({ hi: 0, lo: 0, frame: null, byte: 0, bits: 0, total: null, score: 0, scored: 0 }))
   }
   get receiving() { return this.banks.some(b => b.frame) }
   // Peak symbol-window RMS in each report interval, after the capture filters.
@@ -89,11 +89,13 @@ export class FskAudioReceiver {
       for (let t = 0; t < 2; t++) this.tonePeaks[t] = Math.max(this.tonePeaks[t], 2 * energies[t] / (this.spb * this.spb))
       const confidence = Math.abs(energies[1] - energies[0]) / (energies[0] + energies[1] + 1e-20)
       const bit = energies[1] > energies[0] ? 1 : 0
-      b.quality = b.quality * 0.95 + confidence * 0.05
       if (!b.frame) {
         b.hi = ((b.hi << 1) | (b.lo >>> 31)) & 0xffff
         b.lo = ((b.lo << 1) | bit) >>> 0
-        if (b.hi === 0xaaaa && b.lo === 0xaaaad391 && b.quality > 0.55) { b.frame = [...PREFIX]; this.prefixes++ }
+        // An echo can lower tone contrast while all 48 prefix bits are correct.
+        // Acquire on the exact prefix; header bounds and CRC still decide whether
+        // a candidate is delivered. Contrast remains a reported frame metric.
+        if (b.hi === 0xaaaa && b.lo === 0xaaaad391) { b.frame = [...PREFIX]; this.prefixes++ }
         continue
       }
       b.score += confidence; b.scored++; b.byte = (b.byte << 1) | bit
