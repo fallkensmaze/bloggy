@@ -35,6 +35,35 @@ test('Unknown frame start, symbol phase and arbitrary chunk boundaries at both r
     assert.equal(found.length, 1); assert.deepEqual(found[0].packet, packet)
   }
 })
+// A one-symbol delayed path mixes the opposite tone into alternating training
+// bits. Their contrast drops while their sign (and thus every bit) stays correct.
+// This synthetic regression contains no microphone recording or user metadata.
+function withEcho(audio, baud, offset = 19) {
+  const delay = SAMPLE_RATE / baud
+  return Float32Array.from({ length: audio.length + delay + offset + 77 }, (_, i) =>
+    0.03 * ((audio[i - offset] || 0) + 0.75 * (audio[i - offset - delay] || 0)))
+}
+test('Exact prefix with low tone contrast still delivers a CRC-valid frame through an echo', () => {
+  for (const baud of [300, 600]) for (const offset of [1, 7, 19, 31]) {
+    const rx = new FskAudioReceiver(baud)
+    const found = stream(rx, withEcho(voxAudio(packet, { baud }), baud, offset), offset)
+    assert.equal(found.length, 1, `${baud} bit/s, offset ${offset}`)
+    assert.deepEqual(found[0].packet, packet)
+    assert.ok(rx.prefixes > 0); assert.equal(rx.accepted, 1)
+  }
+})
+test('Low-contrast prefix never bypasses CRC or accepts a corrupt echoed payload', () => {
+  for (const baud of [300, 600]) {
+    const bad = encodeFrame(packet); bad[28] ^= 1
+    const audio = modulate(Uint8Array.from([...Array(16).fill(170), ...bad]), baud)
+    const rx = new FskAudioReceiver(baud)
+    assert.equal(stream(rx, withEcho(audio, baud)).length, 0)
+    assert.ok(rx.prefixes > 0); assert.ok(rx.rejected > 0); assert.equal(rx.accepted, 0)
+    rx.push(new Float32Array(2000))
+    const found = stream(rx, withEcho(voxAudio(packet, { baud }), baud))
+    assert.equal(found.length, 1); assert.deepEqual(found[0].packet, packet)
+  }
+})
 test('44.1 and 48 kHz capture, noise and ±200 ppm sample-clock mismatch on a 96-byte text', () => {
   const p = { ...packet, payload: [...textBytes('Abcdefghijklmnopqrstuvwxyz0123456'.repeat(3).slice(0, 96))] }
   assert.equal(p.payload.length, 96)
