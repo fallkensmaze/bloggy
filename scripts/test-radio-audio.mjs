@@ -64,6 +64,68 @@ test('Low-contrast prefix never bypasses CRC or accepts a corrupt echoed payload
     assert.equal(found.length, 1); assert.deepEqual(found[0].packet, packet)
   }
 })
+// A four-sample delayed tap has opposite signs at 1200 and 2400 Hz; it
+// imposes a known tone imbalance without editing bits or using recorded audio.
+// A second, one-symbol path smears transitions. Fractional arrival offsets
+// exercise the timing search independently of stream chunk boundaries.
+function withToneImbalance(audio, baud, db, offset = 19.5, echo = 0.75) {
+  const ratio = 10 ** (db / 20); const tap = (ratio - 1) / (ratio + 1)
+  const colored = Float32Array.from(audio, (x, i) => x + tap * (audio[i - 4] || 0))
+  const delay = SAMPLE_RATE / baud
+  const at = i => {
+    const k = Math.floor(i); const f = i - k
+    return (colored[k] || 0) * (1 - f) + (colored[k + 1] || 0) * f
+  }
+  return Float32Array.from({ length: audio.length + delay + Math.ceil(offset) + 77 }, (_, i) =>
+    0.03 * (at(i - offset) + echo * at(i - offset - delay)))
+}
+test('Unequal tone levels and delayed paths decode at both rates without duplicate frames', () => {
+  const p = { ...packet, payload: [...textBytes('Abcdefghijklmnopqrstuvwxyz0123456'.repeat(3))] }
+  for (const baud of [300, 600]) for (const db of [-9, 9]) for (const offset of [1, 7.5, 19.5, 31]) {
+    const rx = new FskAudioReceiver(baud)
+    const found = stream(rx, withToneImbalance(voxAudio(p, { baud }), baud, db, offset))
+    assert.equal(found.length, 1, `${baud} bit/s, ${db} dB, offset ${offset}`)
+    assert.deepEqual(found[0].packet, p); assert.equal(rx.accepted, 1)
+    assert.equal(rx.receiving, false)
+  }
+})
+test('Tone compensation still rejects corrupted CRCs and reset clears every partial candidate', () => {
+  for (const baud of [300, 600]) for (const db of [-9, 9]) {
+    const bad = encodeFrame(packet); bad[28] ^= 1
+    const audio = modulate(Uint8Array.from([...Array(16).fill(170), ...bad]), baud)
+    const rx = new FskAudioReceiver(baud)
+    assert.equal(stream(rx, withToneImbalance(audio, baud, db)).length, 0)
+    assert.ok(rx.prefixes > 0); assert.ok(rx.rejected > 0); assert.equal(rx.accepted, 0)
+    const partial = withToneImbalance(modulate(Uint8Array.from([...Array(16).fill(170), ...encodeFrame(packet)]), baud), baud, db)
+    rx.push(partial.subarray(0, (16 + 8) * 8 * SAMPLE_RATE / baud))
+    assert.equal(rx.receiving, true)
+    const prefixes = rx.prefixes
+    rx.reset(); assert.equal(rx.receiving, false); assert.equal(rx.prefixes, prefixes)
+    const found = stream(rx, withToneImbalance(voxAudio(packet, { baud }), baud, db))
+    assert.equal(found.length, 1); assert.deepEqual(found[0].packet, packet)
+  }
+})
+test('Full-symbol tone compensation retains reception with noise, imbalance and moderate echo together', () => {
+  for (const baud of [300, 600]) for (const db of [-6, 0, 6]) {
+    const audio = withToneImbalance(voxAudio(packet, { baud }), baud, db, 19.5, 0.25)
+    const start = Math.round(0.7 * SAMPLE_RATE) + 16 * 8 * SAMPLE_RATE / baud + 20
+    const data = audio.subarray(start, start + encodeFrame(packet).length * 8 * SAMPLE_RATE / baud)
+    const power = data.reduce((sum, x) => sum + x * x, 0) / data.length
+    // Defined at the decoder input over frame data, before tone correlation:
+    // 6 dB at 300 bit/s and 9 dB at 600 bit/s signal / white-noise power.
+    // The slower rate integrates twice as many samples. This is synthetic,
+    // not a calibrated acoustic SNR or a claim about speech/interference.
+    const snrDb = baud === 300 ? 6 : 9
+    const noisePeak = Math.sqrt(3 * power / 10 ** (snrDb / 10))
+    for (let seed = 1; seed <= 8; seed++) {
+      const random = seededRandom(seed)
+      const noisy = Float32Array.from(audio, x => x + (random() * 2 - 1) * noisePeak)
+      const found = stream(new FskAudioReceiver(baud), noisy, seed)
+      assert.equal(found.length, 1, `${baud} bit/s, ${db} dB imbalance, noise seed ${seed}`)
+      assert.deepEqual(found[0].packet, packet)
+    }
+  }
+})
 test('44.1 and 48 kHz capture, noise and ±200 ppm sample-clock mismatch on a 96-byte text', () => {
   const p = { ...packet, payload: [...textBytes('Abcdefghijklmnopqrstuvwxyz0123456'.repeat(3).slice(0, 96))] }
   assert.equal(p.payload.length, 96)

@@ -56,12 +56,21 @@ considerar sus circunstancias y el marco aplicable.
   antes de un remuestreador continuo a 9600 Hz. Se solicita captura sin eco,
   supresión de ruido ni ganancia automática; se muestran los ajustes que el
   navegador informa, porque el dispositivo puede no respetarlos.
-- El receptor usa correlación deslizante de ambas frecuencias y ocho fases de
-  símbolo. Encuentra el prefijo en el flujo continuo sin una marca externa de
+- El receptor mantiene la correlación de un símbolo completo con ocho fases
+  para conservar sensibilidad al ruido. En paralelo, una ventana de ocho
+  muestras (un ciclo de 1200 Hz) busca fases de media muestra. Ambos caminos
+  prueban 17 balances de energía de −12 a +12 dB, en pasos de 1,5 dB.
+  El camino corto tolera diferencias
+  entre tonos y transiciones mezcladas por eco; las energías interpoladas permiten
+  probar las fases intermedias sin modificar las muestras. El estado está
+  acotado a 1224 candidatos a 300 bit/s y 680 a 600 bit/s.
+  Encuentra el prefijo en el flujo continuo sin una marca externa de
   inicio o fin. Adquiere un candidato cuando coinciden los 48 bits del prefijo;
   solo entrega una trama tras comprobar cabecera, longitud y CRC. El contraste
   de tonos se informa, pero no bloquea la adquisición: un eco puede reducirlo
-  aunque el prefijo y la trama completa sigan siendo correctos.
+  aunque el prefijo y la trama completa sigan siendo correctos. Al aceptar una
+  trama se vacían todos los candidatos para no entregar duplicados. El contraste
+  informado corresponde al balance del candidato que pasó el CRC.
 - Mantiene la tasa nominal dentro de cada trama. No tiene PLL, compensación de
   grandes diferencias de reloj, FEC, cifrado ni autenticación. CRC detecta errores
   accidentales; no impide suplantación. El contraste de tonos no es SNR calibrado.
@@ -123,7 +132,7 @@ verifica el DSP local sin usar micrófono ni reproducir audio.
 
 El panel muestra el nivel de 1200 y 2400 Hz, los candidatos que adquirieron el
 prefijo, los rechazados y las tramas con CRC válido de cualquier grupo. Los
-candidatos se cuentan por fase de símbolo (hasta ocho por emisión), no como
+candidatos se cuentan por ventana, fase de símbolo y balance de tonos, no como
 paquetes independientes. Los contadores duran toda la sesión, incluido el
 retorno de TX, para no perder sincronismos demasiado breves para la pantalla.
 Los niveles son el máximo RMS de las ventanas de símbolo en cada intervalo de
@@ -149,13 +158,23 @@ fallo real, pero no constituye una corrección validada en iPhone ni en RF.
 
 ## Verificación y límites
 
-`npm run test:radio-audio` cubre 18 casos: sincronización con comienzo y bloques
+`npm run test:radio-audio` cubre 21 casos: sincronización con comienzo y bloques
 desconocidos, captura a 44,1/48 kHz, ruido y pequeñas diferencias de reloj,
 CRC corrupto y recuperación, VOX, intercambio DATA/ACK mediante muestras,
 identidades de acuse incorrectas, acuse perdido, reintentos y caducidad,
 difusión, silencio sin tráfico, canal ocupado, parada, IDs duplicados y límites.
 Incluye eco sintético de un símbolo a 300/600 bit/s: recepción con bajo contraste
 de tonos y rechazo de una trama con CRC corrupto bajo el mismo canal.
+Incluye desequilibrio sintético de ±9 dB entre tonos junto a un eco, llegadas
+fraccionarias, textos de 96 bytes, CRC corrupto y reinicio de candidatos a
+ambas tasas. Las regresiones sintéticas no contienen grabaciones de usuarios.
+Otro caso combina eco de amplitud 0,25, desequilibrio de ±6 dB y ruido blanco
+con relación señal/ruido de 6 dB a 300 bit/s y 9 dB a 600 bit/s a la entrada
+del decodificador: ocho semillas
+por tasa y balance (48 combinaciones). El balance también se busca en las
+ventanas completas para conservar la integración frente al ruido. Ese ensayo
+no valida voces, interferencias tonales o impulsivas, ni un umbral acústico de
+funcionamiento. El ruido y el eco más intensos aún pueden impedir la recepción.
 También ejecuta cuatro pruebas de diagnóstico: niveles RMS de tonos conocidos,
 contadores de sincronismo y CRC, captura acotada a diez segundos a 44,1/48 kHz,
 y cancelación sin retención de audio ni reproducción del micrófono.

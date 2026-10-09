@@ -126,7 +126,7 @@ export default function RadioAudioStation() {
         <div className="ra-meter" aria-hidden="true"><div style={{ width: `${Math.max(0, Math.min(100, ((level.tonesDb?.[i] ?? -100) + 80) / 80 * 100))}%` }} /></div>
       </div>)}</div>
       <div className="ra-counters"><span><b>{level.prefixes || 0}</b> candidatos con prefijo</span><span><b>{level.rejected || 0}</b> candidatos rechazados</span><span><b>{level.accepted || 0}</b> tramas válidas de cualquier grupo</span></div>
-      <p className="ra-hint">Los candidatos corresponden a ocho posibles alineaciones: una emisión puede producir varios.
+      <p className="ra-hint">Se prueban distintas alineaciones y compensaciones de tonos: una emisión puede producir varios candidatos.
         {' '}Los niveles son máximos por intervalo de 0,1 s después del filtro, no una medida de señal/ruido.</p>
       <p className="ra-hint">{level.accepted > 0 ? 'Se han descifrado tramas. Si no aparece el mensaje esperado, comprueba su grupo y destino.'
         : level.prefixes > 0 ? 'Se ha reconocido al menos un prefijo, pero todavía no hay tramas válidas. Prueba con menos volumen y otra posición entre los equipos.'
@@ -193,7 +193,7 @@ export default function RadioAudioStation() {
       <p>La página se detiene al pasar a segundo plano o suspenderse el audio, para evitar emisiones acumuladas al volver. Los mensajes quedan en memoria;
         se borran al recargar o iniciar una sesión nueva. Solo se guardan preferencias en este navegador.</p>
       <p>Modulación BFSK de 1200/2400 Hz, entrenamiento de 16 bytes AA, prefijo AA AA AA AA D3 91, cabecera de 16 bytes y CRC-16/CCITT-FALSE.
-        El receptor busca el prefijo en ocho fases de símbolo y acepta únicamente tramas con CRC válido. Usa un protocolo directo propio, con TTL 1 y grupo 17 por defecto;
+        El receptor busca el prefijo con distintas alineaciones y compensa diferencias entre tonos; acepta únicamente tramas con CRC válido. Usa un protocolo directo propio, con TTL 1 y grupo 17 por defecto;
         no es interoperable con las rutas ni los HELLO del simulador. No hay FEC, autenticación ni confirmación de lectura humana.</p>
       <p>Esta versión necesita pruebas con grabaciones y equipos reales; la autoprueba no valida la transmisión por RF. En España, la <a href="https://www.boe.es/buscar/act.php?id=BOE-A-2026-15661" target="_blank" rel="noreferrer">UN-110 del CNAF</a>
         {' '}excluye el uso de PMR446 como repetidor o estación base. La app no reenvía mensajes de terceros.</p>

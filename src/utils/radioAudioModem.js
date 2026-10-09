@@ -4,6 +4,9 @@ import { SAMPLE_RATE, TONES, encodeFrame, decodeFrame, modulate } from './emerge
 export const LIVE_BAUDS = [300, 600]
 export const AUDIO_MODEM_DEFAULTS = { baud: 300, leadMs: 700, tailMs: 120, releaseMs: 1200, volume: 0.35, busyDb: -32 }
 const PREFIX = [0xaa, 0xaa, 0xaa, 0xaa, 0xd3, 0x91]
+const SHORT_WINDOW = 8 // One complete 1200 Hz cycle at 9600 samples/s.
+const TONE_BALANCES = Array.from({ length: 17 }, (_, i) => 10 ** ((i * 1.5 - 12) / 10))
+const makeBank = (balance = 1) => ({ balance, hi: 0, lo: 0, frame: null, byte: 0, bits: 0, total: null, score: 0, scored: 0 })
 
 export function voxAudio(packet, options = {}) {
   const c = { ...AUDIO_MODEM_DEFAULTS, ...options }
@@ -47,8 +50,11 @@ export class AudioResampler {
   }
 }
 
-// Eight symbol-phase hypotheses run in parallel. A 48-bit prefix acquires the
-// byte boundary; header length bounds the candidate and CRC decides acceptance.
+// Full-symbol integration with tone balancing preserves sensitivity in noise.
+// A short-window path
+// also searches half-sample phases and tone balances for acoustic links where
+// echoes smear transitions and the two tones arrive with unequal amplitudes.
+// Both paths require the exact 48-bit prefix, bounded header and valid CRC.
 // Samples are never labelled with packet start/end by the caller.
 export class FskAudioReceiver {
   constructor(baud = 300) {
@@ -61,9 +67,13 @@ export class FskAudioReceiver {
     this.index = 0; this.window = new Float32Array(this.spb); this.power = 0
     this.sums = [[0, 0], [0, 0]]
     this.tonePeaks = [0, 0]
-    this.banks = Array.from({ length: 8 }, () => ({ hi: 0, lo: 0, frame: null, byte: 0, bits: 0, total: null, score: 0, scored: 0 }))
+    this.banks = Array.from({ length: 8 }, () => TONE_BALANCES.map(makeBank))
+    this.shortWindow = new Float32Array(SHORT_WINDOW); this.shortPower = 0
+    this.shortSums = [[0, 0], [0, 0]]; this.previousShortEnergies = [0, 0]
+    this.shortBanks = Array.from({ length: this.spb * 2 }, () => TONE_BALANCES.map(makeBank))
+    this.allBanks = [...this.banks.flat(), ...this.shortBanks.flat()]
   }
-  get receiving() { return this.banks.some(b => b.frame) }
+  get receiving() { return this.allBanks.some(b => b.frame) }
   // Peak symbol-window RMS in each report interval, after the capture filters.
   // These are tone levels, not acoustic SPL, calibrated SNR or proof of a frame.
   diagnostics() {
@@ -72,48 +82,71 @@ export class FskAudioReceiver {
     return { tonesDb, prefixes: this.prefixes, rejected: this.rejected, accepted: this.accepted }
   }
   clearBank(b) { b.hi = 0; b.lo = 0; b.frame = null; b.bits = 0; b.byte = 0; b.total = null; b.score = 0; b.scored = 0 }
+  symbol(b, energy0, energy1, frames) {
+    const balanced0 = energy0 * b.balance
+    const bit = energy1 > balanced0 ? 1 : 0
+    if (!b.frame) {
+      b.hi = ((b.hi << 1) | (b.lo >>> 31)) & 0xffff
+      b.lo = ((b.lo << 1) | bit) >>> 0
+      if (b.hi === 0xaaaa && b.lo === 0xaaaad391) { b.frame = [...PREFIX]; this.prefixes++ }
+      return false
+    }
+    b.score += Math.abs(energy1 - balanced0) / (balanced0 + energy1 + 1e-20)
+    b.scored++; b.byte = (b.byte << 1) | bit
+    if (++b.bits !== 8) return false
+    b.frame.push(b.byte); b.bits = 0; b.byte = 0
+    if (b.frame.length === 22) {
+      const length = b.frame[20] * 256 + b.frame[21]
+      if (b.frame[6] !== 1 || length > 240) { this.rejected++; this.clearBank(b); return false }
+      b.total = 24 + length
+    }
+    if (!b.total || b.frame.length !== b.total) return false
+    const packet = decodeFrame(Uint8Array.from(b.frame))
+    if (!packet) { this.rejected++; this.clearBank(b); return false }
+    frames.push({ packet, quality: b.score / b.scored }); this.accepted++
+    // All paths observe the same audio; deliver a physical frame only once.
+    for (const bank of this.allBanks) this.clearBank(bank)
+    return true
+  }
   push(samples) {
     const frames = []
-    for (const x of samples) {
+    sample: for (const x of samples) {
       const slot = this.index % this.spb; const old = this.window[slot]
       this.window[slot] = x; this.power = Math.max(0, this.power + x * x - old * old)
+      const shortSlot = this.index % SHORT_WINDOW; const shortOld = this.shortWindow[shortSlot]
+      this.shortWindow[shortSlot] = x; this.shortPower = Math.max(0, this.shortPower + x * x - shortOld * shortOld)
       for (let t = 0; t < 2; t++) {
         this.sums[t][0] += (x - old) * this.kernels[t][slot][0]
         this.sums[t][1] += (x - old) * this.kernels[t][slot][1]
+        this.shortSums[t][0] += (x - shortOld) * this.kernels[t][slot][0]
+        this.shortSums[t][1] += (x - shortOld) * this.kernels[t][slot][1]
       }
       this.index++
-      if (this.index < this.spb || this.index % this.hop) continue
-      const b = this.banks[(this.index % this.spb) / this.hop]
-      if (this.power / this.spb < 1e-10) { this.clearBank(b); continue }
-      const energies = this.sums.map(([re, im]) => re * re + im * im)
-      for (let t = 0; t < 2; t++) this.tonePeaks[t] = Math.max(this.tonePeaks[t], 2 * energies[t] / (this.spb * this.spb))
-      const confidence = Math.abs(energies[1] - energies[0]) / (energies[0] + energies[1] + 1e-20)
-      const bit = energies[1] > energies[0] ? 1 : 0
-      if (!b.frame) {
-        b.hi = ((b.hi << 1) | (b.lo >>> 31)) & 0xffff
-        b.lo = ((b.lo << 1) | bit) >>> 0
-        // An echo can lower tone contrast while all 48 prefix bits are correct.
-        // Acquire on the exact prefix; header bounds and CRC still decide whether
-        // a candidate is delivered. Contrast remains a reported frame metric.
-        if (b.hi === 0xaaaa && b.lo === 0xaaaad391) { b.frame = [...PREFIX]; this.prefixes++ }
-        continue
+      const energy0 = this.shortSums[0][0] ** 2 + this.shortSums[0][1] ** 2
+      const energy1 = this.shortSums[1][0] ** 2 + this.shortSums[1][1] ** 2
+      const half0 = (this.previousShortEnergies[0] + energy0) / 2
+      const half1 = (this.previousShortEnergies[1] + energy1) / 2
+      this.previousShortEnergies[0] = energy0; this.previousShortEnergies[1] = energy1
+      if (this.index >= this.spb && this.index % this.hop === 0) {
+        const banks = this.banks[(this.index % this.spb) / this.hop]
+        if (this.power / this.spb < 1e-10) { for (const b of banks) this.clearBank(b) }
+        else {
+          const energies = this.sums.map(([re, im]) => re * re + im * im)
+          for (let t = 0; t < 2; t++) this.tonePeaks[t] = Math.max(this.tonePeaks[t], 2 * energies[t] / (this.spb * this.spb))
+          for (const b of banks) if (this.symbol(b, energies[0], energies[1], frames)) continue sample
+        }
       }
-      b.score += confidence; b.scored++; b.byte = (b.byte << 1) | bit
-      if (++b.bits !== 8) continue
-      b.frame.push(b.byte); b.bits = 0; b.byte = 0
-      if (b.frame.length === 22) {
-        const length = b.frame[20] * 256 + b.frame[21]
-        if (b.frame[6] !== 1 || length > 240) { this.rejected++; this.clearBank(b); continue }
-        b.total = 24 + length
+      if (this.index <= SHORT_WINDOW) continue
+      // Interpolate energies, not audio: both integer and half-sample windows
+      // retain quadrature phase independence. Each bank advances once per bit.
+      let delivered = false
+      for (let half = 0; half < 2 && !delivered; half++) {
+        const banks = this.shortBanks[(this.index * 2 - 1 + half) % (this.spb * 2)]
+        for (const b of banks) {
+          if (this.shortPower / SHORT_WINDOW < 1e-10) this.clearBank(b)
+          else if (this.symbol(b, half ? energy0 : half0, half ? energy1 : half1, frames)) { delivered = true; break }
+        }
       }
-      if (!b.total || b.frame.length !== b.total) continue
-      const packet = decodeFrame(Uint8Array.from(b.frame))
-      if (packet) {
-        frames.push({ packet, quality: b.score / b.scored })
-        this.accepted++
-        // Other phases of the same physical frame must not deliver duplicates.
-        for (const bank of this.banks) this.clearBank(bank)
-      } else { this.rejected++; this.clearBank(b) }
     }
     return frames
   }
