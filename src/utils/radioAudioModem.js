@@ -50,7 +50,8 @@ export class AudioResampler {
   }
 }
 
-// Full-symbol integration preserves sensitivity in noise. A short-window path
+// Full-symbol integration with tone balancing preserves sensitivity in noise.
+// A short-window path
 // also searches half-sample phases and tone balances for acoustic links where
 // echoes smear transitions and the two tones arrive with unequal amplitudes.
 // Both paths require the exact 48-bit prefix, bounded header and valid CRC.
@@ -66,11 +67,11 @@ export class FskAudioReceiver {
     this.index = 0; this.window = new Float32Array(this.spb); this.power = 0
     this.sums = [[0, 0], [0, 0]]
     this.tonePeaks = [0, 0]
-    this.banks = Array.from({ length: 8 }, () => makeBank())
+    this.banks = Array.from({ length: 8 }, () => TONE_BALANCES.map(makeBank))
     this.shortWindow = new Float32Array(SHORT_WINDOW); this.shortPower = 0
     this.shortSums = [[0, 0], [0, 0]]; this.previousShortEnergies = [0, 0]
     this.shortBanks = Array.from({ length: this.spb * 2 }, () => TONE_BALANCES.map(makeBank))
-    this.allBanks = [...this.banks, ...this.shortBanks.flat()]
+    this.allBanks = [...this.banks.flat(), ...this.shortBanks.flat()]
   }
   get receiving() { return this.allBanks.some(b => b.frame) }
   // Peak symbol-window RMS in each report interval, after the capture filters.
@@ -109,7 +110,7 @@ export class FskAudioReceiver {
   }
   push(samples) {
     const frames = []
-    for (const x of samples) {
+    sample: for (const x of samples) {
       const slot = this.index % this.spb; const old = this.window[slot]
       this.window[slot] = x; this.power = Math.max(0, this.power + x * x - old * old)
       const shortSlot = this.index % SHORT_WINDOW; const shortOld = this.shortWindow[shortSlot]
@@ -127,12 +128,12 @@ export class FskAudioReceiver {
       const half1 = (this.previousShortEnergies[1] + energy1) / 2
       this.previousShortEnergies[0] = energy0; this.previousShortEnergies[1] = energy1
       if (this.index >= this.spb && this.index % this.hop === 0) {
-        const b = this.banks[(this.index % this.spb) / this.hop]
-        if (this.power / this.spb < 1e-10) this.clearBank(b)
+        const banks = this.banks[(this.index % this.spb) / this.hop]
+        if (this.power / this.spb < 1e-10) { for (const b of banks) this.clearBank(b) }
         else {
           const energies = this.sums.map(([re, im]) => re * re + im * im)
           for (let t = 0; t < 2; t++) this.tonePeaks[t] = Math.max(this.tonePeaks[t], 2 * energies[t] / (this.spb * this.spb))
-          if (this.symbol(b, energies[0], energies[1], frames)) continue
+          for (const b of banks) if (this.symbol(b, energies[0], energies[1], frames)) continue sample
         }
       }
       if (this.index <= SHORT_WINDOW) continue
