@@ -105,14 +105,16 @@ de las dos direcciones diferenciales en CFOV y UFOV; una dirección ausente no s
 oculta mediante un máximo parcial. Se corrige la asociación de claves DU a sus
 límites (DUvertUfov → DUufov, DUvertCfov → DUcfov).
 
-«Aplicar límites del informe de referencia» es una acción explícita: configura los
-límites del ejemplo de agosto 2026, sin copiar resultados, actividades, protocolos
-ni confirmaciones de adquisición. No cambia el píxel de análisis NEMA. Este se
+El perfil mensual de Sala 1 se precarga para la cámara 1660 en adquisiciones de
+2026, usando las tolerancias del Excel facilitado (ver actualización 2.1 al final).
+«Restablecer tolerancias del Excel · Sala 1» permite recuperar esos valores, sin
+copiar resultados, actividades, protocolos ni confirmaciones de adquisición.
+No cambia el píxel de análisis NEMA. Este se
 revisa por DICOM (Auto o binning hacia 78 × 78); los números geométricos no se
 presentan como equivalentes al procesamiento propietario de Siemens.
 
-**Unidades de sensibilidad:** el 202 del ejemplo carece de unidad impresa, pero
-coincide con la especificación Siemens Symbia LEHR a 10 cm, **202 cpm/µCi**,
+**Unidades de sensibilidad:** el Excel identifica explícitamente **202 cpm/µCi**.
+Coincide con la especificación Siemens Symbia LEHR a 10 cm y es
 equivalente a **90,99099099 cps/MBq**. La equivalencia exacta es
 1 cps/MBq = 2,22 cpm/µCi. Se añade comparación por mínimo absoluto, además de
 desviación respecto a referencia. Resultado y límite usan la misma unidad elegida.
@@ -142,7 +144,8 @@ En «Explorar los tres planos» se pueden cambiar posiciones, ventana y geometr�
 capturarlos para el informe. Se etiquetan XY/XZ/YZ nativos, sin inventar planos
 anatómicos. El mismo worker de la aplicación 3D calcula la curva y la incorpora
 al JSON y a un anexo con tabla y gráfica. Cambiar geometría/parámetros elimina el
-resultado anterior y exige recalcular; el índice no altera el veredicto visual.
+resultado anterior y exige recalcular; el índice no sustituye la medida del
+protocolo ni altera el veredicto visual.
 
 La cabecera, sala, número de serie, responsable y observaciones son editables. Se
 puede aportar un logotipo y una imagen de QC diario PNG/JPEG, exclusivamente en
@@ -158,3 +161,37 @@ dos COR, ambos ejes de resolución y una reconstrucción 128 × 128 × 49. La pr
 en navegador cubre importación, selección COR, worker 3D, invalidación, JSON y
 maquetación PDF. La verificación informática no establece una nueva referencia
 clínica ni permite calcular sensibilidad sin la actividad medida.
+
+### Tolerancias del Excel, gamma-qc-2.1
+
+Fuente: `QC.Sala-01.2026.xlsx`, hoja `Resumen mensuales`. Solo se transcriben los
+límites; el archivo, las imágenes incrustadas y sus resultados no se publican.
+
+| Prueba | Límite | Celdas |
+| --- | --- | --- |
+| UDCC / UDCT | ≤ 2,5 / 2,7 % | E7:F7, I7:J7 |
+| UICC / UICT | ≤ 2,9 / 3,7 % | C7:D7, G7:H7 |
+| FWHM / FWTM, media X/Y | ≤ 7,5 / 13,6 mm | C27:F27 |
+| Sensibilidad, ambos cabezales | ≥ 202 cpm/µCi | C47:D47 |
+| δCOR,1 / δCOR,12 / δAXIAL,1 / δAXIAL,12 | ≤ 1,1988 mm | C66:F66, fórmula 2,3976 × 0,5 |
+| Uniformidad tomográfica del protocolo | ≤ 10 % | C102 |
+
+Las hojas mensuales confirman la correspondencia DU/IU; `Resumen anual` intercambia
+sus rótulos y no se usa para ese mapeo. Los resúmenes conservan 1,1988 mm para COR,
+mientras que las hojas mensuales contienen 1,2 mm. La web muestra cuatro decimales
+y compara con el valor exacto del resumen, sin redondear resultados antes de evaluar.
+No se trasladan las fórmulas de cálculo ni formatos condicionales del Excel.
+
+La detección exige StationName SYMBIA1660 o serial 1660, sin identificadores
+contradictorios, y adquisición en 2026. Modelo genérico, otro equipo o año no
+seleccionan este perfil. Las herramientas planares independientes conservan su
+configuración manual. Las tolerancias son editables y se exporta su procedencia
+por prueba. Un resultado pendiente no borra un límite conocido ni inventa una medida.
+
+**Tomografía:** el Excel ofrece un 10 % pero no define su fórmula. Sus notas citan
+VOI de 10 cc, sin precisar normalización ni equivalencia con U3D. La ficha SEFM
+GTM03 tampoco establece un límite universal para este índice esférico. Se añaden
+campos para registrar la uniformidad del protocolo y su definición. La conformidad
+requiere medida válida, definición, tolerancia, procedencia, protocolo y revisión
+visual firmada; un resultado visual no conforme no queda oculto por un porcentaje
+favorable. U3D sigue siendo complementario y no rellena esos campos automáticamente.

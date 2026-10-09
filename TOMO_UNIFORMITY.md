@@ -110,6 +110,13 @@ cambiar geometría o parámetros la invalida. Los tres planos seleccionados pued
 capturarse para el resumen y la curva se imprime en un anexo. El resultado
 cuantitativo no modifica la valoración tomográfica visual.
 
+El informe mensual admite además la tolerancia local del Excel de Sala 1 (10 %),
+con una medida y definición registradas por el usuario. El Excel no especifica la
+normalización del porcentaje; ese límite no se asigna automáticamente a U3D ni a
+cada diámetro del barrido. La evaluación mensual combina dicha comparación local
+con la revisión visual, conservando ambas y sin presentar una conformidad normativa
+de la curva experimental.
+
 ## Verificación
 
 `npm run test:tomo` construye volúmenes y DICOM sintéticos. Incluye un oráculo

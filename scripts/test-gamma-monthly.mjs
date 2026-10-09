@@ -5,7 +5,8 @@ import { sensitivityInUnit } from '../src/utils/gammaSensitivity.js'
 import { analyzeGammaEntry, initialGammaOptions } from '../src/utils/gammaBatch.js'
 import { parseGammaDicom, classifyGamma } from '../src/utils/gammaDicom.js'
 import { applyMonthlyReference, buildMonthlyReport, sensitivityReportMetric } from '../src/utils/gammaMonthlyReport.js'
-import { validateMonthlyBatch } from '../src/utils/gammaReport.js'
+import { validateMonthlyBatch, evaluateGammaMetrics } from '../src/utils/gammaReport.js'
+import { matchesMonthlyReference, MONTHLY_LIMITS, configuredGammaMetrics } from '../src/utils/gammaQcLimits.js'
 import { loadTomoDicomSeries } from '../src/utils/tomoDicom.js'
 import { proposeCylinder, analyzeTomoUniformity } from '../src/utils/tomoUniformity.js'
 
@@ -50,6 +51,69 @@ test('Reference profile supplies limits only and clears conflicting head overrid
   assert.equal(applied.options.frameOptions[0].minimumSensitivity, '202')
   assert.equal(applied.options.frameOptions[0].backgroundCounts, 123)
   assert.equal(options.frameOptions[0].minimumSensitivity, 999)
+})
+test('Excel defaults match only the identified 2026 Sala 1 camera', () => {
+  const match = patch => matchesMonthlyReference({ metadata: { acquiredAt: '2026-01-05', station: 'SYMBIA1660', ...patch } })
+  assert.equal(match({}), true)
+  assert.equal(match({ station: '', serial: '1660' }), true)
+  assert.equal(match({ serial: '2402' }), false)
+  assert.equal(match({ station: 'SYMBIA2402', serial: '1660' }), false)
+  assert.equal(match({ station: 'SYMBIA16601' }), false)
+  assert.equal(match({ station: '', model: 'Symbia Intevo Bold' }), false)
+  assert.equal(match({ acquiredAt: '2027-01-05' }), false)
+  assert.equal(matchesMonthlyReference(null), false)
+})
+test('Workbook limits retain correct IU/DU mapping and exact COR half-pixel boundary', () => {
+  assert.deepEqual(MONTHLY_LIMITS.uniformity, { DUcfov: 2.5, DUufov: 2.7, IUcfov: 2.9, IUufov: 3.7 })
+  const applied = type => applyMonthlyReference({ type, options: initialGammaOptions(base) })
+  assert.equal(applied('cor').options.corLimit, '1.1988')
+  assert.equal(applied('cor').options.axialLimit, '1.1988')
+  const input = { ...applied('cor').options, protocol: 'synthetic', verified: true }
+  const evaluate = value => evaluateGammaMetrics(configuredGammaMetrics('cor', input).map(m => ({ ...m, value })), input)
+  assert.equal(evaluate(1.1988).status, 'Conforme')
+  assert.equal(evaluate(1.199).status, 'No conforme')
+  assert.equal(applied('resolution').options.fwhmLimit, '7.5')
+  assert.equal(applied('resolution').options.fwtmLimit, '13.6')
+  assert.equal(applied('tomography').options.tomoLimitPercent, '10')
+  assert.equal(applied('tomography').options.tomoUniformityPercent, '')
+  assert.equal(applied('tomography').options.tomoUniformityDefinition, '')
+  assert.match(applied('tomography').options.limitSource, /Resumen mensuales!C102/)
+})
+test('Tomography local comparison requires a defined measure, tolerance and visual review', () => {
+  const image = { ...base, frames: [[]], imageType: ['ORIGINAL', 'PRIMARY', 'RECON TOMO'] }
+  const e = applyMonthlyReference({ image, id: 't', type: 'tomography', options: initialGammaOptions(image) })
+  const reviewed = { ...e.options, protocol: 'synthetic', verified: true, tomoVerdict: 'Conforme', tomoObservations: 'Reviewed',
+    tomoUniformityDefinition: 'Synthetic percentage defined by local protocol', tomoUniformityPercent: '10' }
+  const get = patch => analyzeGammaEntry({ ...e, options: { ...reviewed, ...patch }, tomoQuantitative: { results: [{ uniformityPercent: 1 }] } })[0]
+  assert.equal(get({}).status, 'Conforme')
+  assert.equal(get({ tomoUniformityPercent: '10.0001' }).status, 'No conforme')
+  assert.equal(get({ tomoUniformityPercent: '0' }).status, 'Conforme')
+  assert.equal(get({ tomoUniformityPercent: '-1' }).status, 'No evaluable')
+  assert.equal(get({ tomoUniformityPercent: '' }).status, 'No evaluable')
+  assert.equal(get({ tomoUniformityDefinition: '' }).status, 'No evaluable')
+  assert.equal(get({ tomoLimitPercent: '' }).status, 'Sin tolerancia')
+  assert.equal(get({ verified: false }).status, 'Pendiente de revisión')
+  assert.equal(get({ tomoVerdict: '' }).status, 'Pendiente de revisión')
+  assert.equal(get({ tomoVerdict: 'No conforme', tomoUniformityPercent: '0' }).status, 'No conforme')
+  assert.equal(get({ tomoUniformityPercent: '' }).metrics[0].limit, 10)
+  assert.equal(get({ tomoUniformityPercent: '' }).metrics[0].value, null, 'The U3D result must not silently fill the local measurement')
+  assert.equal(JSON.parse(JSON.stringify(get({}))).details.definition, reviewed.tomoUniformityDefinition)
+})
+test('Pending report measurements retain configured tolerances without fabricating a result', () => {
+  const image = { ...base, frameInfo: [{ detectorNumber: 1 }, { detectorNumber: 2 }] }
+  const entries = ['uniformity', 'resolution', 'sensitivity', 'cor', 'tomography'].map(type => applyMonthlyReference({
+    image, type, options: initialGammaOptions(image), name: `pending-${type}`, analysisError: 'Pending measurement' }))
+  const r = buildMonthlyReport(entries, [1, 2])
+  assert.equal(r.verdict, 'Informe incompleto')
+  assert.deepEqual(r.uniformity[0].cells.map(m => m.limit), [2.5, 2.7, 2.9, 3.7])
+  assert.deepEqual(r.resolution[1].widths.map(m => m.limit), [7.5, 13.6])
+  assert.equal(r.corMetrics[0].limit, 1.1988)
+  assert.equal(r.sensitivity[0].configuredMetrics[0].limit, 202)
+  assert.equal(r.tomographyMetrics[0].limit, 10)
+  assert.ok(r.uniformity[0].cells.every(m => m.value == null))
+  assert.ok(r.resolution[0].widths.every(m => m.value == null))
+  const different = { ...entries[1], options: { ...entries[1].options, fwhmLimit: '8' } }
+  assert.equal(buildMonthlyReport([...entries, different], [1]).resolution[0].widths[0].limit, null)
 })
 test('Monthly resolution distinguishes mean X/Y from per-axis comparison and preserves raw results', () => {
   const x = resolution('X', 7.4), y = resolution('Y', 7.6), entries = [entry([x]), entry([y])]
