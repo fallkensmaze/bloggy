@@ -16,6 +16,8 @@ import dcmjs from 'dcmjs'
 import { parseDICOM } from '../src/utils/dicomParser.js'
 import {
   calculateNemaGeometric,
+  calculateSiemensLike,
+  calculateNEMAComparison,
   describeResolution,
   detectLimitProfile
 } from '../src/utils/nemaAlgorithms.js'
@@ -781,6 +783,50 @@ oldDeclaration.countRateCps = '10000'
 const newDeclaration = createAcquisitionDeclaration()
 check('una nueva adquisicion no hereda confirmaciones ni tasa de cuentas',
   newDeclaration.energyWindowConfirmed === '' && !newDeclaration.distanceConfirmed && newDeclaration.countRateCps === '')
+
+section('Siemens-like experimental: geometria y vecindad independientes')
+const siOptions = { targetSize: 0, pixelSpacingMm: [1, 1], ufovSizeMm: [16, 16] }
+const siFlood = uniformField(20, 20, 100)
+const siFlat = calculateSiemensLike(siFlood, 20, 20, siOptions)
+// Physical bounds 1.5..17.5 select rows/cols 2..17; exterior-neighbour
+// exclusion leaves 3..16 (14²). CFOV physical 3.5..15.5 leaves 4..15 (12²).
+check('exterior geometrico excluye una sola capa: 196 pixeles UFOV', siFlat.metadata.nUfovPixelsValid === 196)
+check('CFOV conserva geometria original: 144 pixeles', siFlat.metadata.nCfovPixelsValid === 144)
+check('normalizacion en borde mantiene campo constante', siFlat.IUufov === 0 && siFlat.IUcfov === 0)
+check('variante tiene version propia y no dictamen', siFlat.metadata.experimental && siFlat.metadata.conformityApplicable === false)
+siFlood[10 * 20 + 10] = 200
+const siHot = calculateSiemensLike(siFlood, 20, 20, siOptions)
+// Central kernel weight is 4/16: peak=125, baseline=100; IU=100*25/225.
+check('defecto positivo se conserva: IU y DU 11.111111 %',
+  near(siHot.IUufov, 100 / 9, EXACT) && near(siHot.DUhorizUfov, 100 / 9, EXACT)
+  && near(siHot.DUvertUfov, 100 / 9, EXACT))
+siFlood[10 * 20 + 10] = 0
+const siZero = calculateSiemensLike(siFlood, 20, 20, siOptions)
+check('media incluye el cero del CFOV antes de excluirlo', near(siZero.metadata.cfovMeanRaw, 14300 / 144, EXACT))
+check('cero elimina cruz de cinco, sin erosion iterativa ni diagonal',
+  siZero.metadata.nUfovPixelsValid === 191 && siZero.ufovMask[10 * 20 + 11] === 1
+  && siZero.ufovMask[10 * 20 + 12] === 0 && siZero.ufovMask[11 * 20 + 11] === 0)
+siFlood[10 * 20 + 10] = 100
+siFlood[2 * 20 + 10] = 50
+const siEdge = calculateSiemensLike(siFlood, 20, 20, siOptions)
+check('umbral de borde elimina vecino directo una vez',
+  siEdge.ufovMask[3 * 20 + 10] === 1 && siEdge.ufovMask[4 * 20 + 10] === 0
+  && siEdge.metadata.nRemovedByThreshold === 1)
+const partialRaw = uniformField(40, 40, 100)
+for (let r = 0; r <= 8; r++) partialRaw[r * 40 + 8] = 0
+const partialOptions = { ...siOptions, targetSize: 10, ufovSizeMm: [32, 32] }
+const siPartial = calculateSiemensLike(partialRaw, 40, 40, partialOptions)
+const geoPartial = calculateNemaGeometric(partialRaw, 40, 40, partialOptions)
+check('bloque parcialmente lleno conserva suma 1500 en experimental',
+  siPartial.data[2 * 10 + 2] === 1500 && siPartial.ufovMask[2 * 10 + 2] === 0)
+check('via principal conserva proteccion del fondo exterior original', geoPartial.ufovMask[2 * 10 + 2] === 1)
+const threeMethods = calculateNEMAComparison(partialRaw, 40, 40, { ...partialOptions, cropActive: false })
+check('comparacion devuelve las tres vias', threeMethods.geometric.available && threeMethods.siemens.available && threeMethods.pylinac.available)
+assert.deepEqual(threeMethods.geometric, geoPartial)
+const emptyThree = calculateNEMAComparison(new Float64Array(400), 20, 20, { ...siOptions, cropActive: false })
+check('imagen vacia informa error independiente en cada via',
+  !emptyThree.geometric.available && !emptyThree.siemens.available && !emptyThree.pylinac.available)
+assert.throws(() => calculateSiemensLike([-1], 1, 1), /no negativas/)
 
 // ---- Result -----------------------------------------------------------------
 console.log('')

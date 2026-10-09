@@ -79,3 +79,40 @@ clínicos. Entre los casos con resultado independiente conocido:
 La compilación de la interfaz se comprueba con `npm run build:web`, que incluye la auditoría de
 artefactos públicos. El build completo añade la compilación Rust/WASM de la aplicación de
 antenas y requiere `wasm-pack`.
+
+
+## Comparación Siemens-like experimental
+
+Versión `siemens-like-experimental/2026.10`. Tercera vía independiente en la página,
+con tabla IU y DU (máxima y por dirección), máscaras, copia de resultados y trazabilidad.
+No es software Siemens, un protocolo oficial del fabricante ni un dictamen de conformidad.
+La evaluación de adquisición y límites sigue usando exclusivamente NEMA geométrico.
+
+Comparte suma de bloques enteros, recorte centrado, centro físico original, UFOV con
+inclusión por al menos 50 % de área y CFOV del 75 % con la vía geométrica. El selector
+controla ambas; Pylinac-like conserva su binning por potencias de dos cuando hay espaciado.
+Se muestran matrices y píxeles efectivos para evitar comparar resoluciones implícitas.
+
+Sobre las cuentas sumadas, calcula la media del CFOV geométrico **incluidos sus ceros**.
+Marca las filas/columnas exteriores del UFOV por debajo del 75 % de esa media. Añade
+los píxeles de suma cero y todo el exterior geométrico como semillas. Excluye semillas
+y cuatro vecinos directos **una sola vez**; no itera ni incluye diagonales. No propaga
+el fondo original a un bloque cuya suma es positiva. Suaviza una vez con el núcleo
+normalizado sobre su máscara válida y obtiene IU/DU con las funciones comunes.
+
+Esta diferencia de borde puede conservar una fila que la protección del fondo elimina,
+a la vez que elimina una columna adyacente al exterior geométrico. No siempre aumenta
+ni siempre disminuye IU. Los ceros interiores excluidos se documentan; esta vía no emite
+conformidad aunque las medidas del campo restante sean pequeñas.
+
+Comprobación exploratoria local: tres adquisiciones extrínsecas de Co-57, seis detectores,
+1024×1024, píxel 0,5994 mm, UFOV 386×532 mm, bloques 13×13 y matriz final 78×78.
+Los 24 valores de IU y DU máxima se compararon con valores Siemens mostrados a dos
+decimales: 23 diferencias absolutas inferiores a 0,01 puntos porcentuales y una de
+0,020203 puntos. No constituye validación independiente ni identifica el algoritmo
+propietario. No se fuerza el redondeo del fabricante. Los archivos fuente se mantienen
+fuera del repositorio; las regresiones públicas usan únicamente datos sintéticos.
+
+La coincidencia numérica no demuestra conformidad con una edición de NEMA: un flood
+extrínseco con colimador sigue siendo extrínseco, y unas cuentas inferiores al protocolo
+no se corrigen por elegir otro algoritmo. Conservar revisión de adquisición y de máscaras.

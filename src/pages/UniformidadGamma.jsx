@@ -186,7 +186,7 @@ function UniformidadGamma() {
   const handleCalculate = () => {
     if (!parsedDICOM) return
 
-    setStatus('Calculando uniformidad por las dos vias...')
+    setStatus('Calculando uniformidad por las tres vías...')
     setLoading(true)
 
     setTimeout(() => {
@@ -491,7 +491,7 @@ function UniformidadGamma() {
         </details>
 
         <button className="unif-run" onClick={handleCalculate} disabled={!parsedDICOM || loading}>
-          <i className="bi bi-play-fill"></i>&nbsp; Calcular todos los frames por las dos vias
+          <i className="bi bi-play-fill"></i>&nbsp; Calcular todos los frames por las tres vías
         </button>
 
         <div className="unif-status">
@@ -507,6 +507,7 @@ function UniformidadGamma() {
       {results?.length > 0 && (
         <div className="unif-copy-row">
           <CopyButton label="Copiar NEMA geometrico" build={() => buildTable(results, 'geometric')} />
+          <CopyButton label="Copiar Siemens experimental" build={() => buildTable(results, 'siemens')} />
           <CopyButton label="Copiar Pylinac" build={() => buildTable(results, 'pylinac')} />
           <CopyButton
             label="Copiar trazabilidad"
@@ -524,31 +525,37 @@ function CalculationMethodDetails() {
   const comparisonRows = [
     {
       aspect: 'Remuestreo',
-      nema: 'Suma bloques de píxeles para obtener un píxel de análisis próximo a 6,4 mm.',
+      siemens: 'Misma suma entera y recorte centrado que NEMA geométrico, con la resolución seleccionada.',
+      nema: 'Suma bloques enteros según el selector; en automático busca un píxel próximo a 6,4 mm.',
       pylinac: 'Agrupa por potencias de 2 hasta alcanzar un píxel de al menos 4,48 mm.'
     },
     {
       aspect: 'Origen del UFOV',
+      siemens: 'Mismo UFOV físico; si falta la geometría, se informa la estimación por imagen.',
       nema: 'Usa el UFOV geométrico declarado en el DICOM o en el perfil del equipo; si falta, lo estima y lo advierte.',
       pylinac: 'Detecta el campo directamente en la imagen mediante umbral y conserva la mayor región conexa.'
     },
     {
       aspect: 'Definición de UFOV y CFOV',
+      siemens: 'Misma inclusión por al menos 50 % de área y CFOV físico central del 75 %.',
       nema: 'El CFOV es el 75 % central de cada dimensión lineal del UFOV geométrico original.',
       pylinac: 'Erosiona isotrópicamente el campo detectado: 95 % para UFOV y 71,25 % para CFOV.'
     },
     {
       aspect: 'Tratamiento del borde',
+      siemens: 'Usa los ceros después de sumar y el exterior geométrico como semillas; elimina una sola vez sus cuatro vecinos. No propaga el fondo original dentro de bloques parcialmente llenos.',
       nema: 'Aplica una sola vez la regla del 75 % en las filas y columnas exteriores, y excluye ceros y vecinos directos.',
       pylinac: 'Aplica un umbral global, elimina objetos y huecos pequeños y erosiona la máscara; no usa la regla de borde NEMA.'
     },
     {
       aspect: 'Suavizado',
+      siemens: 'Una pasada con el mismo núcleo, normalizado sobre su propia máscara válida.',
       nema: 'Se realiza después de definir los píxeles válidos y se normaliza con los vecinos que permanecen en la máscara.',
       pylinac: 'Se realiza antes de extraer el campo y el borde exterior de la matriz se fuerza a cero.'
     },
     {
       aspect: 'Uso del resultado',
+      siemens: 'Comparación experimental con el equipo. No certifica Siemens ni conformidad NEMA.',
       nema: 'Es la vía principal para informar IU/DU y compararlas con el perfil de límites del equipo.',
       pylinac: 'Es una comprobación independiente. Sus valores no establecen conformidad NEMA.'
     }
@@ -561,7 +568,7 @@ function CalculationMethodDetails() {
         <div>
           <h2 id="unif-method-title">Método de cálculo</h2>
           <p>
-            Cada frame se analiza por dos vías. Ambas calculan la uniformidad integral y
+            Cada frame se analiza por tres vías. Todas calculan la uniformidad integral y
             diferencial, pero no seleccionan los mismos píxeles; por eso sus resultados pueden
             ser distintos incluso partiendo de la misma imagen.
           </p>
@@ -576,8 +583,8 @@ function CalculationMethodDetails() {
           </div>
           <ol>
             <li>
-              <strong>Preparación.</strong> Se suman bloques de píxeles para aproximar el píxel de
-              análisis a 6,4 mm. La web comprueba el tamaño efectivo y las cuentas disponibles.
+              <strong>Preparación.</strong> Se suman bloques enteros según la resolución seleccionada;
+              la opción automática aproxima el píxel de análisis a 6,4 mm. La web comprueba el tamaño efectivo y las cuentas disponibles.
             </li>
             <li>
               <strong>Campos de visión.</strong> El UFOV se centra usando sus dimensiones físicas.
@@ -644,6 +651,43 @@ function CalculationMethodDetails() {
         </article>
       </div>
 
+      <article className="unif-methodology-card" style={{ marginBottom: '20px' }}>
+        <div className="unif-methodology-card-head">
+          <span>Tercera vía de contraste</span><h3>Comparación Siemens-like experimental</h3>
+        </div>
+        <ol>
+          <li><strong>Suma y geometría.</strong> Comparte con NEMA geométrico los bloques enteros,
+            el recorte centrado, las dimensiones físicas continuas del UFOV y el CFOV del 75 %.
+            Las opciones de matriz son objetivos: la tabla muestra la matriz y el píxel realmente obtenidos.</li>
+          <li><strong>Umbral.</strong> Sobre la matriz sumada, antes de suavizar, calcula la media
+            de todos los píxeles del CFOV geométrico. Marca los píxeles de las filas y columnas
+            exteriores del UFOV que estén por debajo del 75 % de esa media.</li>
+          <li><strong>Ceros y exterior.</strong> Añade como semillas los píxeles cuya suma sea cero y
+            todos los situados fuera del UFOV geométrico. Excluye esas semillas y sus cuatro vecinos
+            directos en una sola pasada. Un bloque con suma positiva no se elimina por contener
+            algún cero original. Esta es la diferencia clave con la protección del fondo exterior
+            que incorpora la vía principal; puede cambiar una fila o columna del borde y sus extremos.</li>
+          <li><strong>Suavizado y medidas.</strong> Aplica una sola vez el núcleo de nueve puntos,
+            normalizado por los pesos válidos. El CFOV usa esa misma imagen suavizada. Calcula IU
+            y DU de cinco píxeles sin ajustes para forzar coincidencias ni redondeos intermedios.</li>
+        </ol>
+        <p className="unif-methodology-note">Es una hipótesis de procesamiento contrastada con tres
+          adquisiciones extrínsecas de Co-57 (seis detectores): 23 de 24 valores de IU/DU máxima
+          difirieron menos de 0,01 puntos porcentuales de los valores Siemens mostrados; la mayor
+          diferencia fue aproximadamente 0,0202 puntos. Es una comprobación limitada, no validación
+          independiente ni documentación oficial de Siemens. Otras matrices, equipos o versiones
+          pueden producir diferencias.</p>
+        <p><strong>¿Cuál se parece más a NEMA?</strong> La cercanía numérica al equipo no demuestra
+          cumplimiento de NEMA. Las dos vías geométricas comparten fórmulas y geometría, pero
+          difieren en los ceros y el borde. La vía principal documenta su extensión de protección
+          del fondo; la experimental reproduce mejor estos ejemplos Siemens. Pylinac-like usa
+          otra segmentación. Hay que revisar edición, adquisición y procesamiento para valorar conformidad.</p>
+        <p><strong>Cuentas y adquisición extrínseca.</strong> Con menos cuentas puede aumentar la
+          variación estadística de los extremos. Una medida con Co-57 y colimador sirve para comparar
+          estos cálculos sobre la misma imagen, pero no pasa a ser un ensayo intrínseco NEMA por
+          coincidir los porcentajes. El estado de adquisición se mantiene separado del resultado numérico.</p>
+      </article>
+
       <div className="unif-formulas" aria-label="Formulas de uniformidad">
         <div>
           <span>Uniformidad integral</span>
@@ -657,13 +701,14 @@ function CalculationMethodDetails() {
         </div>
       </div>
 
-      <h3 className="unif-comparison-title">Diferencia entre los dos métodos</h3>
+      <h3 className="unif-comparison-title">Diferencias entre los tres métodos</h3>
       <div className="unif-table-wrap">
         <table className="unif-table unif-comparison-table">
           <thead>
             <tr>
               <th>Aspecto</th>
               <th>NEMA geométrico</th>
+              <th>Siemens-like experimental</th>
               <th>Aproximación Pylinac</th>
             </tr>
           </thead>
@@ -672,6 +717,7 @@ function CalculationMethodDetails() {
               <tr key={row.aspect}>
                 <td><strong>{row.aspect}</strong></td>
                 <td>{row.nema}</td>
+                <td>{row.siemens}</td>
                 <td>{row.pylinac}</td>
               </tr>
             ))}
@@ -685,7 +731,7 @@ function CalculationMethodDetails() {
           <strong>Cómo interpretar una discrepancia:</strong> normalmente se debe a que cada vía
           incluye un borde y una matriz de análisis diferentes, no a que la fórmula de IU o DU
           cambie. Para el veredicto se usa el método NEMA geométrico junto con la validez de la
-          adquisición y los límites específicos del equipo; la segunda vía sirve para detectar
+          adquisición y los límites específicos del equipo; las vías de contraste sirven para detectar
           dependencias del resultado con la segmentación del campo.
         </p>
       </div>
@@ -734,6 +780,19 @@ function buildTraceability(results, parsedDICOM) {
     lines.push(`  Tratamiento de ceros: ${metadata.zeroPolicy}`)
     lines.push(`  Pixeles validos: UFOV ${metadata.nUfovPixelsValid}, CFOV ${metadata.nCfovPixelsValid}`)
     lines.push(`  Ventana: ${info.energyWindowName || 'sin dato'}`)
+    const experimental = comparison.siemens
+    if (experimental?.available) {
+      const m = experimental.metadata
+      lines.push(`  Comparacion experimental: ${m.methodVersion}; sin dictamen de conformidad`)
+      lines.push(`  Siemens-like IU UFOV/CFOV: ${experimental.IUufov} / ${experimental.IUcfov} %`)
+      lines.push(`  Siemens-like DU maxima UFOV/CFOV: ${maxDU(experimental, 'ufov')} / ${maxDU(experimental, 'cfov')} %`)
+      lines.push(`  Siemens-like matriz: ${m.resampledShape.join(' x ')}; pixel: ${m.pixelSpacingResampledMm?.join(' x ') || 'sin dato'} mm`)
+      lines.push(`  Siemens-like UFOV: ${m.ufovSource}; validos UFOV/CFOV: ${m.nUfovPixelsValid}/${m.nCfovPixelsValid}`)
+      lines.push(`  Siemens-like exclusiones umbral/cero/vecindad: ${m.nRemovedByThreshold}/${m.nRemovedZeroOrContaminated}/${m.nRemovedByNeighbour}`)
+      lines.push(`  Siemens-like: ${m.zeroPolicy}`)
+    } else {
+      lines.push(`  Siemens-like no disponible: ${experimental?.error || 'sin resultado'}`)
+    }
 
     for (const row of evaluation.comparison) {
       lines.push(`  ${row.label}: ${row.value.toFixed(2)} % (limite ${row.limit} %)`)
@@ -770,6 +829,8 @@ function FrameResultsBlock({ frameIndex, info, comparison, evaluation, parsedDIC
   const canvasOrigRef = useRef()
   const canvasGeoUFOVRef = useRef()
   const canvasGeoCFOVRef = useRef()
+  const canvasSiUFOVRef = useRef()
+  const canvasSiCFOVRef = useRef()
   const canvasPyUFOVRef = useRef()
   const canvasPyCFOVRef = useRef()
 
@@ -786,6 +847,11 @@ function FrameResultsBlock({ frameIndex, info, comparison, evaluation, parsedDIC
       if (canvasGeoCFOVRef.current) {
         renderCanvas(canvasGeoCFOVRef.current, comparison.geometric.cfovData, comparison.geometric.cfovMask, comparison.geometric.rows, comparison.geometric.cols)
       }
+    }
+    if (comparison.siemens?.available) {
+      const result = comparison.siemens
+      renderCanvas(canvasSiUFOVRef.current, result.ufovData, result.ufovMask, result.rows, result.cols)
+      renderCanvas(canvasSiCFOVRef.current, result.cfovData, result.cfovMask, result.rows, result.cols)
     }
     if (comparison.pylinac.available) {
       if (canvasPyUFOVRef.current) {
@@ -827,6 +893,12 @@ function FrameResultsBlock({ frameIndex, info, comparison, evaluation, parsedDIC
             <ImagePanel label="NEMA CFOV" canvasRef={canvasGeoCFOVRef} subtitle="75 % central del UFOV geometrico" />
           </>
         )}
+        {comparison.siemens?.available && (
+          <>
+            <ImagePanel label="Siemens experimental UFOV" canvasRef={canvasSiUFOVRef} subtitle="Exterior geométrico y ceros tras la suma" />
+            <ImagePanel label="Siemens experimental CFOV" canvasRef={canvasSiCFOVRef} subtitle="75 % central del UFOV geométrico" />
+          </>
+        )}
         {comparison.pylinac.available && (
           <>
             <ImagePanel label="Pylinac UFOV" canvasRef={canvasPyUFOVRef} subtitle="Erosion del campo util" />
@@ -835,6 +907,7 @@ function FrameResultsBlock({ frameIndex, info, comparison, evaluation, parsedDIC
         )}
       </div>
 
+      <MethodsComparison comparison={comparison} />
       <NemaResults result={comparison.geometric} evaluation={evaluation} />
       <AcquisitionChecks evaluation={evaluation} />
       <TraceabilityPanel
@@ -845,6 +918,61 @@ function FrameResultsBlock({ frameIndex, info, comparison, evaluation, parsedDIC
       />
       <PylinacResults result={comparison.pylinac} />
     </div>
+  )
+}
+
+function MethodsComparison({ comparison }) {
+  const methods = [
+    ['geometric', 'NEMA geométrico'],
+    ['siemens', 'Siemens-like experimental'],
+    ['pylinac', 'Pylinac-like']
+  ]
+  const metrics = [
+    ['IU UFOV', (r) => r.IUufov], ['IU CFOV', (r) => r.IUcfov],
+    ['DU máxima UFOV', (r) => maxDU(r, 'ufov')], ['DU máxima CFOV', (r) => maxDU(r, 'cfov')],
+    ['DU horizontal UFOV', (r) => r.DUhorizUfov], ['DU vertical UFOV', (r) => r.DUvertUfov],
+    ['DU horizontal CFOV', (r) => r.DUhorizCfov], ['DU vertical CFOV', (r) => r.DUvertCfov]
+  ]
+  const siemens = comparison.siemens
+  const meta = siemens?.metadata
+  return (
+    <section className="calc-card" style={{ marginBottom: '20px' }}>
+      <h3>Comparación de los tres métodos</h3>
+      <p>Valores en %. La DU máxima es la mayor entre horizontal y vertical. Siemens-like es
+        una reproducción experimental contrastada con ejemplos del equipo, no el protocolo
+        oficial del fabricante. Solo la vía NEMA geométrica interviene en el estado de evaluación.</p>
+      <div className="unif-table-wrap">
+        <table className="unif-table">
+          <thead><tr><th>Medida</th>{methods.map(([key, label]) => <th key={key}>{label}</th>)}</tr></thead>
+          <tbody>
+            {metrics.map(([label, read]) => <tr key={label}>
+              <td>{label}</td>{methods.map(([key]) => <td key={key} className="unif-num">
+                {comparison[key]?.available ? formatPercent(read(comparison[key])) : 'No disponible'}
+              </td>)}
+            </tr>)}
+            <tr><td>Matriz real</td>{methods.map(([key]) => <td key={key}>
+              {comparison[key]?.available ? formatShape(comparison[key].rows, comparison[key].cols) : '—'}
+            </td>)}</tr>
+            <tr><td>Píxel efectivo (mm)</td>{methods.map(([key]) => <td key={key}>
+              {comparison[key]?.metadata?.pixelSpacingResampledMm?.map((v) => v.toFixed(3)).join(' × ') || 'Sin dato'}
+            </td>)}</tr>
+          </tbody>
+        </table>
+      </div>
+      {siemens?.available ? <details style={{ marginTop: '16px' }}>
+        <summary>Trazabilidad Siemens-like experimental</summary>
+        <p>{meta.methodVersion}. UFOV: {meta.ufovSource}. Bloques: {meta.blockSize.join(' × ')}.
+          Píxeles válidos UFOV / CFOV: {meta.nUfovPixelsValid} / {meta.nCfovPixelsValid}.</p>
+        <p>Excluidos dentro del UFOV: umbral {meta.nRemovedByThreshold}, cero {meta.nRemovedZeroOrContaminated},
+          vecindad {meta.nRemovedByNeighbour}. {meta.zeroPolicy}</p>
+        <p>Píxeles interiores de suma cero: {meta.nInteriorZeroInUfov}.
+          Bloques que tocan fondo exterior original: {meta.nExteriorPaddingInUfov} (informativo).</p>
+        <p>Media CFOV antes del suavizado: {meta.cfovMeanRaw.toFixed(2)} cuentas.
+          Umbral de borde: {meta.edgeThreshold.toFixed(2)} cuentas.</p>
+        {meta.fallbackReason && <p>Geometría estimada por imagen: {meta.fallbackReason}</p>}
+        <p>Esta vía no emite conformidad. Revisar máscaras, resolución y condiciones de adquisición.</p>
+      </details> : <p>Siemens-like: {siemens?.error || 'No disponible'}</p>}
+    </section>
   )
 }
 
