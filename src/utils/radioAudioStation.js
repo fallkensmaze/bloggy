@@ -4,7 +4,7 @@ import { AudioTopology, TOPOLOGY, readTopology, topologyPayload, ageTopology } f
 
 export const STATION_STATUS = { queued: 'En cola', transmitting: 'Emitiendo', waitingAck: 'Esperando acuse', confirmed: 'Recepción confirmada',
   broadcast: 'Emitido sin acuse', unconfirmed: 'Sin confirmación', expired: 'Caducado', interrupted: 'Interrumpido' }
-const key = p => `${p.origin}:${p.epoch}:${p.seq}`
+const key = p => `${p.sourceIdentity || p.origin}:${p.epoch}:${p.seq}`
 const ackKey = b => `${b[0]}:${b[1] * 256 + b[2]}:${b[3] * 256 + b[4]}`
 const rank = p => p.type === T.ACK ? -1 : p.type === T.DATA ? p.priority : p.type === T.HELLO ? 4 : 5
 
@@ -43,6 +43,9 @@ export class AudioStationProtocol {
     this.topologyDue = Math.max(this.nextTopologyAt, now + this.config.releaseMs / 1000 + 2 + this.random() * 6)
     this.topologyExpires = now + 120
   }
+  makeTopologyPayload(now) { return topologyPayload(this.config.name, this.peers, now) }
+  canTransmitTopology() { return true }
+  ackWaitSeconds() { return Math.max(10, (this.config.leadMs + this.config.tailMs + 2 * this.config.releaseMs) / 1000 + 46 * 8 / this.config.baud + 3) }
   observePeer(p, quality, now) {
     const peer = this.peers.get(p.sender) || { id: p.sender, name: `Estación ${p.sender}` }
     const newlyHeard = peer.lastHeard == null || now - peer.lastHeard >= TOPOLOGY.lifetime
@@ -109,7 +112,7 @@ export class AudioStationProtocol {
     if (p.type === T.DATA) {
       const id = key(p)
       if (!this.seen.has(id)) {
-        this.inbox.push({ id, origin: p.origin, text: bytesText(Uint8Array.from(p.payload)), time: now, quality, broadcast: p.dst === 255 })
+        this.inbox.push({ id, origin: p.origin, originIdentity: p.sourceIdentity, text: bytesText(Uint8Array.from(p.payload)), time: now, quality, broadcast: p.dst === 255 })
         if (this.inbox.length > 100) this.inbox.shift()
         this.seen.set(id, now); if (this.seen.size > 256) this.seen.delete(this.seen.keys().next().value)
         this.log(`Texto recibido de la estación ${p.origin}.`, now)
@@ -160,13 +163,13 @@ export class AudioStationProtocol {
     }
     // Do not fill the return window while a locally sent DATA awaits its ACK.
     const waitingAck = this.messages.some(m => m.status === 'waitingAck')
-    const entry = this.queue.filter(e => e.ready <= now && (e.packet.type !== T.TOPOLOGY || (!waitingAck && now >= this.nextControlAt && now >= this.controlReadyAt)))
+    const entry = this.queue.filter(e => e.ready <= now && (e.packet.type !== T.TOPOLOGY || (this.canTransmitTopology() && !waitingAck && now >= this.nextControlAt && now >= this.controlReadyAt)))
       .sort((a, b) => rank(a.packet) - rank(b.packet) || a.ready - b.ready)[0]
     if (!entry) return null
     this.queue.splice(this.queue.indexOf(entry), 1)
     if (entry.packet.type === T.TOPOLOGY) {
       if (!entry.ownTopology && !this.topology.isLatest(entry.packet)) return null
-      const payload = entry.ownTopology ? topologyPayload(this.config.name, this.peers, now) : entry.packet.payload
+      const payload = entry.ownTopology ? this.makeTopologyPayload(now) : entry.packet.payload
       const duration = (this.config.leadMs + this.config.tailMs) / 1000 + (40 + payload.length) * 8 / this.config.baud
       const aged = ageTopology(payload, (entry.ownTopology ? 0 : now - entry.topologyAt) + duration)
       if (!aged) return null
@@ -183,10 +186,10 @@ export class AudioStationProtocol {
     if (this.transmitting !== entry) return
     this.transmitting = null
     const m = this.messages.find(v => v.id === key(entry.packet))
-    if (!m || entry.packet.type !== T.DATA || m.status === 'confirmed') return
+    if (!m || entry.packet.type !== T.DATA || ['confirmed', 'interrupted'].includes(m.status)) return
     if (!success) { m.status = 'interrupted'; return }
     m.status = m.dst === 255 ? 'broadcast' : 'waitingAck'
-    m.due = now + Math.max(10, (this.config.leadMs + this.config.tailMs + 2 * this.config.releaseMs) / 1000 + 46 * 8 / this.config.baud + 3)
+    m.due = now + this.ackWaitSeconds()
   }
   stop(now) {
     this.time = now; this.stopped = true; this.topologyDue = Infinity; this.queue = []; this.transmitting = null

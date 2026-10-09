@@ -1,4 +1,4 @@
-# Estación de audio · VOX v0.2
+# Estación de audio · VOX v0.3
 
 La ruta pública `/estacion-radio` es una aplicación de micrófono y altavoz,
 independiente del simulador `/red-emergencia`. El navegador recibe muestras reales,
@@ -14,16 +14,19 @@ añadido caché offline, PWA ni ejecución fiable en segundo plano.
 
 1. Primero usa la autoprueba local, que no emite sonido, y dos dispositivos
    comunicándose por altavoz y micrófono, sin radio.
-2. En cada estación asigna un ID distinto de 1 a 254; por ejemplo, 1 y 2.
-   Usa el mismo grupo (17 por defecto) y tasa (300 bit/s inicialmente).
+2. Usa esta versión en todos los dispositivos, con «Asignar ID automáticamente»
+   activado. El nombre es opcional. Usa el mismo grupo (17 por defecto) y tasa
+   (300 bit/s inicialmente).
 3. Para la prueba con radio, configura los dos walkies en el mismo canal y
    subtono, activa VOX y coloca cada navegador junto a su equipo. Empieza con
-   volumen moderado y permite el micrófono.
-4. Anuncia manualmente la presencia en una estación y comprueba que la otra
-   recibe su nombre. Con «Compartir y propagar el mapa» activado (por defecto),
+   volumen moderado, pulsa «Unirme a la red» y permite el micrófono.
+4. Espera a que termine la incorporación: escucha primero y emite dos anuncios
+   separados por esperas aleatorias. El número se asigna sin editarlo a mano.
+   Con «Compartir y propagar el mapa» activado (por defecto),
    se intercambian informes de vecinos y aparecen también estaciones indirectas.
    No hay balizas periódicas. El intercambio puede durar más de un minuto.
-5. Envía un texto breve al ID remoto. Solo «Recepción confirmada» significa que
+5. Selecciona una estación oída y envía un texto breve. La selección identifica
+   al equipo aunque cambie de número. Solo «Recepción confirmada» significa que
    ha vuelto un acuse coincidente. «Sin confirmación» puede indicar pérdida del
    mensaje o pérdida del acuse.
 6. Ajusta el tono previo para evitar que VOX recorte el comienzo. Ajusta el
@@ -89,7 +92,59 @@ La espera de canal libre exige 600 ms sin audio
 por encima del umbral ni una trama en recepción. Esto no evita colisiones con
 estaciones ocultas y la voz o el ruido pueden aplazar emisiones.
 
-## Protocolo directo
+## Identidad y asignación automática
+
+`AutoAudioStationProtocol` añade una identidad estable a la estación directa.
+Cada navegador genera un UUID aleatorio con `crypto.randomUUID()` y guarda
+únicamente su propia identidad. El ID corto de 1 a 254 es una dirección temporal:
+se intenta reutilizar la última elegida, o se sortea una si no hay ninguna.
+El UUID no identifica hardware ni autentica a una persona. Borrar los datos del
+sitio cambia la identidad; sin almacenamiento disponible dura solo esa carga
+de página y la interfaz lo indica.
+
+- La incorporación escucha 3–6 s antes de elegir un ID no ocupado según las
+  observaciones recientes. Hace dos HELLO con esperas de al menos 4–7 s tras
+  cada emisión (más si el retorno VOX configurado lo requiere). El envío de
+  mensajes y mapas espera a que termine. Las transmisiones respetan el canal
+  ocupado. Cada intento de incorporación caduca a los 120 s.
+- Si dos identidades reclaman el mismo número, conserva el número la menor
+  identidad en orden hexadecimal; la otra sortea uno libre y se incorpora de
+  nuevo. Una estación manual o antigua conserva su dirección. Cada sesión
+  permite como máximo ocho reasignaciones por conflicto. Si los 254 números
+  conocidos están ocupados, se informa de ello y se detienen los intentos.
+- Los informes RA2 transmiten estas asociaciones, también las de vecinos
+  indirectos. Así pueden resolverse coincidencias al encontrarse dos redes,
+  siempre que lleguen observaciones entre ellas. No existe un coordinador.
+  La incorporación no garantiza exclusividad global: el mapa puede ser parcial
+  por pérdidas, colisiones, caducidad o estaciones aisladas. Sin compartir el
+  mapa solo se conocen los anuncios y emisiones que se oyen directamente.
+- Al cambiar el ID se incrementa la época y se interrumpen los mensajes
+  pendientes. Un acuse tardío no los reactiva. La selección del destinatario,
+  la deduplicación, el mapa y los acuses se vinculan al UUID, no solo al número.
+  Un ACK con otro UUID o del modo antiguo no confirma un mensaje automático.
+- Se solicita un Web Lock exclusivo para evitar dos sesiones del mismo
+  navegador cuando esa API está disponible. Oír directamente la misma identidad
+  en otra época de sesión también bloquea la emisión. No se rota una identidad
+  al cambiar de número; las épocas propias anteriores se reconocen como ecos.
+
+Los formatos automáticos conservan la cabecera común del módem y TTL 1 para
+HELLO/DATA/ACK. HELLO lleva `FF 49 01`, UUID de origen (16 bytes) y nombre
+UTF-8 de 1–32 bytes. DATA/ACK llevan `FF 49 01`, UUID de origen y UUID de
+destino (16 bytes cada uno), seguidos del texto de 1–96 bytes o del acuse de
+seis bytes del modo manual. El UUID de destino todo a cero representa difusión
+a 255, sin acuse. DATA tiene hasta 131 bytes de payload y ACK, 41. La espera
+de acuse contempla esta longitud adicional. La dirección corta puede actualizarse
+antes de un envío o reintento; el UUID de destino permanece fijado al elegido.
+
+El modo manual sigue disponible desactivando «Asignar ID automáticamente»;
+requiere nombre e IDs coordinados. Conserva los formatos v0.1/v0.2 descritos
+abajo. Los equipos antiguos detectados ocupan su ID y aparecen marcados, pero
+**no intercambian mensajes ni mapas con el modo automático**. Todos los
+participantes deben usar el mismo modo. El prefijo automático no es UTF-8
+válido, de forma que un cliente antiguo no lo presenta como texto. No se aceptan
+acuses antiguos como alternativa a los vinculados a identidad.
+
+## Protocolo directo manual y reglas compartidas
 
 `AudioStationProtocol` conoce únicamente su configuración y las tramas recibidas
 por el módem, nunca posiciones, enlaces del simulador o estado de otras apps.
@@ -127,7 +182,7 @@ antiguas. El intermediario indicado es una cadena observada; no implica que los
 enlaces funcionen en el sentido contrario. Tampoco se atribuye una calidad de
 audio local al origen remoto de un informe reenviado.
 
-- Un anuncio manual programa un informe propio. Recibir un HELLO o descubrir
+- Un anuncio programa un informe propio. Recibir un HELLO o descubrir
   un nuevo emisor mediante TOPOLOGY programa como máximo un informe pendiente.
   Los cambios se agrupan, con espera aleatoria de 2–8 s más el retorno VOX y
   un mínimo de 30 s entre comienzos de informes propios. Al terminar las
@@ -139,7 +194,7 @@ audio local al origen remoto de un informe reenviado.
   identidad una sola vez, conserva la versión más reciente por origen y
   recuerda hasta ocho épocas retiradas para rechazar informes anteriores
   a un reinicio. Los ecos del propio informe no causan conflicto de ID.
-- El payload empieza por `52 41 01` (hex, formato RA v1), seguido de edad del
+- En modo manual, el payload empieza por `52 41 01` (hex, formato RA v1), seguido de edad del
   informe en segundos (uint16 big-endian), longitud del nombre (uint8), nombre
   UTF-8 de 1–32 bytes y hasta 32 vecinos. Cada vecino ocupa tres bytes: ID y
   edad de la última escucha (uint16 big-endian). Máximo 134 bytes de payload.
@@ -162,11 +217,27 @@ audio local al origen remoto de un informe reenviado.
   la escucha y visualización permanecen disponibles. Detener u ocultar la
   estación cancela también la respuesta diferida. Los informes no tienen ACK
   ni reintentos garantizados: pérdidas, colisiones, colas llenas o truncamiento
-  a 32 vecinos pueden dejar un mapa parcial. Puede actualizarse anunciando de
+  al límite de vecinos pueden dejar un mapa parcial. Puede actualizarse anunciando de
   nuevo. Una red aislada, sin informes que lleguen, no puede descubrirse.
 
-Las versiones v0.1 siguen recibiendo HELLO y DATA/ACK directos, pero ignoran los
-informes del mapa y no los propagan. No se añaden nodos indirectos al selector
+En modo automático, `radioAudioIdentityTopology.js` usa RA2 (`52 41 02`).
+Conserva edad y longitud del nombre en los primeros seis bytes; añade UUID
+del autor y del emisor audible (16 bytes cada uno), nombre y hasta siete
+vecinos de 23 bytes: ID corto, UUID, época, secuencia y edad de última escucha.
+Los tres últimos campos son uint16 big-endian. El UUID cero de un vecino
+representa una estación manual. El máximo es 231 bytes de los 240 admitidos
+por el módem; se incluyen las siete escuchas más recientes. La edad conserva
+las reglas anteriores. Cada reenvío cambia únicamente el UUID del emisor,
+el sender corto, el TTL y la edad, conservando la identidad del autor.
+Las asociaciones de identidad y los vecinos directos están limitados a 512
+entradas cada uno. Una observación indirecta no reemplaza una asociación ya
+recibida del propio equipo; se rechazan versiones anteriores y épocas retiradas.
+Dos equipos con el mismo ID corto se dibujan como nodos distintos y se señala
+la coincidencia mientras no se resuelva. El control del mapa se difiere hasta
+terminar la incorporación para que no retrase los anuncios de asignación.
+
+En modo manual, las versiones v0.1 siguen recibiendo HELLO y DATA/ACK directos,
+pero ignoran los informes del mapa y no los propagan. No se añaden nodos indirectos al selector
 de estaciones oídas ni se confirma la entrega a partir de un informe. El mapa
 se incluye en el JSON de sesión y permanece solo en memoria; no es GPS ni
 una estimación de distancias. El dibujo muestra hasta 25 nodos y la lista todos.
@@ -186,7 +257,9 @@ La recuperación es exclusiva del arranque: una suspensión posterior conserva
 la parada inmediata y requiere una nueva activación manual. Cancelar durante
 el permiso o la activación no debe iniciar una captura tardía.
 
-Solo las preferencias se guardan en localStorage. Una sesión nueva o recarga
+Se guardan las preferencias, la identidad propia (`radio_audio_identity_v1`)
+y el último ID automático en localStorage; no las identidades de otros equipos.
+Una sesión nueva o recarga
 borra los mensajes. El JSON `RADIO_AUDIO_STATION_V1` incluye la configuración
 de la sesión y estados locales, sin grabación de muestras. Descargar un WAV
 genera una señal de prueba y no cuenta como envío confirmado. La autoprueba
@@ -213,7 +286,8 @@ borra la grabación anterior. La parada cancela y descarta una toma incompleta.
 Una toma que no termina en 15 s de tiempo real se cancela con un aviso.
 
 Para una grabación diagnóstica de un único anuncio, desactiva la opción de
-compartir mapa en ambos equipos y espera a que acaben las emisiones en curso.
+compartir mapa en ambos equipos y espera a que terminen la incorporación
+automática y las emisiones en curso.
 Durante esos diez segundos se aplaza la transmisión local, incluidos los
 acuses, por lo que esta prueba debe usar un anuncio HELLO remoto y no medir
 tiempos de confirmación. No se inicia mientras haya emisiones pendientes.
@@ -258,6 +332,16 @@ salto de secuencia, TTL, formato/grupo, ID duplicado, prioridad de acuses,
 parada, modo de escucha y una red densa de doce nodos. La red de prueba de
 descubrimiento serializa emisiones y no modela pérdidas ni colisiones; prueba
 la lógica distribuida, no cobertura, convergencia garantizada ni rendimiento RF.
+
+`scripts/test-radio-audio-identity.mjs` cubre persistencia y almacenamiento
+bloqueado, seis equipos que empiezan con ID 1, conflictos ocultos a través de
+un tercero, nodos con el mismo número, entrega y ACK vinculados al UUID,
+cambio de destinatario corto sin cambiar de identidad, cancelación al
+reasignarse, estaciones manuales, formatos inválidos, grupo lleno, canal
+ocupado, identidad repetida y límites de RA2. Los payloads máximos DATA, ACK
+y RA2 se decodifican con el receptor de flujo a 300 y 600 bit/s. La simulación
+de incorporación serializa las emisiones sin pérdidas; tampoco demuestra
+convergencia en una red física.
 
 La prueba del navegador usa entrada PCM de micrófono de prueba a 48 kHz,
 AudioWorklet y filtros reales de Web Audio: recibe HELLO y DATA UTF-8 y genera
