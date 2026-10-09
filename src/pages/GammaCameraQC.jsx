@@ -2,11 +2,18 @@ import CorProjectionReview from '../components/CorProjectionReview'
 import { parseCorDICOM } from '../utils/corDicom'
 import CorAcquisitionForm from '../components/CorAcquisitionForm'
 import { useMemo, useState } from 'react'
+import GammaMonthlyReport from '../components/GammaMonthlyReport'
+import TomoUniformity from './TomoUniformity'
+import { loadTomoDicomSeries } from '../utils/tomoDicom'
+import { proposeCylinder } from '../utils/tomoUniformity'
+import { captureTomoReportViews } from '../utils/gammaTomoReport'
+import { applyMonthlyReference, buildMonthlyReport } from '../utils/gammaMonthlyReport'
+import { SENSITIVITY_UNITS } from '../utils/gammaSensitivity'
 import GammaImage, { GammaProfiles, tomographyMosaic } from '../components/GammaImage'
 import { classifyGamma, parseGammaDicom } from '../utils/gammaDicom'
 import { analyzeGammaEntry, initialGammaOptions } from '../utils/gammaBatch'
 import { locateLine } from '../utils/gammaResolution'
-import { GAMMA_TESTS, monthlyCompleteness, monthlyVerdict, tomographyPrompt, validateMonthlyBatch } from '../utils/gammaReport'
+import { GAMMA_TESTS, tomographyPrompt, validateMonthlyBatch } from '../utils/gammaReport'
 import { LIMIT_PROFILES } from '../utils/nemaAlgorithms'
 import { useAuthUser } from '../utils/adminAuth'
 import { loginWithGoogle } from '../utils/authGoogle'
@@ -65,10 +72,17 @@ function FileSettings({ entry, frameIndex, update }) {
         <Choice label="Corrección de fondo" value={frameOptions.backgroundMode} onChange={v => setFrame('backgroundMode', v)}><option value="">Pendiente de declarar</option><option value="measured">Fondo medido en toda la imagen</option><option value="negligible">Declaro fondo despreciable</option></Choice>
         {frameOptions.backgroundMode === 'measured' && <><Field label="Cuentas de fondo (imagen completa)" value={frameOptions.backgroundCounts} min="0" onChange={v => setFrame('backgroundCounts', v)} />
           <Field label="Duración del fondo (s)" value={frameOptions.backgroundSeconds} min="0" onChange={v => setFrame('backgroundSeconds', v)} /></>}
-        <Field label="Sensibilidad de referencia (cps/MBq)" value={frameOptions.referenceSensitivity} min="0" onChange={v => setFrame('referenceSensitivity', v)} />
-        <Field label="Desviación máxima respecto a referencia (%)" value={frameOptions.sensitivityTolerance} min="0" onChange={v => setFrame('sensitivityTolerance', v)} />
+        <Choice label="Comparación de sensibilidad" value={frameOptions.sensitivityComparison} onChange={v => setFrame('sensitivityComparison', v)}><option value="reference">Desviación respecto a referencia</option><option value="minimum">Límite mínimo absoluto</option></Choice>
+        <Choice label="Unidad del resultado y del límite" value={frameOptions.sensitivityUnit} onChange={v => {
+          set('frameOptions', { ...o.frameOptions, [frameIndex]: { ...o.frameOptions[frameIndex], sensitivityUnit: v, minimumSensitivity: '', referenceSensitivity: '' } })
+        }}>{SENSITIVITY_UNITS.map(unit => <option key={unit} value={unit}>{unit}</option>)}</Choice>
+        {frameOptions.sensitivityComparison === 'minimum'
+          ? <Field label={`Sensibilidad mínima (${frameOptions.sensitivityUnit})`} value={frameOptions.minimumSensitivity} min="0" onChange={v => setFrame('minimumSensitivity', v)} />
+          : <><Field label={`Sensibilidad de referencia (${frameOptions.sensitivityUnit})`} value={frameOptions.referenceSensitivity} min="0" onChange={v => setFrame('referenceSensitivity', v)} />
+            <Field label="Desviación máxima respecto a referencia (%)" value={frameOptions.sensitivityTolerance} min="0" onChange={v => setFrame('sensitivityTolerance', v)} /></>}
       </div>
       <p className="gamma-hint">Se suman todas las cuentas de cada frame, se resta su fondo y se divide por el tiempo y la actividad media durante la adquisición. La incertidumbre mostrada solo incluye estadística de conteo. La actividad DICOM no se usa como medida del activímetro.</p>
+      <p className="gamma-hint">1 cps/MBq = 2,22 cpm/µCi. Al cambiar de unidad se borran los límites de ese cabezal para que puedas introducirlos en la unidad elegida.</p>
     </>}
     {type === 'uniformity' && <>
       <div className="gamma-fields">
@@ -105,7 +119,7 @@ function RecordResult({ record, detailed = true }) {
     {record.details?.warnings?.map(w => <p className="gamma-warning" key={w}>{w}</p>)}
     {detailed && record.details?.profiles && <p className="gamma-hint">FWHM entre franjas: {fmt(record.details.fwhmMinMm)}–{fmt(record.details.fwhmMaxMm)} mm · inclinación {fmt(record.details.tiltDegrees, 2)}° · píxel {fmt(record.details.spacing, 4)} mm</p>}
     {record.details?.checks && <details><summary>Comprobaciones de adquisición</summary><ul>{record.details.checks.map(c => <li key={c.id}>{c.label}: {c.status} · {String(c.value ?? '')} · {c.detail}</li>)}</ul></details>}
-    {record.type === 'cor' && <details><summary>Comprobaciones COR</summary><pre>{JSON.stringify(record.details.acquisition, null, 2)}</pre></details>}
+    {record.type === 'cor' && record.details && <details><summary>Comprobaciones COR</summary><pre>{JSON.stringify(record.details.acquisition, null, 2)}</pre></details>}
     <p className="gamma-hint">{record.method || 'Análisis pendiente'} · {record.file} · {record.acquiredAt} · {record.window || ''} · {record.collimator || ''}</p>
     {(record.protocol || record.limitSource) && <p className="gamma-hint">Protocolo: {record.protocol || 'sin registrar'} · Límites: {record.limitSource || 'sin registrar'}</p>}
     {record.notes && <p>{record.notes}</p>}
@@ -161,18 +175,31 @@ export function GammaWorkspace({ mode }) {
   const [entries, setEntries] = useState([]), [selectedId, setSelectedId] = useState(''), [frameIndex, setFrameIndex] = useState(0)
   const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [reportVisible, setReportVisible] = useState(false)
   const [expectedHeads, setExpectedHeads] = useState('2'), [responsible, setResponsible] = useState('')
+  const [resolutionCriterion, setResolutionCriterion] = useState('mean'), [includeAnnex, setIncludeAnnex] = useState(true)
+  const [details, setDetails] = useState({ hospital: 'Hospital Universitario Puerta de Hierro Majadahonda',
+    service: 'Servicio de Radiofísica y Protección Radiológica', camera: '', serial: '', room: '', conclusion: '' })
+  const [logo, setLogo] = useState(''), [dailyImage, setDailyImage] = useState('')
   const batch = useMemo(() => validateMonthlyBatch(entries), [entries])
   const active = entries.find(e => e.id === selectedId)
-  const records = entries.flatMap(e => e.records || [])
   const detectedHeads = Math.max(1, ...entries.flatMap(e => e.image?.frameInfo.map(f => f.detectorNumber || 1) || []))
-  const missing = monthlyCompleteness(records, Array.from({ length: Math.max(Number(expectedHeads), detectedHeads) }, (_, i) => i + 1))
+  const heads = Array.from({ length: Math.max(Number(expectedHeads), detectedHeads) }, (_, i) => i + 1)
+  const report = buildMonthlyReport(entries, heads, resolutionCriterion)
+  const records = monthly ? report.records : entries.flatMap(e => e.records || [])
   const pending = entries.some(e => !e.records?.length || e.type === 'unknown')
-  const verdict = monthlyVerdict(records, missing, pending)
+  const exclusionsNeedReason = entries.some(e => e.included === false && !e.exclusionReason?.trim())
+  const canPrepare = !busy && batch.valid && entries.some(e => e.included !== false) && !report.conflicts.length && !exclusionsNeedReason
+  const reportImages = entries.filter(e => e.included !== false && e.type === 'tomography').flatMap(e => e.reportImages || [])
   function changeEntries(next) { setEntries(next); setReportVisible(false) }
-  function updateEntry(id, patch) { changeEntries(entries.map(e => e.id === id ? { ...e, ...patch, records: null, analysisError: '' } : e)) }
+  function updateEntry(id, patch) {
+    changeEntries(previous => previous.map(e => e.id === id ? { ...e, ...patch, records: null, analysisError: '' } : e))
+  }
+  function patchReport(id, patch) { changeEntries(previous => previous.map(e => e.id === id ? { ...e, ...patch } : e)) }
+  function updateDetails(key, value) { setDetails(d => ({ ...d, [key]: value })); setReportVisible(false) }
   async function calculate(list) {
-    const validation = validateMonthlyBatch(list)
-    if (monthly && !validation.valid) { setMessage('Análisis bloqueado: corrige los archivos del lote.'); return list.map(e => ({ ...e, records: null })) }
+    if (monthly && !validateMonthlyBatch(list).valid) {
+      setMessage('Análisis bloqueado: corrige los archivos del lote.')
+      return list.map(e => ({ ...e, records: null }))
+    }
     const next = []
     for (const entry of list) {
       await new Promise(resolve => setTimeout(resolve, 0))
@@ -181,6 +208,22 @@ export function GammaWorkspace({ mode }) {
       catch (error) { next.push({ ...entry, records: null, analysisError: error.message }) }
     }
     return next
+  }
+  async function prepareTomography(buffer) {
+    try {
+      const tomoSeries = await loadTomoDicomSeries([{ arrayBuffer: async () => buffer }])
+      const cylinder = proposeCylinder(tomoSeries)
+      const cursor = [Math.round(cylinder.cx), Math.round(cylinder.cy), Math.floor((cylinder.firstSlice + cylinder.lastSlice) / 2)]
+      let maximum = 0; for (const frame of tomoSeries.volume) for (const v of frame) maximum = Math.max(maximum, v)
+      return { tomoSeries, tomoError: '', reportImages: captureTomoReportViews(tomoSeries, cursor, maximum || 1, cylinder) }
+    } catch (e) { return { tomoSeries: null, tomoError: e.message, reportImages: [] } }
+  }
+  async function setType(entry, type) {
+    setBusy(true)
+    try { updateEntry(entry.id, { type, options: initialGammaOptions(entry.image), tomoQuantitative: null,
+      ...(type === 'tomography' ? await prepareTomography(entry.buffer) : { tomoSeries: null, tomoError: '', reportImages: [] }) }) }
+    finally { setBusy(false) }
+    setFrameIndex(0)
   }
   async function loadFiles(files) {
     if (!files.length) return
@@ -193,8 +236,10 @@ export function GammaWorkspace({ mode }) {
           if (file.size > 128 * 1024 * 1024) throw new Error('El archivo supera 128 MB; exporta una serie más pequeña.')
           const buffer = await file.arrayBuffer(), image = parseGammaDicom(buffer)
           const type = monthly ? classifyGamma(image) : mode
-          next.push({ id, name: file.name, buffer, image, type, options: initialGammaOptions(image), records: null })
-        } catch (error) { next.push({ id, name: file.name, error: error.message, type: 'unknown' }) }
+          next.push({ id, name: file.name, buffer, image, type, included: true, exclusionReason: '',
+            options: initialGammaOptions(image), records: null,
+            ...(type === 'tomography' ? await prepareTomography(buffer) : {}) })
+        } catch (error) { next.push({ id, name: file.name, error: error.message, type: 'unknown', included: true }) }
         await new Promise(resolve => setTimeout(resolve, 0))
       }
       const valid = !monthly || validateMonthlyBatch(next).valid
@@ -203,42 +248,86 @@ export function GammaWorkspace({ mode }) {
       setMessage(valid ? 'Carga completada. Revisa las mediciones y completa los datos pendientes.' : 'Análisis bloqueado: los archivos no forman un lote de un mismo equipo y mes.')
     } finally { setBusy(false) }
   }
-  async function run() { setBusy(true); setMessage('Analizando las pruebas…'); try { changeEntries(await calculate(entries)); setMessage('Análisis actualizado. Revisa las advertencias y las pruebas pendientes.') } finally { setBusy(false) } }
+  async function run() {
+    setBusy(true); setMessage('Analizando las pruebas…')
+    try { changeEntries(await calculate(entries)); setMessage('Análisis actualizado. Revisa las advertencias y las pruebas pendientes.') }
+    finally { setBusy(false) }
+  }
+  async function useReference() {
+    setBusy(true)
+    try { changeEntries(await calculate(entries.map(e => e.image ? applyMonthlyReference(e) : e))); setMessage('Límites del informe de referencia aplicados. Confirma las condiciones de cada adquisición; no se han copiado resultados.') }
+    finally { setBusy(false) }
+  }
+  async function uploadIllustration(file, setter) {
+    if (!file) return
+    try {
+      if (!['image/png', 'image/jpeg'].includes(file.type) || file.size > 5 * 1024 * 1024) throw new Error('Selecciona una imagen PNG/JPEG de hasta 5 MB.')
+      const bitmap = await createImageBitmap(file)
+      const scale = Math.min(1, 1400 / Math.max(bitmap.width, bitmap.height))
+      const canvas = document.createElement('canvas'); canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale)
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height); bitmap.close()
+      setter(canvas.toDataURL('image/png')); setReportVisible(false)
+    } catch (e) { setMessage(e.message) }
+  }
   function exportResults() {
-    const payload = { schema: 'gamma-qc-report/1', createdAt: new Date().toISOString(), mode,
-      ...(monthly ? { month: batch.month, equipment: batch.equipment, verdict, missing, responsible } : {}), records }
+    const payload = { schema: 'gamma-qc-report/2', createdAt: new Date().toISOString(), mode,
+      ...(monthly ? { month: batch.month, equipment: batch.equipment, responsible, details, report, reportImages,
+        dailyImage: dailyImage || null, logo: logo || null, includeAnnex } : {}), records }
     download(monthly ? `informe-gammacamara-${batch.month}.json` : `gammacamara-${mode}.json`, new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }))
   }
   return <div className={`page-body gamma-qc ${reportVisible ? 'gamma-print-ready' : ''}`}>
     <div className="page-header gamma-no-print"><div className="page-icon"><i className={`bi ${monthly ? 'bi-calendar-check' : mode === 'resolution' ? 'bi-crosshair' : 'bi-speedometer2'}`}></i></div>
       <h1 className="page-title">{monthly ? 'Informe mensual de gammacámara' : GAMMA_TESTS[mode]}</h1><p className="page-subtitle">{monthly ? 'Área privada · un equipo, un mes y todas sus pruebas' : mode === 'resolution' ? 'Fuentes lineales · FWHM y FWTM por cabezal y eje' : 'Cuentas por segundo y MBq · fondo y decaimiento'}</p></div>
     <section className="calc-card gamma-no-print">
-      <label className={`gamma-upload${busy ? ' gamma-upload-busy' : ''}`}>
-        <i className="bi bi-files" aria-hidden="true"></i>
-        <strong>{monthly ? 'Añadir todos los DICOM del mes' : 'Añadir imágenes DICOM'}</strong>
-        <span>Selecciona varios archivos · procesamiento en este navegador</span>
-        <span className="gamma-upload-action"><i className="bi bi-folder2-open" aria-hidden="true"></i>{busy ? 'Procesando…' : 'Elegir archivos DICOM'}</span>
-        <input className="gamma-upload-input" type="file" multiple accept=".dcm,application/dicom" disabled={busy} onChange={e => { loadFiles([...e.target.files]); e.target.value = '' }} />
+      <label className={`gamma-upload${busy ? ' gamma-upload-busy' : ''}`}><i className="bi bi-files" aria-hidden="true"></i><strong>{monthly ? 'Añadir todos los DICOM del mes' : 'Añadir imágenes DICOM'}</strong>
+        <span>Selecciona varios archivos · procesamiento en este navegador</span><span className="gamma-upload-action"><i className="bi bi-folder2-open" aria-hidden="true"></i>{busy ? 'Procesando…' : 'Elegir archivos DICOM'}</span>
+        <input className="gamma-upload-input" aria-label="Cargar DICOM del control" type="file" multiple accept=".dcm,application/dicom" disabled={busy} onChange={e => { loadFiles([...e.target.files]); e.target.value = '' }} />
       </label>
       <p className="gamma-hint">Las imágenes y los resultados permanecen en esta pestaña. Descarga el informe antes de cerrarla; no se guardan en un servidor.</p>
       {monthly && entries.length > 0 && <div className={`gamma-validation ${batch.valid ? 'pass' : 'fail'}`}><strong>{batch.valid ? `Lote verificado · ${batch.month} · ${batch.equipment}` : 'Lote incompatible: no se iniciará el análisis'}</strong>{batch.errors.length > 0 && <ul>{batch.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}<p>Se usa la fecha de adquisición y los identificadores StationName/DeviceSerialNumber, no el nombre del archivo ni la fecha de exportación.</p></div>}
-      {entries.length > 0 && <div className="gamma-table-scroll"><table><thead><tr><th>Archivo / adquisición</th><th>Gammacámara</th><th>Prueba</th><th>Estado</th><th></th></tr></thead><tbody>{entries.map(e => <tr key={e.id} className={selectedId === e.id ? 'gamma-selected' : ''}>
-        <td><button className="gamma-file-button" disabled={!e.image || busy} onClick={() => { setSelectedId(e.id); setFrameIndex(0) }}>{e.name}</button><small>{e.image?.metadata.acquiredAt || 'Fecha desconocida'}</small></td><td>{e.image?.metadata.equipment || 'Sin identificar'}</td>
-        <td>{monthly && e.image ? <select className="dark-select" aria-label={`Tipo de prueba de ${e.name}`} disabled={busy} value={e.type} onChange={event => { updateEntry(e.id, { type: event.target.value, options: initialGammaOptions(e.image) }); setFrameIndex(0) }}>{Object.entries(GAMMA_TESTS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select> : GAMMA_TESTS[e.type]}</td>
-        <td>{e.error || e.analysisError || (e.records ? `${e.records.length} resultados` : 'Pendiente')}</td><td><button disabled={busy} aria-label={`Retirar ${e.name}`} onClick={() => { changeEntries(entries.filter(v => v.id !== e.id)); if (selectedId === e.id) { setSelectedId(''); setFrameIndex(0) } }}>Retirar</button></td>
+      {entries.length > 0 && <div className="gamma-table-scroll"><table><thead><tr>{monthly && <th>Informe</th>}<th>Archivo / adquisición</th><th>Prueba</th><th>Estado</th><th></th></tr></thead><tbody>{entries.map(e => <tr key={e.id} className={`${selectedId === e.id ? 'gamma-selected' : ''} ${e.included === false ? 'gamma-file-excluded' : ''}`}>
+        {monthly && <td><label><input type="checkbox" aria-label={`Incluir ${e.name}`} checked={e.included !== false} disabled={busy} onChange={v => patchReport(e.id, { included: v.target.checked })}/> Incluir</label>{e.included === false && <Field label="Motivo de exclusión" aria-label={`Motivo de exclusión de ${e.name}`} type="text" value={e.exclusionReason} onChange={v => patchReport(e.id, { exclusionReason: v })}/>}</td>}
+        <td><button className="gamma-file-button" disabled={!e.image || busy} onClick={() => { setSelectedId(e.id); setFrameIndex(0) }}>{e.name}</button><small>{e.image?.metadata.acquiredAt || 'Fecha desconocida'} · {e.image?.metadata.equipment || 'Sin identificar'}</small></td>
+        <td>{monthly && e.image ? <select className="dark-select" aria-label={`Tipo de prueba de ${e.name}`} disabled={busy} value={e.type} onChange={event => setType(e, event.target.value)}>{Object.entries(GAMMA_TESTS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select> : GAMMA_TESTS[e.type]}</td>
+        <td>{e.error || e.analysisError || (e.records ? [...new Set(e.records.map(r => r.status))].join(' · ') : 'Pendiente')}</td><td><button disabled={busy} aria-label={`Retirar ${e.name}`} onClick={() => { changeEntries(entries.filter(v => v.id !== e.id)); if (selectedId === e.id) { setSelectedId(''); setFrameIndex(0) } }}>Retirar</button></td>
       </tr>)}</tbody></table></div>}
-      <div className="gamma-actions"><button className="gamma-primary" disabled={busy || !entries.length || (monthly && !batch.valid)} onClick={run}>{busy ? 'Procesando…' : 'Analizar / actualizar todas las pruebas'}</button>{!monthly && <button disabled={!records.length || pending || busy} onClick={exportResults}>Descargar resultados JSON</button>}</div><p role="status" aria-live="polite">{message}</p>
+      <div className="gamma-actions"><button className="gamma-primary" disabled={busy || !entries.length || (monthly && !batch.valid)} onClick={run}>{busy ? 'Procesando…' : 'Analizar / actualizar todas las pruebas'}</button>
+        {monthly && <button disabled={busy || !batch.valid} onClick={useReference}>Aplicar límites del informe de referencia</button>}
+        {!monthly && <button disabled={!records.length || pending || busy} onClick={exportResults}>Descargar resultados JSON</button>}</div>
+      {monthly && <p className="gamma-hint">Referencia: uniformidad 2,5 / 2,7 / 2,9 / 3,7 %; FWHM 7,5 mm; FWTM 13,6 mm; sensibilidad ≥ 202 cpm/µCi; COR y axial 1,20 mm. Son límites del ejemplo, editables y sujetos al protocolo de cada prueba.</p>}
+      <p role="status" aria-live="polite">{message}</p>
     </section>
     {active?.image && <section className="calc-card gamma-no-print"><h2>{GAMMA_TESTS[active.type]} · {active.image.metadata.description}</h2>
       <fieldset disabled={busy} className="gamma-fieldset"><FilePreview key={active.id + active.type} entry={active} frameIndex={Math.min(frameIndex, active.image.frames.length - 1)} setFrameIndex={setFrameIndex} update={options => updateEntry(active.id, { options })} privateReport={monthly} /></fieldset>
-      {active.analysisError && <p className="gamma-warning">{active.analysisError}</p>}{active.records?.filter(r => r.frameIndex == null || r.frameIndex === frameIndex).map(r => <RecordResult key={r.id} record={r} />)}
+      {(active.analysisError || active.tomoError) && <p className="gamma-warning">{active.analysisError || active.tomoError}</p>}{active.records?.filter(r => r.frameIndex == null || r.frameIndex === frameIndex).map(r => <RecordResult key={r.id} record={r} />)}
+      {monthly && active.type === 'tomography' && active.tomoSeries && <details className="tomo-details"><summary>Explorar los tres planos y añadir el análisis de esferas 3D</summary>
+        <TomoUniformity key={active.id} embeddedSeries={active.tomoSeries} savedResult={active.tomoQuantitative}
+          onResult={result => updateEntry(active.id, { tomoQuantitative: result })} onCapture={images => patchReport(active.id, { reportImages: images })}/>
+      </details>}
     </section>}
-    {monthly && batch.valid && <section className="calc-card gamma-no-print"><h2>Informe del mes</h2><div className="gamma-fields"><Choice label="Número de cabezales que deben estar completos" value={expectedHeads} onChange={v => { setExpectedHeads(v); setReportVisible(false) }}><option value="1">1 cabezal</option><option value="2">2 cabezales</option><option value="3">3 cabezales</option></Choice><Field label="Responsable del informe" type="text" value={responsible} onChange={v => { setResponsible(v); setReportVisible(false) }} /></div>
-      <p><span className={`gamma-badge ${statusClass(verdict)}`}>{verdict}</span></p>{!!missing.length && <p className="gamma-warning">Faltan: {missing.join('; ')}.</p>}
-      <p className="gamma-hint">Se esperan uniformidad y sensibilidad en cada cabezal, resolución X e Y, COR y revisión tomográfica. Un informe incompleto conserva todas las pruebas pendientes.</p>
-      <div className="gamma-actions"><button disabled={!records.length || pending || busy} onClick={() => setReportVisible(true)}>Preparar informe</button><button disabled={!records.length || pending || busy} onClick={exportResults}>Descargar informe JSON</button>{reportVisible && <button onClick={() => window.print()}>Imprimir / guardar PDF</button>}</div></section>}
-    {monthly && reportVisible && batch.valid && <section className="calc-card gamma-monthly-report"><h1>Control mensual de gammacámara</h1><p><strong>{batch.equipment} · {batch.month}</strong></p><p>Responsable: {responsible || 'Pendiente de identificar'} · Generado: {new Date().toLocaleDateString('es-ES')}</p><h2>{verdict}</h2>{!!missing.length && <p>Pruebas pendientes: {missing.join('; ')}.</p>}{records.map(r => <RecordResult key={r.id} record={r} detailed={false} />)}<p className="gamma-hint">Informe gamma-qc-1.0. Las tolerancias proceden de los perfiles y referencias indicados en cada prueba. La revisión tomográfica es visual y debe ser confirmada por el especialista.</p></section>}
-    {!monthly && <details className="calc-card gamma-no-print"><summary>Método y alcance</summary><p>{mode === 'resolution' ? 'Medición adaptada a una fuente lineal: máximo muestreado, cruces lineales al 50 % y al 10 %, media de cinco perfiles de hasta ocho píxeles de ancho. Se usa PixelSpacing en lugar de una calibración por separación entre fuentes. No equivale a una aceptación NEMA completa ni al procedimiento completo IAEA con varias fuentes y posiciones.' : 'Sensibilidad = (cuentas/tiempo − tasa de fondo) / actividad media. Actividad inicial y residual se corrigen a un instante común y se integra el decaimiento durante la exposición. Se requieren la actividad medida, su fecha/hora y el semiperiodo; no se presuponen a partir del nombre del DICOM.'}</p><a href="https://www-pub.iaea.org/MTCD/Publications/PDF/Pub1394_web.pdf" target="_blank" rel="noreferrer">IAEA HHS 6, §§2.3.8–2.3.9</a></details>}
+    {monthly && batch.valid && <section className="calc-card gamma-no-print"><h2>Informe del mes</h2>
+      <div className="gamma-fields"><Choice label="Número de cabezales que deben estar completos" value={expectedHeads} onChange={v => { setExpectedHeads(v); setReportVisible(false) }}><option value="1">1 cabezal</option><option value="2">2 cabezales</option><option value="3">3 cabezales</option></Choice>
+        <Field label="Responsable del informe" type="text" value={responsible} onChange={v => { setResponsible(v); setReportVisible(false) }}/>
+        <Field label="Nombre de la gammacámara" type="text" value={details.camera} placeholder={batch.equipment} onChange={v => updateDetails('camera', v)}/>
+        <Field label="Número de serie para el informe" type="text" value={details.serial} onChange={v => updateDetails('serial', v)}/>
+        <Field label="Sala" type="text" value={details.room} onChange={v => updateDetails('room', v)}/>
+        <Choice label="Comparación de resolución en el resumen" value={resolutionCriterion} onChange={v => { setResolutionCriterion(v); setReportVisible(false) }}><option value="mean">Media X/Y · como el informe de referencia</option><option value="each">Cada eje por separado</option></Choice>
+      </div>
+      <details><summary>Cabecera, imágenes y observaciones</summary><div className="gamma-fields">
+        <Field label="Centro" type="text" value={details.hospital} onChange={v => updateDetails('hospital', v)}/><Field label="Servicio" type="text" value={details.service} onChange={v => updateDetails('service', v)}/>
+        <label className="gamma-field"><span>Logotipo (opcional, PNG/JPEG)</span><input aria-label="Logotipo del informe" type="file" accept="image/png,image/jpeg" onChange={e => { uploadIllustration(e.target.files[0], setLogo); e.target.value = '' }}/>{logo && <button onClick={() => { setLogo(''); setReportVisible(false) }}>Retirar logotipo</button>}</label>
+        <label className="gamma-field"><span>Imagen QC diario (opcional, PNG/JPEG)</span><input aria-label="Imagen QC diario" type="file" accept="image/png,image/jpeg" onChange={e => { uploadIllustration(e.target.files[0], setDailyImage); e.target.value = '' }}/>{dailyImage && <button onClick={() => { setDailyImage(''); setReportVisible(false) }}>Retirar imagen QC diario</button>}</label>
+      </div><label className="gamma-field"><span>Observaciones generales</span><textarea className="dark-input" rows="3" value={details.conclusion} onChange={e => updateDetails('conclusion', e.target.value)}/></label></details>
+      <Check label="Incluir anexo de trazabilidad y comprobaciones" value={includeAnnex} onChange={v => { setIncludeAnnex(v); setReportVisible(false) }}/>
+      <p><span className={`gamma-badge ${statusClass(report.verdict)}`}>{report.verdict}</span></p>
+      {!!report.missing.length && <p className="gamma-warning">Faltan: {report.missing.join('; ')}.</p>}
+      {report.conflicts.map((c, i) => <p key={i} className="gamma-warning">Hay {c.files.length} adquisiciones de {GAMMA_TESTS[c.type]} {c.detector ? `H${c.detector}` : ''} {c.axis || ''}. Elige cuál incluir en el informe; las otras se conservan como excluidas con su motivo.</p>)}
+      {exclusionsNeedReason && <p className="gamma-warning">Indica el motivo de cada adquisición excluida antes de preparar el informe.</p>}
+      <p className="gamma-hint">Resumen con las cinco pruebas y tablas por cabezal. Se puede emitir con datos pendientes, que quedan señalados. Los cortes iniciales son una selección central editable desde la exploración tomográfica.</p>
+      <div className="gamma-actions"><button disabled={!canPrepare} onClick={() => setReportVisible(true)}>Preparar informe</button><button disabled={!canPrepare} onClick={exportResults}>Descargar informe JSON</button>{reportVisible && <button onClick={() => window.print()}>Imprimir / guardar PDF</button>}</div>
+    </section>}
+    {monthly && reportVisible && batch.valid && <GammaMonthlyReport model={report} batch={batch} details={details} responsible={responsible} images={reportImages} logo={logo} dailyImage={dailyImage} includeAnnex={includeAnnex}/>}
+    {!monthly && <details className="calc-card gamma-no-print"><summary>Método y alcance</summary><p>{mode === 'resolution' ? 'Medición adaptada a una fuente lineal: máximo muestreado, cruces lineales al 50 % y al 10 %, media de cinco perfiles de hasta ocho píxeles de ancho. Se usa PixelSpacing en lugar de una calibración por separación entre fuentes. No equivale a una aceptación NEMA completa ni al procedimiento completo IAEA con varias fuentes y posiciones.' : 'Sensibilidad = (cuentas/tiempo − tasa de fondo) / actividad media. Actividad inicial y residual se corrigen a un instante común y se integra el decaimiento durante la exposición. La comparación permite límite mínimo absoluto o desviación respecto a referencia, con unidades explícitas.'}</p><a href="https://www-pub.iaea.org/MTCD/Publications/PDF/Pub1394_web.pdf" target="_blank" rel="noreferrer">IAEA HHS 6, §§2.3.8–2.3.9</a></details>}
   </div>
 }
 

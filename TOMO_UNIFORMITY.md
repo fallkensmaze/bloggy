@@ -104,8 +104,11 @@ el coste de integrar cada esfera manteniendo la definición discreta exacta.
 Para comparar estudios deben fijarse adquisición, cuentas, correcciones,
 reconstrucción, rejilla, cilindro, márgenes, diámetros y dominio. Una esfera grande
 atenúa tanto ruido como defectos pequeños. La curva aislada no los distingue.
-Esta página aún no transfiere resultados al informe mensual ni modifica su
-valoración tomográfica visual.
+La misma aplicación puede abrirse integrada en el informe mensual privado con
+el volumen ya validado. El worker transmite la instantánea del cálculo al informe;
+cambiar geometría o parámetros la invalida. Los tres planos seleccionados pueden
+capturarse para el resumen y la curva se imprime en un anexo. El resultado
+cuantitativo no modifica la valoración tomográfica visual.
 
 ## Verificación
 
@@ -115,5 +118,7 @@ ceros/negativos interiores, límites radiales y en las bases, dominios de centro
 geometrías/calibraciones DICOM. `npm run build:web` comprueba la integración y
 audita el artefacto público. La suite se incluye en el workflow de GitHub.
 
-Pendiente: validación de importación con las exportaciones reales de Siemens/GE,
-comparación con otra herramienta y repetibilidad de adquisiciones de referencia.
+Comprobada la importación de la exportación Siemens aportada (NM multiframe,
+128 × 128 × 49), incluyendo geometría, planos y ejecución del barrido. Pendiente:
+validación de exportaciones GE, comparación con otra herramienta y repetibilidad
+de adquisiciones de referencia.

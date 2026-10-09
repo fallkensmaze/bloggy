@@ -200,7 +200,9 @@ test('Unknown descriptions need classification; tomography never passes automati
   const image = parseGammaDicom(makeDicom({ SeriesDescription: 'desconocida' }))
   assert.equal(classifyGamma(image), 'unknown')
   const records = analyzeGammaEntry({ name: 'synthetic', id: 'test', image, type: 'tomography', options: initialGammaOptions(image) })
-  assert.equal(records[0].status, 'Pendiente de revisión')
+  assert.equal(records[0].status, 'No evaluable')
+  const recon = { ...image, imageType: ['ORIGINAL', 'PRIMARY', 'RECON TOMO', 'EMISSION'] }
+  assert.equal(analyzeGammaEntry({ name: 'synthetic', id: 'test', image: recon, type: 'tomography', options: initialGammaOptions(recon) })[0].status, 'Pendiente de revisión')
 })
 test('Navigation catalog is unique and both private routes stay admin-only', () => {
   assert.equal(new Set(NAV_LINKS.map(l => l.href)).size, NAV_LINKS.length)

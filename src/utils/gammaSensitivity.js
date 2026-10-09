@@ -1,5 +1,12 @@
 import { numberOrNull } from './gammaDicom.js'
 
+// 1 µCi = 0.037 MBq and 1 min = 60 s; 1 cps/MBq = 2.22 cpm/µCi.
+export const SENSITIVITY_UNITS = ['cps/MBq', 'cpm/µCi']
+export function sensitivityInUnit(cpsPerMBq, unit = 'cps/MBq') {
+  if (!SENSITIVITY_UNITS.includes(unit)) throw new Error('Unidad de sensibilidad no reconocida.')
+  return Number.isFinite(cpsPerMBq) ? cpsPerMBq * (unit === 'cpm/µCi' ? 2.22 : 1) : null
+}
+
 function required(value, name, allowZero = false) {
   const n = numberOrNull(value)
   if (n == null || (allowZero ? n < 0 : n <= 0)) throw new Error(`Introduce ${name} ${allowZero ? '(≥ 0)' : '(> 0)'}.`)
