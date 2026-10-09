@@ -3,12 +3,18 @@ import { Link } from 'react-router-dom'
 import { BrowserRadioAudio } from '../utils/radioAudioBrowser'
 import { AUDIO_MODEM_DEFAULTS, voxAudio, FskAudioReceiver } from '../utils/radioAudioModem'
 import { STATION_STATUS } from '../utils/radioAudioStation'
+import { JOIN_LABELS } from '../utils/radioAudioAutoStation'
+import { validIdentity, identityEnvelope, readIdentityEnvelope, BROADCAST_IDENTITY } from '../utils/radioAudioIdentity'
 import RadioNetworkMap from '../components/RadioNetworkMap'
 import { FRAME_TYPES as T, textBytes, bytesText, wavBytes } from '../utils/emergencyRadioAudio'
 import '../styles/radio-audio-station.css'
 
-const defaults = { ...AUDIO_MODEM_DEFAULTS, id: 1, network: 17, name: 'Estación 1', deviceId: '', autoAck: true, shareTopology: true }
-const initial = () => { try { return { ...defaults, ...JSON.parse(localStorage.getItem('radio_audio_station_settings_v1') || '{}') } } catch { return defaults } }
+const defaults = { ...AUDIO_MODEM_DEFAULTS, id: 1, network: 17, name: '', deviceId: '', autoAck: true, shareTopology: true, autoId: true }
+const initial = () => { try {
+  const saved = JSON.parse(localStorage.getItem('radio_audio_station_settings_v1') || '{}')
+  if (saved.autoId == null && /^Estación(?: \d+)?$/.test(saved.name || '')) saved.name = ''
+  return { ...defaults, ...saved }
+} catch { return defaults } }
 const empty = { messages: [], inbox: [], peers: [], logs: [], stats: { tx: 0, rx: 0, retries: 0, acks: 0 }, conflict: false }
 const clock = time => new Date(Date.now() - performance.now() + time * 1000).toLocaleTimeString('es-ES')
 const typeLabel = type => type === T.ACK ? 'acuse' : type === T.HELLO ? 'anuncio' : type === T.TOPOLOGY ? 'mapa de red' : 'mensaje'
@@ -23,7 +29,7 @@ export default function RadioAudioStation() {
   const [active, setActive] = useState(false); const [starting, setStarting] = useState(false)
   const [snapshot, setSnapshot] = useState(empty); const [error, setError] = useState(''); const [notice, setNotice] = useState('')
   const [text, setText] = useState('Necesitamos agua en el punto de encuentro.')
-  const [destination, setDestination] = useState(2); const [priority, setPriority] = useState(1)
+  const [destination, setDestination] = useState(''); const [priority, setPriority] = useState(1)
   const [level, setLevel] = useState({ db: -100, receiving: false, clipping: false, accepted: 0, rejected: 0 })
   const [transmitting, setTransmitting] = useState(false); const [txType, setTxType] = useState(T.DATA)
   const [devices, setDevices] = useState([]); const [capture, setCapture] = useState(null); const [test, setTest] = useState('')
@@ -38,6 +44,7 @@ export default function RadioAudioStation() {
   async function start() {
     setError(''); setNotice(''); setStarting(true); setLevel({ db: -100, accepted: 0, rejected: 0 })
     setRecorded(null); setRecording(false); setCapture(null)
+    setDestination(config.autoId ? '' : 2)
     let session
     try {
       session = new BrowserRadioAudio(config, {
@@ -45,6 +52,7 @@ export default function RadioAudioStation() {
         onLevel: v => { if (mounted.current && controller.current === session) setLevel(v) },
         onTransmit: (v, type) => { if (mounted.current && controller.current === session) { setTransmitting(v); if (type) setTxType(type) } },
         onStarted: v => { if (mounted.current && controller.current === session) setCapture(v) },
+        onAddress: id => { if (mounted.current && controller.current === session) change('automaticId', id) },
         onRecording: v => { if (mounted.current && controller.current === session) { setRecorded(v); setRecording(false) } },
         onRecordingError: reason => { if (mounted.current && controller.current === session) { setRecording(false); setError(reason) } },
         onStopped: reason => { if (mounted.current && controller.current === session) { setActive(false); setStarting(false); setRecording(false); setNotice(reason) } }
@@ -69,6 +77,17 @@ export default function RadioAudioStation() {
   function send(e) { e.preventDefault(); setError(''); try { controller.current.send(text, destination, priority) } catch (e) { setError(e.message) } }
   function announce() { setError(''); try { controller.current.announce() } catch (e) { setError(e.message) } }
   function examplePacket() {
+    if (config.autoId) {
+      if (!Number.isInteger(config.network) || config.network < 1 || config.network > 254) throw new Error('Revisa el grupo de tramas.')
+      const own = controller.current?.protocol.config
+      const target = validIdentity(destination) ? destination : BROADCAST_IDENTITY
+      const peer = snapshot.peers.find(p => p.identity === target)
+      const dst = target === BROADCAST_IDENTITY ? 255 : peer?.id
+      if (!dst) throw new Error('Elige una estación directa para la prueba.')
+      return { type: T.DATA, net: config.network, origin: own?.id || 1, sender: own?.id || 1, dst, next: dst, ttl: 1,
+        epoch: crypto.getRandomValues(new Uint16Array(1))[0], seq: 1, attempt: 0, priority,
+        payload: identityEnvelope(own?.identity || crypto.randomUUID().replaceAll('-', ''), target, [...textBytes(text.trim())]) }
+    }
     if (![config.id, config.network].every(v => Number.isInteger(v) && v >= 1 && v <= 254) || !Number.isInteger(Number(destination)) || Number(destination) < 1 || Number(destination) > 255) throw new Error('Revisa los identificadores de estación, grupo y destino.')
     return { type: T.DATA, net: config.network, origin: config.id, sender: config.id, dst: Number(destination), next: Number(destination), ttl: 1,
       epoch: crypto.getRandomValues(new Uint16Array(1))[0], seq: 1, attempt: 0, priority, payload: [...textBytes(text.trim())] }
@@ -79,18 +98,19 @@ export default function RadioAudioStation() {
       const p = examplePacket(); const samples = voxAudio(p, config); const rx = new FskAudioReceiver(config.baud); const frames = []
       rx.push(new Float32Array(137))
       for (let i = 0; i < samples.length; i += 173) frames.push(...rx.push(samples.subarray(i, i + 173)))
-      if (frames.length !== 1 || bytesText(Uint8Array.from(frames[0].packet.payload)) !== text.trim()) throw new Error('La autoprueba no ha recuperado el texto.')
+      if (frames.length !== 1 || bytesText(Uint8Array.from(readIdentityEnvelope(frames[0].packet.payload)?.payload || frames[0].packet.payload)) !== text.trim()) throw new Error('La autoprueba no ha recuperado el texto.')
       setTest(`Autoprueba correcta: sincronismo y CRC válidos; ${(samples.length / 9600).toFixed(2)} s de audio. No se ha usado el micrófono ni se ha emitido sonido.`)
     } catch (e) { setError(e.message) }
   }
   const locked = active || starting
-  const canSend = active && !snapshot.conflict && !recording
+  const canSend = active && !snapshot.conflict && !recording && (!config.autoId || snapshot.joinState === 'ready')
+  const currentId = snapshot.config?.id ?? config.id
   const bytes = textBytes(text.trim()).length
   const bar = Math.max(0, Math.min(100, (level.db + 80) / 80 * 100))
-  const state = !active ? 'Detenida' : snapshot.conflict ? 'ID duplicado · emisión bloqueada' : transmitting ? `Emitiendo ${typeLabel(txType)}` : recording ? 'Grabando prueba de recepción' : level.receiving ? 'Recibiendo trama' : level.db > config.busyDb ? 'Canal con audio' : 'Escuchando'
+  const state = !active ? 'Detenida' : snapshot.conflict ? 'Conflicto de identidad · emisión bloqueada' : transmitting ? `Emitiendo ${typeLabel(txType)}` : config.autoId && snapshot.joinState !== 'ready' ? JOIN_LABELS[snapshot.joinState] || 'Incorporándose' : recording ? 'Grabando prueba de recepción' : level.receiving ? 'Recibiendo trama' : level.db > config.busyDb ? 'Canal con audio' : 'Escuchando'
 
   return <div className="ra-station">
-    <header className="ra-header"><div><p className="ra-eyebrow">Radioafición · audio real · versión 0.2</p><h1>Estación de audio · VOX</h1>
+    <header className="ra-header"><div><p className="ra-eyebrow">Radioafición · audio real · versión 0.3</p><h1>Estación de audio · VOX</h1>
       <p>El micrófono escucha el walkie; el altavoz reproduce los mensajes codificados. Cada navegador trabaja como una estación independiente.</p></div>
       <Link to="/red-emergencia" className="ra-lab-link"><i className="bi bi-diagram-3" /> Ir al simulador de red</Link></header>
     <div className="ra-intro"><span><i className="bi bi-laptop" /> Audio y mensajes procesados en tu dispositivo</span><span><i className="bi bi-broadcast" /> Comunicación directa por sonido</span></div>
@@ -98,23 +118,28 @@ export default function RadioAudioStation() {
       Una vez cargada la página, el intercambio utiliza el canal de audio; para volver a cargarla necesitas conexión.</p>
     {error && <p className="ra-alert ra-error" role="alert">{error}</p>}
     {notice && <p className="ra-alert" role="status">{notice}</p>}
-    {snapshot.conflict && <p className="ra-alert ra-error" role="alert">Otra estación usa tu ID. Detén la estación, elige otro identificador y vuelve a activar.</p>}
+    {snapshot.conflict && <p className="ra-alert ra-error" role="alert">{snapshot.identityConflict ? 'Esta identidad está activa en otra sesión. Detén la otra pestaña o sesión y vuelve a incorporarte.' : 'Otra estación usa tu ID manual. Detén la estación y activa la asignación automática o elige otro identificador.'}</p>}
+    {active && ['full', 'failed'].includes(snapshot.joinState) && <p className="ra-alert ra-error" role="alert">{JOIN_LABELS[snapshot.joinState]}. Detén y vuelve a incorporarte cuando el canal o el grupo estén disponibles.</p>}
 
     <section className="ra-panel"><h2>1. Prepara la estación</h2>
-      <div className="ra-settings"><label>Mi identificador<input type="number" min="1" max="254" value={config.id} disabled={locked} onChange={e => change('id', Number(e.target.value))} /></label>
-        <label>Nombre<input value={config.name} disabled={locked} onChange={e => change('name', e.target.value)} maxLength="32" /></label>
+      <div className="ra-settings"><label className="ra-check"><input type="checkbox" checked={config.autoId} disabled={locked} onChange={e => { change('autoId', e.target.checked); setDestination(e.target.checked ? '' : 2) }} /> Asignar ID automáticamente</label>
+        <label>Nombre {config.autoId ? '(opcional)' : ''}<input value={config.name} placeholder={config.autoId ? 'Ej. Equipo norte' : 'Escribe un nombre'} disabled={locked} onChange={e => change('name', e.target.value)} maxLength="32" /></label>
         <label>Grupo de tramas<input type="number" min="1" max="254" value={config.network} disabled={locked} onChange={e => change('network', Number(e.target.value))} /></label>
         <label>Tasa de datos<select value={config.baud} disabled={locked} onChange={e => change('baud', Number(e.target.value))}><option value="300">300 bit/s · comenzar aquí</option><option value="600">600 bit/s · menor duración</option></select></label></div>
-      <p className="ra-hint">Usa IDs distintos (por ejemplo, 1 y 2), el mismo grupo y la misma tasa en ambos equipos. El grupo es un filtro de tramas; no selecciona la frecuencia del walkie.</p>
+      {!config.autoId && <label className="ra-manual-id">ID manual · modo anterior<input type="number" min="1" max="254" value={config.id} disabled={locked} onChange={e => change('id', Number(e.target.value))} /></label>}
+      <p className="ra-hint">{config.autoId ? 'Al unirte, el móvil escucha, elige un número disponible y se anuncia. Las coincidencias se resuelven automáticamente. Todos los participantes deben usar esta versión en modo automático.' : 'En modo manual hay que coordinar IDs distintos; los mensajes no llevan identidad estable.'}
+        {' '}Usa el mismo grupo y la misma tasa en todos los equipos. El grupo no selecciona la frecuencia del walkie.</p>
       <div className="ra-audio-config"><label>Micrófono<select disabled={locked} value={config.deviceId} onChange={e => change('deviceId', e.target.value)}><option value="">Entrada predeterminada</option>
         {devices.filter(d => d.deviceId !== 'default').map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `Micrófono ${i + 1}`}</option>)}</select></label>
         <label className="ra-check"><input type="checkbox" checked={config.autoAck} onChange={e => change('autoAck', e.target.checked)} /> Acuses automáticos al recibir un mensaje dirigido a mí</label></div>
-      <div className="ra-actions">{locked ? <button type="button" className="ra-stop" onClick={stop}><i className="bi bi-stop-circle" /> Detener todo</button> : <button type="button" className="ra-primary" onClick={start}><i className="bi bi-mic" /> Activar estación</button>}
+      <div className="ra-actions">{locked ? <button type="button" className="ra-stop" onClick={stop}><i className="bi bi-stop-circle" /> Detener todo</button> : <button type="button" className="ra-primary" onClick={start}><i className="bi bi-mic" /> {config.autoId ? 'Unirme a la red' : 'Activar estación'}</button>}
         <button type="button" disabled={!canSend} onClick={announce}>Anunciar mi presencia</button><span className="ra-hint">{starting ? 'Esperando permiso del micrófono…' : config.shareTopology ? 'El anuncio inicia un intercambio acotado del mapa.' : 'Mapa en escucha; no se comparte ni se propaga.'}</span></div>
     </section>
 
     <section className="ra-console" aria-label="Estado del audio"><div className="ra-live"><span className={`ra-dot ${active ? transmitting ? 'ra-tx' : 'ra-on' : ''}`} /><strong aria-live="polite">{state}</strong>
-        <p>{active ? `ID ${config.id} · grupo ${config.network} · ${config.baud} bit/s` : 'Activa la estación para escuchar y enviar.'}</p></div>
+        <p>{active ? `${snapshot.config?.name || config.name} · ID ${currentId}${config.autoId && snapshot.joinState !== 'ready' ? ' provisional' : ''} · grupo ${config.network} · ${config.baud} bit/s` : 'Únete a la red para escuchar y enviar.'}</p>
+        {active && snapshot.renumbers > 0 && <p>Coincidencias resueltas automáticamente: {snapshot.renumbers}.</p>}
+        {active && snapshot.config?.identityPersistent === false && <p>Identidad temporal: este navegador no permite guardarla.</p>}</div>
       <div><div className="ra-meter"><div style={{ width: `${bar}%` }} className={level.clipping ? 'ra-clipping' : ''} /></div>
         <p className="ra-hint">Micrófono: {level.db > -99 ? `${level.db.toFixed(0)} dBFS` : 'sin señal'} · {level.clipping ? 'Saturación: baja el volumen del walkie.' : 'Nivel después del filtro de audio'}</p></div>
       <div className="ra-counters"><span><b>{snapshot.stats.tx}</b> emisiones</span><span><b>{snapshot.stats.rx}</b> tramas del grupo</span><span><b>{snapshot.stats.acks}</b> confirmados</span><span><b>{snapshot.stats.retries}</b> reintentos</span></div>
@@ -137,7 +162,7 @@ export default function RadioAudioStation() {
         : 'Todavía no se ha reconocido un prefijo. Comprueba 300 bit/s en ambos equipos y observa si llegan los dos tonos durante el anuncio remoto.'}</p>
       <p>Para investigar un fallo: desactiva «Compartir y propagar el mapa» en ambos equipos, pulsa «Grabar recepción · 10 s» aquí y después «Anunciar mi presencia» en el otro dispositivo.
         Mantén esta página visible. Durante la grabación se aplazan las emisiones y los acuses de esta estación.</p>
-      <div className="ra-actions"><button type="button" disabled={!active || transmitting || recording} onClick={recordDiagnostic}>Grabar recepción · 10 s</button>
+      <div className="ra-actions"><button type="button" disabled={!canSend || transmitting} onClick={recordDiagnostic}>Grabar recepción · 10 s</button>
         {recording && <><span role="status">Grabando {Math.min(10, level.recordingSeconds ?? 0).toFixed(1)} / 10 s…</span>
           <button type="button" onClick={() => { controller.current?.cancelRecording(); setRecording(false) }}>Cancelar grabación</button></>}
         {recorded && <><button type="button" onClick={() => download('radio-recepcion-10s.wav', wavBytes(recorded.samples), 'audio/wav')}>Descargar audio recibido</button>
@@ -151,22 +176,24 @@ export default function RadioAudioStation() {
     </section>
 
     <div className="ra-columns"><section className="ra-panel"><h2>2. Envía un mensaje</h2>
-      <form onSubmit={send}><div className="ra-message-options"><label>Destino<select value={destination} onChange={e => setDestination(Number(e.target.value))}>
-        <option value="255">Alcance directo · sin acuse</option>{[...new Set([2, ...snapshot.peers.map(p => p.id), Number(destination)])].filter(id => id >= 1 && id < 255 && id !== config.id).sort((a, b) => a - b).map(id => <option key={id} value={id}>{snapshot.peers.find(p => p.id === id)?.name || `Estación ${id}`} · ID {id}</option>)}</select></label>
-        <label>ID de destino<input type="number" min="1" max="255" value={destination} onChange={e => setDestination(Number(e.target.value))} /></label>
+      <form onSubmit={send}><div className="ra-message-options"><label>Destino<select aria-label="Destino" value={destination} onChange={e => setDestination(config.autoId ? e.target.value : Number(e.target.value))}>
+        <option value="">Elige una estación</option><option value="255">Alcance directo · sin acuse</option>
+        {config.autoId ? snapshot.peers.filter(p => validIdentity(p.identity)).map(p => <option key={p.identity} value={p.identity}>{p.name} · ID {p.id} · {p.identity.slice(-4)}</option>) :
+          [...new Set([2, ...snapshot.peers.map(p => p.id), Number(destination)])].filter(id => id >= 1 && id < 255 && id !== config.id).sort((a, b) => a - b).map(id => <option key={id} value={id}>{snapshot.peers.find(p => p.id === id)?.name || `Estación ${id}`} · ID {id}</option>)}</select></label>
+        {!config.autoId && <label>ID de destino<input type="number" min="1" max="255" value={destination} onChange={e => setDestination(Number(e.target.value))} /></label>}
         <label>Prioridad<select value={priority} onChange={e => setPriority(Number(e.target.value))}><option value="0">Emergencia</option><option value="1">Urgente</option><option value="2">Normal</option></select></label></div>
         <label>Mensaje breve<textarea rows="3" value={text} onChange={e => setText(e.target.value)} placeholder="Escribe hasta 96 bytes UTF-8" /></label>
-        <div className="ra-actions"><span className={bytes > 96 ? 'ra-invalid' : 'ra-hint'}>{bytes} / 96 bytes UTF-8</span><button className="ra-primary" disabled={!canSend || !bytes || bytes > 96}>Enviar por audio</button></div>
+        <div className="ra-actions"><span className={bytes > 96 ? 'ra-invalid' : 'ra-hint'}>{bytes} / 96 bytes UTF-8</span><button className="ra-primary" disabled={!canSend || !destination || !bytes || bytes > 96}>Enviar por audio</button></div>
       </form><p className="ra-hint">Se escucha el canal antes de emitir. Un envío dirigido se intenta como máximo tres veces; solo el acuse recibido confirma la entrega.
         Los equipos indirectos del mapa todavía no reciben mensajes a través de intermediarios.</p>
-      <div className="ra-history" aria-label="Mensajes enviados">{[...snapshot.messages].reverse().map(m => <article key={m.id}><div className="ra-message-heading"><b>Yo → {m.dst === 255 ? 'Grupo' : `ID ${m.dst}`}</b><time>{clock(m.created)}</time></div><p>{m.text}</p>
+      <div className="ra-history" aria-label="Mensajes enviados">{[...snapshot.messages].reverse().map(m => <article key={m.id}><div className="ra-message-heading"><b>Yo → {m.destinationName || (m.dst === 255 ? 'Grupo' : `ID ${m.dst}`)}</b><time>{clock(m.created)}</time></div><p>{m.text}</p>
         <small className={m.status === 'confirmed' ? 'ra-confirmed' : ''}>{STATION_STATUS[m.status]} · {m.attempts} intento(s){m.confirmedAt != null ? ` · ${(m.confirmedAt - m.created).toFixed(1)} s` : ''}</small></article>)}
         {!snapshot.messages.length && <p className="ra-empty">Los envíos y sus acuses aparecerán aquí.</p>}</div>
     </section><section className="ra-panel"><h2>3. Escucha a las otras estaciones</h2>
-      <div className="ra-history ra-inbox" aria-label="Mensajes recibidos">{[...snapshot.inbox].reverse().map(m => <article key={m.id}><div className="ra-message-heading"><b>{snapshot.peers.find(p => p.id === m.origin)?.name || `Estación ${m.origin}`} · ID {m.origin}</b><time>{clock(m.time)}</time></div>
+      <div className="ra-history ra-inbox" aria-label="Mensajes recibidos">{[...snapshot.inbox].reverse().map(m => <article key={m.id}><div className="ra-message-heading"><b>{snapshot.peers.find(p => m.originIdentity ? p.identity === m.originIdentity : p.id === m.origin)?.name || `Estación ${m.origin}`} · ID {m.origin}</b><time>{clock(m.time)}</time></div>
         <p>{m.text}</p><small>CRC válido · {m.broadcast ? 'Mensaje al grupo, sin acuse' : config.autoAck ? 'Acuse automático habilitado' : 'Acuse automático desactivado'}</small></article>)}
         {!snapshot.inbox.length && <p className="ra-empty">Esperando mensajes decodificados del micrófono. El ruido y la voz no se presentan como texto.</p>}</div>
-      <h3>Historial de escucha directa</h3><div className="ra-peers">{snapshot.peers.map(p => <button key={p.id} type="button" onClick={() => setDestination(p.id)}><b>{p.name}</b><span>ID {p.id} · {clock(p.lastHeard)}</span></button>)}
+      <h3>Historial de escucha directa</h3><div className="ra-peers">{snapshot.peers.map(p => <button key={p.identity || p.id} type="button" disabled={config.autoId && !validIdentity(p.identity)} onClick={() => setDestination(config.autoId ? p.identity : p.id)}><b>{p.name}</b><span>ID {p.id} · {clock(p.lastHeard)}{p.legacy ? ' · modo manual' : ''}</span></button>)}
         {!snapshot.peers.length && <p className="ra-hint">Pulsa «Anunciar mi presencia» en el otro equipo. Oír a una estación no demuestra todavía que te oiga a ti.</p>}</div>
     </section></div>
 
@@ -191,12 +218,13 @@ export default function RadioAudioStation() {
     </section>
     <details className="ra-panel ra-guide" open><summary>Cómo probar con dos walkies</summary><ol>
       <li>Usa el mismo canal y subtono en ambos walkies, activa VOX y coloca cada dispositivo cerca de su walkie. Empieza con volumen moderado.</li>
-      <li>Abre esta app en cada dispositivo: ID 1 y 2, grupo 17, tasa 300 bit/s. Activa ambas estaciones y permite el micrófono.</li>
-      <li>Anuncia tu presencia en un equipo. Con «Compartir y propagar el mapa» activado, los demás responden y comparten sus vecinos. Espera a que termine el intercambio; en redes de varios equipos puede tardar más de un minuto.</li>
-      <li>Envía un texto breve al otro ID. Espera a «Recepción confirmada». «Sin confirmación» puede significar que se perdió el mensaje o el acuse.</li>
+      <li>Abre esta versión en cada dispositivo: asignación automática, grupo 17 y tasa 300 bit/s. Escribe un nombre si quieres, pulsa «Unirme a la red» y permite el micrófono.</li>
+      <li>Espera a que termine la incorporación. Se hacen dos anuncios con esperas aleatorias; si hay coincidencias, el número cambia automáticamente. Con «Compartir y propagar el mapa» activado también se descubren conflictos entre equipos que no se oyen directamente. En redes de varios equipos el intercambio puede tardar más de un minuto.</li>
+      <li>Elige la estación destinataria y envía un texto breve. La selección se conserva aunque cambie su número. Espera a «Recepción confirmada». «Sin confirmación» puede significar que se perdió el mensaje o el acuse.</li>
       <li>Ajusta el tono previo, el retorno y el volumen si el VOX recorta la trama. Mantén la app visible y la pantalla encendida.</li></ol>
       <p>La página se detiene al pasar a segundo plano o suspenderse el audio, para evitar emisiones acumuladas al volver. Los mensajes quedan en memoria;
-        se borran al recargar o iniciar una sesión nueva. Solo se guardan preferencias en este navegador.</p>
+        se borran al recargar o iniciar una sesión nueva. Se guardan las preferencias, la identidad aleatoria de este navegador y su último ID automático; no las identidades de otros equipos.
+        Usa una sola pestaña de la estación. La identidad no autentica a una persona y no es un número de hardware.</p>
       <p>Modulación BFSK de 1200/2400 Hz, entrenamiento de 16 bytes AA, prefijo AA AA AA AA D3 91, cabecera de 16 bytes y CRC-16/CCITT-FALSE.
         El receptor busca el prefijo con distintas alineaciones y compensa diferencias entre tonos; acepta únicamente tramas con CRC válido. Los mensajes y acuses usan TTL 1;
         los informes del mapa se propagan hasta cuatro saltos, con caducidad y supresión de duplicados. Grupo 17 por defecto; no es interoperable con el protocolo del simulador.
