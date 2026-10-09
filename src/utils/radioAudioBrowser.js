@@ -15,7 +15,7 @@ export class BrowserRadioAudio {
     this.lastEnergy = now(); this.muteUntil = 0; this.source = null; this.receiving = false
     this.recording = false; this.recordingId = 0
   }
-  notify() { this.callbacks.onChange?.(this.protocol.snapshot()) }
+  notify() { this.nextNotifyAt = now() + 1; this.callbacks.onChange?.(this.protocol.snapshot(now())) }
   async start() {
     const Audio = window.AudioContext || window.webkitAudioContext
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error('El micrófono necesita HTTPS o localhost.')
@@ -82,7 +82,7 @@ export class BrowserRadioAudio {
     if (!this.active || this.recording || this.context.state !== 'running' || now() < this.muteUntil || this.source) return
     try {
       const entry = this.protocol.take(now(), now() - this.lastEnergy, this.receiving)
-      this.notify()
+      if (entry || now() >= (this.nextNotifyAt || 0)) this.notify()
       if (entry) this.transmit(entry)
     } catch (error) { this.stopWithReason(error.message) }
   }
@@ -116,10 +116,11 @@ export class BrowserRadioAudio {
     this.protocol.announce(now()); this.notify()
   }
   setAutoAck(value) { this.protocol.setAutoAck(value); this.notify() }
+  setShareTopology(value) { this.protocol.setShareTopology(value); this.notify() }
   recordDiagnostic() {
     if (!this.active || this.context.state !== 'running') throw new Error('Activa la estación antes de grabar.')
     if (this.recording || this.source || now() < this.muteUntil) throw new Error('Espera a que termine la emisión o la grabación.')
-    if (this.protocol.queue.length || this.protocol.messages.some(m => m.status === 'waitingAck')) throw new Error('Espera a que terminen los envíos pendientes antes de grabar.')
+    if (this.protocol.queue.length || this.protocol.topologyDue !== Infinity || this.protocol.messages.some(m => m.status === 'waitingAck')) throw new Error('Espera a que terminen los envíos pendientes antes de grabar.')
     this.recording = true
     this.capture.port.postMessage({ type: 'record', id: ++this.recordingId })
     this.recordingTimer = setTimeout(() => {
