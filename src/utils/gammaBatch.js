@@ -1,12 +1,13 @@
 import { parseDICOM } from './dicomParser.js'
 import { parseCorDICOM } from './corDicom.js'
 import { analyzeCor, corAcquisitionValid } from './corAnalysis.js'
-import { calculateNemaGeometric, detectLimitProfile, getLimitProfile } from './nemaAlgorithms.js'
+import { calculateNemaGeometric, detectLimitProfile } from './nemaAlgorithms.js'
 import { createAcquisitionDeclaration, evaluateAcquisition } from './nemaAcquisition.js'
 import { analyzeResolution } from './gammaResolution.js'
 import { analyzeSensitivity, sensitivityInUnit } from './gammaSensitivity.js'
 import { numberOrNull } from './gammaDicom.js'
 import { evaluateGammaMetrics } from './gammaReport.js'
+import { configuredGammaMetrics, gammaUniformityProfile } from './gammaQcLimits.js'
 
 export function initialGammaOptions(image) {
   return { acquiredAt: image.metadata.acquiredAt, activityAt: '', activityMBq: '', halfLifeHours: '',
@@ -17,7 +18,8 @@ export function initialGammaOptions(image) {
     sensitivityComparison: 'reference', sensitivityUnit: 'cps/MBq', minimumSensitivity: '',
     limitSource: '', protocol: '', verified: false, notes: '',
     uniformityProfile: 'auto', targetSize: 'auto', declaration: createAcquisitionDeclaration(),
-    corDeclaration: {}, corLimit: '', axialLimit: '', tomoVerdict: '', tomoObservations: '' }
+    corDeclaration: {}, corLimit: '', axialLimit: '', tomoVerdict: '', tomoObservations: '',
+    tomoLimitPercent: '', tomoUniformityPercent: '', tomoUniformityDefinition: '' }
 }
 
 const metric = (key, label, value, unit, limit = null, operator = 'max') => ({ key, label, value, unit, limit: numberOrNull(limit), operator })
@@ -25,7 +27,7 @@ const metric = (key, label, value, unit, limit = null, operator = 'max') => ({ k
 export function analyzeGammaEntry(entry) {
   const { image, options: o, type } = entry
   const base = { file: entry.name, type, equipment: image.metadata.equipment, acquiredAt: image.metadata.acquiredAt,
-    methodVersion: 'gamma-qc-2.0', protocol: o.protocol, limitSource: o.limitSource, notes: o.notes,
+    methodVersion: 'gamma-qc-2.1', protocol: o.protocol, limitSource: o.limitSource, notes: o.notes,
     inputs: o, metadata: image.metadata }
   if (type === 'unknown') throw new Error('Selecciona el tipo de prueba antes del análisis.')
   if (type === 'tomography') {
@@ -33,10 +35,19 @@ export function analyzeGammaEntry(entry) {
       return [{ ...base, id: `${entry.id}:tomo`, detector: null, metrics: [], status: 'No evaluable',
         reason: entry.tomoError || 'Selecciona una reconstrucción NM RECON TOMO; las proyecciones no son cortes espaciales.' }]
     }
-    const ready = o.verified && o.protocol.trim() && o.tomoObservations.trim() && ['Conforme', 'No conforme'].includes(o.tomoVerdict)
-    return [{ ...base, id: `${entry.id}:tomo`, detector: null, metrics: [], method: 'Revisión visual por el usuario',
-      status: ready ? o.tomoVerdict : 'Pendiente de revisión', reason: ready ? o.tomoObservations : 'Requiere revisar los cortes, documentar el protocolo y firmar la valoración visual.',
-      details: { observations: o.tomoObservations, frames: image.frames.length, quantitative: entry.tomoQuantitative || null } }]
+    const value = numberOrNull(o.tomoUniformityPercent)
+    const metrics = configuredGammaMetrics(type, o).map(m => ({ ...m, value: value != null && value >= 0 ? value : null }))
+    const visualReady = o.verified && o.protocol.trim() && o.tomoObservations.trim() && ['Conforme', 'No conforme'].includes(o.tomoVerdict)
+    const numerical = evaluateGammaMetrics(metrics, { ...o,
+      blocked: o.tomoUniformityDefinition?.trim() ? '' : 'Registra la definición de la medida tomográfica a la que se aplica la tolerancia.' })
+    const evaluation = visualReady && o.tomoVerdict === 'No conforme'
+      ? { status: 'No conforme', reason: o.tomoObservations }
+      : numerical.status === 'No conforme' ? numerical
+        : !visualReady ? { status: 'Pendiente de revisión', reason: 'Requiere revisar los cortes, documentar el protocolo y firmar la valoración visual.' }
+          : numerical
+    return [{ ...base, id: `${entry.id}:tomo`, detector: null, metrics, method: 'Revisión visual y uniformidad del protocolo registrada por el usuario',
+      ...evaluation, details: { observations: o.tomoObservations, definition: o.tomoUniformityDefinition,
+        frames: image.frames.length, quantitative: entry.tomoQuantitative || null } }]
   }
   if (type === 'cor') {
     if (!image.hasCorGeometry) throw new Error('Faltan vectores de detector/vista o geometría de rotación DICOM. No se inventan ángulos en el informe mensual.')
@@ -86,7 +97,7 @@ export function analyzeGammaEntry(entry) {
           : evaluateGammaMetrics([metrics[1]], { ...options, blocked: frame.detectorNumber == null ? 'Detector sin identificar.' : '' })
         return { ...record, method: result.method, metrics, ...evaluation, details: result }
       }
-      const profile = o.uniformityProfile === 'auto' ? detectLimitProfile(parsed) : getLimitProfile(o.uniformityProfile)
+      const profile = gammaUniformityProfile(o, detectLimitProfile(parsed))
       const result = calculateNemaGeometric(parsed.frames[i], parsed.rows, parsed.cols, {
         targetSize: o.targetSize === 'auto' ? null : Number(o.targetSize), pixelSpacingMm: parsed.pixelSpacing,
         ufovSizeMm: parsed.frameInfo[i].ufovSizeMm, vendorFovMm: profile.fovMm })
@@ -97,7 +108,7 @@ export function analyzeGammaEntry(entry) {
         limitSource: profile.source, details: { checks: evaluation.checks, methodVersion: result.metadata?.methodVersion,
           geometry: { pixelSizeMm: result.metadata?.pixelSpacingResampledMm, ufovSizeMm: result.metadata?.ufovSizeMm } } }
     } catch (e) {
-      return { ...record, metrics: [], status: 'No evaluable', reason: e.message }
+      return { ...record, metrics: configuredGammaMetrics(type, options), status: 'No evaluable', reason: e.message }
     }
   })
 }

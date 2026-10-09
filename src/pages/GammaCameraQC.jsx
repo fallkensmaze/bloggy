@@ -8,6 +8,7 @@ import { loadTomoDicomSeries } from '../utils/tomoDicom'
 import { proposeCylinder } from '../utils/tomoUniformity'
 import { captureTomoReportViews } from '../utils/gammaTomoReport'
 import { applyMonthlyReference, buildMonthlyReport } from '../utils/gammaMonthlyReport'
+import { matchesMonthlyReference, MONTHLY_REFERENCE_ROWS, MONTHLY_REFERENCE_SOURCE } from '../utils/gammaQcLimits'
 import { SENSITIVITY_UNITS } from '../utils/gammaSensitivity'
 import GammaImage, { GammaProfiles, tomographyMosaic } from '../components/GammaImage'
 import { classifyGamma, parseGammaDicom } from '../utils/gammaDicom'
@@ -95,13 +96,18 @@ function FileSettings({ entry, frameIndex, update }) {
       </div>
       <p className="gamma-hint">Se usa el mismo motor y validación que Uniformidad NEMA. Las declaraciones pertenecen únicamente a este DICOM.</p>
     </>}
-    {type === 'cor' && <><div className="gamma-fields"><Field label="Límite δCOR (mm) · individual y entre cabezales" value={o.corLimit} min="0" onChange={v => set('corLimit', v)} />
-      <Field label="Límite δAXIAL (mm) · individual y entre cabezales" value={o.axialLimit} min="0" onChange={v => set('axialLimit', v)} /></div><p className="gamma-hint">Método de tres fuentes puntuales. Se conservan las cuatro cotas NEMA y sus comprobaciones de adquisición.</p><CorAcquisitionForm value={o.corDeclaration} onChange={v => set('corDeclaration', v)} /></>}
-    {type === 'tomography' && <><label className="gamma-field"><span>Hallazgos de la revisión tomográfica</span><textarea className="dark-input" rows="4" value={o.tomoObservations} onChange={e => set('tomoObservations', e.target.value)} placeholder="Fantoma, cortes revisados, uniformidad visual, anillos, defectos, resolución/contraste visual y comparación con referencia…" /></label>
+    {type === 'cor' && <><div className="gamma-fields"><Field label="Límite δCOR (mm) · individual y entre cabezales" value={o.corLimit} min="0" step="0.0001" onChange={v => set('corLimit', v)} />
+      <Field label="Límite δAXIAL (mm) · individual y entre cabezales" value={o.axialLimit} min="0" step="0.0001" onChange={v => set('axialLimit', v)} /></div><p className="gamma-hint">Método de tres fuentes puntuales. Se conservan las cuatro cotas NEMA y sus comprobaciones de adquisición.</p><CorAcquisitionForm value={o.corDeclaration} onChange={v => set('corDeclaration', v)} /></>}
+    {type === 'tomography' && <><div className="gamma-fields">
+      <Field label="Uniformidad tomográfica del protocolo (%)" value={o.tomoUniformityPercent} min="0" onChange={v => set('tomoUniformityPercent', v)} />
+      <Field label="Tolerancia de uniformidad tomográfica (%)" value={o.tomoLimitPercent} min="0" onChange={v => set('tomoLimitPercent', v)} />
+      <Field label="Definición de la medida tomográfica" type="text" value={o.tomoUniformityDefinition} onChange={v => set('tomoUniformityDefinition', v)} placeholder="Fórmula, normalización y tamaño de las ROI/VOI del protocolo" />
+      </div><p className="gamma-hint">El Excel fija un máximo del 10 %, pero no define la fórmula. Registra la medida y su definición; el límite no se aplica automáticamente a la curva U3D ni a todos sus diámetros.</p>
+      <label className="gamma-field"><span>Hallazgos de la revisión tomográfica</span><textarea className="dark-input" rows="4" value={o.tomoObservations} onChange={e => set('tomoObservations', e.target.value)} placeholder="Fantoma, cortes revisados, uniformidad visual, anillos, defectos, resolución/contraste visual y comparación con referencia…" /></label>
       <Choice label="Valoración del especialista" value={o.tomoVerdict} onChange={v => set('tomoVerdict', v)}><option value="">Pendiente de revisión</option><option value="Conforme">Conforme según protocolo visual</option><option value="No conforme">No conforme</option></Choice></>}
     {type !== 'unknown' && <>
       <Field label="Protocolo y condiciones (colimador, distancia, ventana, fantoma/reconstrucción)" type="text" value={o.protocol} onChange={v => set('protocol', v)} />
-      {!['uniformity', 'tomography'].includes(type) && <Field label="Procedencia y versión de las tolerancias" type="text" value={o.limitSource} onChange={v => set('limitSource', v)} placeholder="Protocolo del servicio / especificación de fabricante / referencia de aceptación" />}
+      {type !== 'uniformity' && <Field label="Procedencia y versión de las tolerancias" type="text" value={o.limitSource} onChange={v => set('limitSource', v)} placeholder="Protocolo del servicio / especificación de fabricante / referencia de aceptación" />}
       <Field label="Observaciones / responsable de revisión" type="text" value={o.notes} onChange={v => set('notes', v)} />
       {type !== 'uniformity' && <Check label="He revisado la imagen y confirmado que la adquisición corresponde al protocolo de comparación" value={o.verified} onChange={v => set('verified', v)} />}
     </>}
@@ -113,7 +119,7 @@ function RecordResult({ record, detailed = true }) {
     <div className="gamma-result-heading"><h3>{GAMMA_TESTS[record.type]}{record.detector != null ? ` · cabezal ${record.detector}` : ''}{record.axis ? ` · ${record.axis}` : ''}</h3>
       <span className={`gamma-badge ${statusClass(record.status)}`}>{record.status}</span></div>
     <p>{record.reason}</p>
-    {!!record.metrics.length && <div className="gamma-table-scroll"><table><thead><tr><th>Magnitud</th><th>Resultado</th><th>Tolerancia</th></tr></thead><tbody>{record.metrics.map(m => <tr key={m.key}><td>{m.label}</td><td>{fmt(m.value)} {m.unit}</td><td>{m.limit == null ? 'Sin límite' : `${m.operator === 'min' ? '≥' : '≤'} ${fmt(m.limit)} ${m.unit}`}</td></tr>)}</tbody></table></div>}
+    {!!record.metrics.length && <div className="gamma-table-scroll"><table><thead><tr><th>Magnitud</th><th>Resultado</th><th>Tolerancia</th></tr></thead><tbody>{record.metrics.map(m => <tr key={m.key}><td>{m.label}</td><td>{fmt(m.value)} {m.unit}</td><td>{m.limit == null ? 'Sin límite' : `${m.operator === 'min' ? '≥' : '≤'} ${fmt(m.limit, record.type === 'cor' ? 4 : 2)} ${m.unit}`}</td></tr>)}</tbody></table></div>}
     {detailed && record.details?.profiles && <GammaProfiles result={record.details} />}
     {record.type === 'sensitivity' && record.details && <p className="gamma-hint">{fmt(record.details.totalCounts, 0)} cuentas / {fmt(record.details.durationSeconds)} s · tasa neta {fmt(record.details.netCps)} cps · A media {fmt(record.details.meanActivityMBq)} MBq · u estadística {fmt(record.details.statisticalUncertainty)} cps/MBq</p>}
     {record.details?.warnings?.map(w => <p className="gamma-warning" key={w}>{w}</p>)}
@@ -187,6 +193,7 @@ export function GammaWorkspace({ mode }) {
   const records = monthly ? report.records : entries.flatMap(e => e.records || [])
   const pending = entries.some(e => !e.records?.length || e.type === 'unknown')
   const exclusionsNeedReason = entries.some(e => e.included === false && !e.exclusionReason?.trim())
+  const referenceMatches = entries.length > 0 && entries.every(e => matchesMonthlyReference(e.image))
   const canPrepare = !busy && batch.valid && entries.some(e => e.included !== false) && !report.conflicts.length && !exclusionsNeedReason
   const reportImages = entries.filter(e => e.included !== false && e.type === 'tomography').flatMap(e => e.reportImages || [])
   function changeEntries(next) { setEntries(next); setReportVisible(false) }
@@ -220,7 +227,10 @@ export function GammaWorkspace({ mode }) {
   }
   async function setType(entry, type) {
     setBusy(true)
-    try { updateEntry(entry.id, { type, options: initialGammaOptions(entry.image), tomoQuantitative: null,
+    try {
+      const fresh = { ...entry, type, options: initialGammaOptions(entry.image) }
+      const configured = monthly && matchesMonthlyReference(entry.image) ? applyMonthlyReference(fresh) : fresh
+      updateEntry(entry.id, { type, options: configured.options, tomoQuantitative: null,
       ...(type === 'tomography' ? await prepareTomography(entry.buffer) : { tomoSeries: null, tomoError: '', reportImages: [] }) }) }
     finally { setBusy(false) }
     setFrameIndex(0)
@@ -236,9 +246,10 @@ export function GammaWorkspace({ mode }) {
           if (file.size > 128 * 1024 * 1024) throw new Error('El archivo supera 128 MB; exporta una serie más pequeña.')
           const buffer = await file.arrayBuffer(), image = parseGammaDicom(buffer)
           const type = monthly ? classifyGamma(image) : mode
-          next.push({ id, name: file.name, buffer, image, type, included: true, exclusionReason: '',
+          const entry = { id, name: file.name, buffer, image, type, included: true, exclusionReason: '',
             options: initialGammaOptions(image), records: null,
-            ...(type === 'tomography' ? await prepareTomography(buffer) : {}) })
+            ...(type === 'tomography' ? await prepareTomography(buffer) : {}) }
+          next.push(monthly && matchesMonthlyReference(image) ? applyMonthlyReference(entry) : entry)
         } catch (error) { next.push({ id, name: file.name, error: error.message, type: 'unknown', included: true }) }
         await new Promise(resolve => setTimeout(resolve, 0))
       }
@@ -254,8 +265,9 @@ export function GammaWorkspace({ mode }) {
     finally { setBusy(false) }
   }
   async function useReference() {
+    if (!referenceMatches) return
     setBusy(true)
-    try { changeEntries(await calculate(entries.map(e => e.image ? applyMonthlyReference(e) : e))); setMessage('Límites del informe de referencia aplicados. Confirma las condiciones de cada adquisición; no se han copiado resultados.') }
+    try { changeEntries(await calculate(entries.map(applyMonthlyReference))); setMessage('Tolerancias del Excel de Sala 1 restablecidas. Revisa las condiciones de adquisición de cada prueba.') }
     finally { setBusy(false) }
   }
   async function uploadIllustration(file, setter) {
@@ -292,9 +304,14 @@ export function GammaWorkspace({ mode }) {
         <td>{e.error || e.analysisError || (e.records ? [...new Set(e.records.map(r => r.status))].join(' · ') : 'Pendiente')}</td><td><button disabled={busy} aria-label={`Retirar ${e.name}`} onClick={() => { changeEntries(entries.filter(v => v.id !== e.id)); if (selectedId === e.id) { setSelectedId(''); setFrameIndex(0) } }}>Retirar</button></td>
       </tr>)}</tbody></table></div>}
       <div className="gamma-actions"><button className="gamma-primary" disabled={busy || !entries.length || (monthly && !batch.valid)} onClick={run}>{busy ? 'Procesando…' : 'Analizar / actualizar todas las pruebas'}</button>
-        {monthly && <button disabled={busy || !batch.valid} onClick={useReference}>Aplicar límites del informe de referencia</button>}
+        {monthly && <button disabled={busy || !batch.valid || !referenceMatches} onClick={useReference}>Restablecer tolerancias del Excel · Sala 1</button>}
         {!monthly && <button disabled={!records.length || pending || busy} onClick={exportResults}>Descargar resultados JSON</button>}</div>
-      {monthly && <p className="gamma-hint">Referencia: uniformidad 2,5 / 2,7 / 2,9 / 3,7 %; FWHM 7,5 mm; FWTM 13,6 mm; sensibilidad ≥ 202 cpm/µCi; COR y axial 1,20 mm. Son límites del ejemplo, editables y sujetos al protocolo de cada prueba.</p>}
+      {monthly && <details className="gamma-reference"><summary>Tolerancias del Excel · Sala 1 · 2026</summary>
+        <p className="gamma-hint">{MONTHLY_REFERENCE_SOURCE}. Se precargan al reconocer la cámara 1660 en adquisiciones de 2026. Puedes revisar los límites de cada archivo; las condiciones de adquisición requieren tu confirmación.</p>
+        {entries.length > 0 && !referenceMatches && <p className="gamma-warning">El lote no coincide por completo con Sala 1 (1660), año 2026. Revisa las tolerancias para el equipo y periodo cargados.</p>}
+        <div className="gamma-table-scroll"><table><thead><tr><th>Prueba</th><th>Criterio del Excel</th><th>Celdas</th></tr></thead><tbody>{MONTHLY_REFERENCE_ROWS.map(r => <tr key={r.type}><td>{r.label}</td><td>{r.criterion}</td><td>{r.cells}</td></tr>)}</tbody></table></div>
+        <p className="gamma-hint">Se comparan los valores sin redondear. COR: los resúmenes calculan 1,1988 mm; las hojas mensuales muestran 1,2 mm. La correspondencia integral/diferencial sigue las hojas mensuales y «Resumen mensuales».</p>
+      </details>}
       <p role="status" aria-live="polite">{message}</p>
     </section>
     {active?.image && <section className="calc-card gamma-no-print"><h2>{GAMMA_TESTS[active.type]} · {active.image.metadata.description}</h2>
