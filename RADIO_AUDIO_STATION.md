@@ -78,8 +78,14 @@ aplicable; estas pruebas de software no validan un enlace RF.
   grandes diferencias de reloj, FEC, cifrado ni autenticación. CRC detecta errores
   accidentales; no impide suplantación. El contraste de tonos no es SNR calibrado.
 
-No se reproduce la entrada del micrófono. Durante TX y retorno se descarta la
-recepción local para evitar eco. La espera de canal libre exige 600 ms sin audio
+No se reproduce la entrada del micrófono. Durante la reproducción local se
+descarta la recepción. Al terminar el audio, el decodificador vuelve a escuchar
+inmediatamente, incluido el intervalo de retorno VOX: esa espera bloquea la
+siguiente emisión local, pero no la recepción de un acuse. Usar el mismo
+temporizador para ambas cosas podía perder el prefijo de una respuesta temprana
+si las estaciones tenían esperas distintas. El protocolo sigue ignorando el eco
+de su propia sesión. Esto no acorta la retención del VOX de un walkie físico.
+La espera de canal libre exige 600 ms sin audio
 por encima del umbral ni una trama en recepción. Esto no evita colisiones con
 estaciones ocultas y la voz o el ruido pueden aplazar emisiones.
 
@@ -240,6 +246,9 @@ contadores de sincronismo y CRC, captura acotada a diez segundos a 44,1/48 kHz,
 y cancelación sin retención de audio ni reproducción del micrófono.
 Las pruebas del ciclo de vida reproducen suspensión durante el permiso,
 cancelación durante el arranque y parada por suspensión u ocultación posterior.
+También verifican que un acuse coincidente recibido durante la espera posterior
+a TX confirma el mensaje, que un acuse ajeno y el eco propio no lo confirman,
+y que la próxima emisión sigue esperando hasta completar el retorno configurado.
 `npm run test:emergency-radio` verifica la compatibilidad del formato compartido.
 
 `scripts/test-radio-audio-topology.mjs` añade pruebas de cadena de cuatro nodos,

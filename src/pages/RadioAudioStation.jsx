@@ -87,7 +87,7 @@ export default function RadioAudioStation() {
   const canSend = active && !snapshot.conflict && !recording
   const bytes = textBytes(text.trim()).length
   const bar = Math.max(0, Math.min(100, (level.db + 80) / 80 * 100))
-  const state = !active ? 'Detenida' : snapshot.conflict ? 'ID duplicado · emisión bloqueada' : transmitting ? `Emitiendo ${typeLabel(txType)} / retorno a escucha` : recording ? 'Grabando prueba de recepción' : level.receiving ? 'Recibiendo trama' : level.db > config.busyDb ? 'Canal con audio' : 'Escuchando'
+  const state = !active ? 'Detenida' : snapshot.conflict ? 'ID duplicado · emisión bloqueada' : transmitting ? `Emitiendo ${typeLabel(txType)}` : recording ? 'Grabando prueba de recepción' : level.receiving ? 'Recibiendo trama' : level.db > config.busyDb ? 'Canal con audio' : 'Escuchando'
 
   return <div className="ra-station">
     <header className="ra-header"><div><p className="ra-eyebrow">Radioafición · audio real · versión 0.2</p><h1>Estación de audio · VOX</h1>
@@ -175,11 +175,11 @@ export default function RadioAudioStation() {
       <label>Espera de retorno · {config.releaseMs} ms<input type="range" min="400" max="3000" step="100" value={config.releaseMs} disabled={locked} onChange={e => change('releaseMs', Number(e.target.value))} /></label>
       <label>Volumen digital · {Math.round(config.volume * 100)} %<input type="range" min="0.05" max="0.8" step="0.05" value={config.volume} disabled={locked} onChange={e => change('volume', Number(e.target.value))} /></label>
       <label>Canal ocupado por encima de {config.busyDb} dBFS<input type="range" min="-60" max="-15" step="1" value={config.busyDb} disabled={locked} onChange={e => change('busyDb', Number(e.target.value))} /></label></div>
-      <p>El tono previo activa VOX antes de la trama. La espera de retorno debe superar el tiempo que el walkie mantiene la transmisión después del sonido.
+      <p>El tono previo activa VOX antes de la trama. La espera de retorno retrasa la siguiente emisión y debe superar el tiempo que el walkie mantiene la transmisión después del sonido.
         Si falla el acuse, aumenta esa espera en ambos equipos. Si el ambiente mantiene el canal ocupado, ajusta el umbral por encima de su nivel de reposo.
         Ese umbral controla cuándo emitir; no cambia la sensibilidad del decodificador.</p>
       <p>El altavoz de salida se elige en el dispositivo. Se pide captura sin cancelación de eco, supresión de ruido ni ganancia automática, porque pueden alterar los tonos.
-        Durante la emisión y el retorno se bloquea la recepción. Nunca se reproduce el micrófono por el altavoz.</p>
+        La escucha se reactiva al terminar el audio, también durante la espera de retorno, para recibir los acuses. Durante la emisión local se bloquea la recepción. Nunca se reproduce el micrófono por el altavoz.</p>
       {capture && <p className="ra-hint">Captura: {capture.sampleRate} muestras/s. Procesamiento informado por el navegador: eco {String(capture.settings.echoCancellation ?? 'no informado')},
         {' '}ruido {String(capture.settings.noiseSuppression ?? 'no informado')}, ganancia {String(capture.settings.autoGainControl ?? 'no informado')}. {level.rejected || 0} candidatos rechazados por cabecera/CRC.</p>}
     </details>

@@ -12,7 +12,7 @@ export class BrowserRadioAudio {
     this.config = config; this.callbacks = callbacks; this.closed = false; this.active = false
     const epoch = crypto.getRandomValues(new Uint16Array(1))[0]
     this.protocol = new AudioStationProtocol({ ...config, epoch })
-    this.lastEnergy = now(); this.muteUntil = 0; this.source = null; this.receiving = false
+    this.lastEnergy = now(); this.nextTransmitAt = 0; this.source = null; this.receiving = false
     this.recording = false; this.recordingId = 0
   }
   notify() { this.nextNotifyAt = now() + 1; this.callbacks.onChange?.(this.protocol.snapshot(now())) }
@@ -42,11 +42,11 @@ export class BrowserRadioAudio {
       this.capture.port.onmessage = ({ data }) => {
         if (!this.active) return
         if (data.type === 'level') {
-          if (now() < this.muteUntil) return
+          if (this.source) return
           this.receiving = data.receiving
           if (data.db > this.config.busyDb || data.receiving) this.lastEnergy = now()
           this.callbacks.onLevel?.(data)
-        } else if (data.type === 'frame' && now() >= this.muteUntil) {
+        } else if (data.type === 'frame' && !this.source) {
           this.lastEnergy = now(); this.protocol.receive(data.packet, data.quality, now()); this.notify()
         } else if (data.type === 'recording' && this.recording && data.id === this.recordingId) {
           clearTimeout(this.recordingTimer); this.recording = false
@@ -79,7 +79,7 @@ export class BrowserRadioAudio {
     } catch (error) { await this.stop(); throw error }
   }
   tick() {
-    if (!this.active || this.recording || this.context.state !== 'running' || now() < this.muteUntil || this.source) return
+    if (!this.active || this.recording || this.context.state !== 'running' || now() < this.nextTransmitAt || this.source) return
     try {
       const entry = this.protocol.take(now(), now() - this.lastEnergy, this.receiving)
       if (entry || now() >= (this.nextNotifyAt || 0)) this.notify()
@@ -91,18 +91,19 @@ export class BrowserRadioAudio {
     const buffer = this.context.createBuffer(1, audio.length, SAMPLE_RATE); buffer.copyToChannel(audio, 0)
     const source = this.context.createBufferSource(); source.buffer = buffer; source.connect(this.context.destination)
     this.source = source; this.capture.port.postMessage({ type: 'mute', value: true })
-    this.muteUntil = Infinity; this.receiving = false
+    this.nextTransmitAt = Infinity; this.receiving = false
     this.callbacks.onTransmit?.(true, entry.packet.type)
     source.onended = () => {
       if (!this.active || this.source !== source) return
       this.source = null; source.disconnect()
-      this.protocol.finish(entry, now()); this.notify()
-      this.muteUntil = now() + this.config.releaseMs / 1000
-      this.releaseTimer = setTimeout(() => {
-        if (!this.active) return
-        this.capture.port.postMessage({ type: 'mute', value: false }); this.lastEnergy = now()
-        this.callbacks.onTransmit?.(false)
-      }, this.config.releaseMs)
+      const endedAt = now()
+      this.nextTransmitAt = endedAt + this.config.releaseMs / 1000
+      // The VOX guard delays our next transmission, not reception. A peer can
+      // reply before this guard ends; muting capture here loses its ACK prefix.
+      // Local-session echo is already ignored by the protocol.
+      this.capture.port.postMessage({ type: 'mute', value: false }); this.lastEnergy = endedAt
+      this.callbacks.onTransmit?.(false)
+      this.protocol.finish(entry, endedAt); this.notify()
     }
     try { source.start() } catch (error) { this.protocol.finish(entry, now(), false); throw error }
     this.notify()
@@ -119,7 +120,7 @@ export class BrowserRadioAudio {
   setShareTopology(value) { this.protocol.setShareTopology(value); this.notify() }
   recordDiagnostic() {
     if (!this.active || this.context.state !== 'running') throw new Error('Activa la estación antes de grabar.')
-    if (this.recording || this.source || now() < this.muteUntil) throw new Error('Espera a que termine la emisión o la grabación.')
+    if (this.recording || this.source || now() < this.nextTransmitAt) throw new Error('Espera a que termine la emisión o la grabación.')
     if (this.protocol.queue.length || this.protocol.topologyDue !== Infinity || this.protocol.messages.some(m => m.status === 'waitingAck')) throw new Error('Espera a que terminen los envíos pendientes antes de grabar.')
     this.recording = true
     this.capture.port.postMessage({ type: 'record', id: ++this.recordingId })
@@ -136,7 +137,7 @@ export class BrowserRadioAudio {
   stopWithReason(reason) { void this.stop(); this.callbacks.onStopped?.(reason) }
   async stop() {
     if (this.closed) return
-    this.closed = true; this.active = false; clearInterval(this.timer); clearTimeout(this.releaseTimer)
+    this.closed = true; this.active = false; clearInterval(this.timer)
     this.cancelRecording()
     document.removeEventListener('visibilitychange', this.visibilityHandler)
     window.removeEventListener('pagehide', this.pageHandler)
