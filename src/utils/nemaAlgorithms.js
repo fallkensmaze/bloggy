@@ -500,12 +500,12 @@ function dilate4(mask, rows, cols) {
 // invalidMask marks zero analysis pixels and blocks touching exterior padding.
 // Treating a contaminated block as a zero pixel is a deliberate reading of the
 // standard, not a quotation of it, so the neighbour rule applies around it too.
-function applyNemaEdgeRule(data, rows, cols, ufovGeomMask, cfovRect, invalidMask) {
+function applyNemaEdgeRule(data, rows, cols, ufovGeomMask, cfovRect, invalidMask, geometricExterior = false) {
   const bbox = bboxFromMask(ufovGeomMask, rows, cols, 1)
   const cfovSeed = new Uint8Array(rows * cols)
 
   for (let i = 0; i < cfovSeed.length; i++) {
-    cfovSeed[i] = cfovRect[i] && ufovGeomMask[i] && !invalidMask[i] ? 1 : 0
+    cfovSeed[i] = cfovRect[i] && ufovGeomMask[i] && (geometricExterior || !invalidMask[i]) ? 1 : 0
   }
 
   const cfovMean = meanWhere(data, cfovSeed)
@@ -541,8 +541,8 @@ function applyNemaEdgeRule(data, rows, cols, ufovGeomMask, cfovRect, invalidMask
 
   let nInvalid = 0
   for (let i = 0; i < seed.length; i++) {
-    if (!ufovGeomMask[i] || !invalidMask[i]) continue
-    if (!seed[i]) nInvalid++
+    if (!invalidMask[i] || (!geometricExterior && !ufovGeomMask[i])) continue
+    if (!seed[i] && ufovGeomMask[i]) nInvalid++
     seed[i] = 1
   }
 
@@ -587,8 +587,12 @@ function preprocessNema(data, rows, cols, options = {}) {
   const cfovBounds = centralBounds(ufovBounds)
   const cfovRect = makeRectAreaMask(rows, cols, cfovBounds)
   const cfovBBox = bboxFromMask(cfovRect, rows, cols)
-  const invalidMask = options.invalidMask || new Uint8Array(rows * cols)
-  const edge = applyNemaEdgeRule(data, rows, cols, ufovGeom, cfovRect, invalidMask)
+  // The experimental comparison seeds the geometric exterior and zero SUMS.
+  // It deliberately does not propagate partial raw padding through binning.
+  const invalidMask = options.siemensLike
+    ? Uint8Array.from(data, (value, i) => value === 0 || !ufovGeom[i] ? 1 : 0)
+    : options.invalidMask || new Uint8Array(rows * cols)
+  const edge = applyNemaEdgeRule(data, rows, cols, ufovGeom, cfovRect, invalidMask, options.siemensLike)
   const validMask = edge.mask
 
   // The CFOV is 75 % of the linear dimensions of the geometric UFOV. Deriving
@@ -1045,6 +1049,15 @@ export function cropData(data, rows, cols, bbox) {
 }
 
 export function calculateNemaGeometric(rawData, rows, cols, options = {}) {
+  return calculateGeometricField(rawData, rows, cols, options, false)
+}
+
+// Empirical comparison, not Siemens software or a conformity calculation.
+export function calculateSiemensLike(rawData, rows, cols, options = {}) {
+  return calculateGeometricField(rawData, rows, cols, options, true)
+}
+
+function calculateGeometricField(rawData, rows, cols, options, siemensLike) {
   if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows <= 0 || cols <= 0
       || rawData.length !== rows * cols) {
     throw new Error('Dimensiones o longitud de la imagen invalidas')
@@ -1100,6 +1113,7 @@ export function calculateNemaGeometric(rawData, rows, cols, options = {}) {
       ufovSizeMm: options.autoUfovFromIsoline ? null : ufovSizeMm,
       pixelSizeMm: options.autoUfovFromIsoline ? null : pixelSizeMm,
       autoFraction: options.autoFraction ?? 0.5,
+      siemensLike,
       invalidMask: reduced.zeroContaminated,
       exteriorPadding: reduced.exteriorPadding,
       interiorZero: reduced.interiorZero,
@@ -1109,6 +1123,7 @@ export function calculateNemaGeometric(rawData, rows, cols, options = {}) {
   } catch (err) {
     prep = preprocessNema(reduced.data, reduced.rows, reduced.cols, {
       autoFraction: options.autoFraction ?? 0.5,
+      siemensLike,
       invalidMask: reduced.zeroContaminated,
       exteriorPadding: reduced.exteriorPadding,
       interiorZero: reduced.interiorZero
@@ -1126,6 +1141,13 @@ export function calculateNemaGeometric(rawData, rows, cols, options = {}) {
 
   const metadata = {
     ...prep.metadata,
+    ...(siemensLike ? {
+      method: 'siemens_like_experimental',
+      methodVersion: 'siemens-like-experimental/2026.10',
+      experimental: true,
+      conformityApplicable: false,
+      zeroPolicy: 'Ceros de la matriz sumada y exterior del UFOV geometrico; excluir una vez los cuatro vecinos directos. No propagar ceros parciales del bloque original.'
+    } : {}),
     inputShape: [rows, cols],
     resampledShape: [reduced.rows, reduced.cols],
     blockSize,
@@ -1143,8 +1165,8 @@ export function calculateNemaGeometric(rawData, rows, cols, options = {}) {
   }
 
   return buildResult(
-    'nema_geometric',
-    'NEMA geometrico',
+    siemensLike ? 'siemens_like_experimental' : 'nema_geometric',
+    siemensLike ? 'Comparacion Siemens (experimental)' : 'NEMA geometrico',
     reduced.rows,
     reduced.cols,
     reduced.data,
@@ -1219,6 +1241,7 @@ export function calculatePylinacLike(rawData, rows, cols, options = {}) {
     inputShape: [rows, cols],
     resampledShape: [reduced.rows, reduced.cols],
     binSize,
+    pixelSpacingResampledMm: options.pixelSpacingMm?.map((v) => v * binSize) || null,
     cropInfo: reduced.cropInfo,
     thresholdRatio,
     thresholdValue,
@@ -1269,6 +1292,7 @@ export function calculateNEMAComparison(rawData, rows, cols, options = {}) {
 
   let geometric
   let pylinac
+  let siemens
 
   try {
     geometric = calculateNemaGeometric(inputData, inputRows, inputCols, commonOptions)
@@ -1282,6 +1306,12 @@ export function calculateNEMAComparison(rawData, rows, cols, options = {}) {
     pylinac = emptyErrorResult('pylinac_like', err)
   }
 
+  try {
+    siemens = calculateSiemensLike(inputData, inputRows, inputCols, commonOptions)
+  } catch (err) {
+    siemens = emptyErrorResult('siemens_like_experimental', err)
+  }
+
   return {
     input: {
       data: inputData,
@@ -1292,7 +1322,8 @@ export function calculateNEMAComparison(rawData, rows, cols, options = {}) {
       activeCrop
     },
     geometric,
-    pylinac
+    pylinac,
+    siemens
   }
 }
 
