@@ -62,7 +62,6 @@
   body:has(.gamma-print-ready) .sidebar, body:has(.gamma-print-ready) .topbar, .gamma-no-print { display: none !important; }
   body:has(.gamma-print-ready), body:has(.gamma-print-ready) .main-content { background: white !important; color: #111 !important; margin: 0 !important; padding: 0 !important; }
   .gamma-print-ready, .gamma-monthly-report { max-width: none !important; margin: 0 !important; padding: 0 !important; box-shadow: none !important; border: 0 !important; background: white !important; }
-  .gamma-monthly-report * { color: #111 !important; }
   .gamma-result { break-inside: avoid; border-color: #ccc; padding: 12px; }
   .gamma-qc th, .gamma-qc td { border-color: #ccc; }
 }

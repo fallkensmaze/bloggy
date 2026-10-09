@@ -4,6 +4,7 @@ import { Line } from 'react-chartjs-2'
 import { loadTomoDicomSeries } from '../utils/tomoDicom.js'
 import { diameterRange, makeTomoDemo, measureSphere, proposeCylinder, tomoResultsCsv, validateCylinder } from '../utils/tomoUniformity.js'
 import { TomoGeometry3D, TomoVolumeViews, TOMO_COLORS } from '../components/TomoVolumeViews.jsx'
+import { captureTomoReportViews } from '../utils/gammaTomoReport.js'
 import '../styles/gamma-qc.css'
 import '../styles/tomo-uniformity.css'
 
@@ -34,7 +35,7 @@ function curveData(result, normalized) {
   ].map(d => ({ ...d, borderWidth: 2, pointRadius: d.pointRadius ?? 4, tension: 0, spanGaps: false })) }
 }
 
-export default function TomoUniformity() {
+export default function TomoUniformity({ embeddedSeries = null, savedResult = null, onResult, onCapture } = {}) {
   const [series, setSeries] = useState(null), [form, setForm] = useState(null), [range, setRange] = useState(defaultRange)
   const [confirmed, setConfirmed] = useState(false), [cursor, setCursor] = useState([0, 0, 0])
   const [probeDiameter, setProbeDiameter] = useState('20'), [probes, setProbes] = useState([])
@@ -58,8 +59,23 @@ export default function TomoUniformity() {
   ], [probes, selected, cursor, probeDiameter])
 
   useEffect(() => () => { epoch.current++; worker.current?.terminate() }, [])
+  useEffect(() => {
+    if (!embeddedSeries) return
+    installSeries(embeddedSeries)
+    if (savedResult) {
+      const c = savedResult.config.cylinder, d = savedResult.config.diametersMm
+      setForm(Object.fromEntries(Object.entries(c).map(([key, v]) => [key,
+        String(['cx', 'cy', 'firstSlice', 'lastSlice'].includes(key) ? v + 1 : v)])))
+      setRange({ min: String(d[0]), max: String(d.at(-1)), step: String(d[1] - d[0] || 10),
+        stride: String(savedResult.config.stride), centerMode: savedResult.config.centerMode, notes: savedResult.config.notes || '' })
+      setConfirmed(true); setResult(savedResult); setSelectedDiameter(savedResult.results.find(r => r.valid)?.diameterMm)
+      setProbes(savedResult.manualSpheres || [])
+      nextProbe.current = Math.max(0, ...(savedResult.manualSpheres || []).map(p => p.id)) + 1
+      setCursor([Math.round(c.cx), Math.round(c.cy), Math.floor((c.firstSlice + c.lastSlice) / 2)])
+    }
+  }, [embeddedSeries])
   function stop() { epoch.current++; worker.current?.terminate(); worker.current = null; setBusy(false); setFraction(null) }
-  function invalidate() { stop(); setResult(null); setSelectedDiameter(null); setStatus(''); setError(''); setProbeError('') }
+  function invalidate() { stop(); setResult(null); onResult?.(null); setSelectedDiameter(null); setStatus(''); setError(''); setProbeError('') }
   function updateForm(key, value) { invalidate(); setConfirmed(false); setProbes([]); setForm(f => ({ ...f, [key]: value })) }
   function updateRange(key, value) { invalidate(); setRange(r => ({ ...r, [key]: value })) }
 
@@ -102,7 +118,7 @@ export default function TomoUniformity() {
         else {
           task.terminate(); worker.current = null; setBusy(false); setFraction(null)
           if (data.type === 'error') { setError(data.message); setStatus('') }
-          else { setResult(data.result); setSelectedDiameter(data.result.results.find(r => r.valid).diameterMm); setStatus('Barrido 3D terminado.') }
+          else { setResult(data.result); setSelectedDiameter(data.result.results.find(r => r.valid).diameterMm); setStatus('Barrido 3D terminado.'); onResult?.({ ...data.result, sourceWarnings: series.warnings, manualSpheres: probes }) }
         }
       }
       task.onerror = () => { if (id === epoch.current) { stop(); setError('No se ha podido completar el cálculo. Reduce el volumen o el rango de diámetros.'); setStatus('') } }
@@ -116,8 +132,13 @@ export default function TomoUniformity() {
       const p = measureSphere(series, cylinder, cursor, numeric(probeDiameter))
       if (probes.length >= 20) throw new Error('Puedes conservar hasta 20 esferas manuales. Retira alguna para añadir otra.')
       const id = nextProbe.current++
-      setProbes(old => [...old, { ...p, id }]); setProbeError('')
+      changeProbes([...probes, { ...p, id }]); setProbeError('')
     } catch (e) { setProbeError(e.message) }
+  }
+
+  function changeProbes(next) {
+    setProbes(next)
+    if (result) onResult?.({ ...result, sourceWarnings: series.warnings, manualSpheres: next })
   }
 
   function locate(row, which) { setSelectedDiameter(row.diameterMm); setProbeDiameter(String(row.diameterMm)); setCursor([...row[which].center]) }
@@ -126,12 +147,12 @@ export default function TomoUniformity() {
     coordinateConvention: 'Centros [columna,fila,corte] desde 0. La interfaz muestra índices desde 1.',
     visualReview: 'Revisar los cortes originales; el resultado cuantitativo no certifica conformidad.' })
 
-  return <div className="page-body gamma-qc tomo-qc">
+  return <div className={`${embeddedSeries ? 'gamma-tomo-embedded' : 'page-body'} gamma-qc tomo-qc`}>
     <div className="page-header"><h1 className="page-title">Uniformidad tomográfica 3D</h1>
       <p className="page-subtitle">SPECT · esferas móviles dentro de un cilindro uniforme</p></div>
     <div className="tomo-intro"><span className="gamma-badge pending">Método complementario</span>
       <p>Busca las regiones esféricas con mayor y menor <strong>valor medio</strong> en el volumen reconstruido, para distintos diámetros. Cada esfera integra vóxeles de varios cortes.</p></div>
-    <section className="calc-card">
+    {!embeddedSeries && <section className="calc-card">
       <h2>1. Cargar el volumen reconstruido</h2>
       <label className={`gamma-upload ${busy ? 'gamma-upload-busy' : ''}`}>
         <i className="bi bi-stack" aria-hidden="true" /><strong>DICOM SPECT reconstruido</strong>
@@ -142,7 +163,7 @@ export default function TomoUniformity() {
       </label>
       <div className="gamma-actions"><button disabled={busy} onClick={() => { invalidate(); installSeries(makeTomoDemo()) }}>Probar con cilindro sintético</button></div>
       <p className="gamma-hint">Procesamiento local en esta pestaña. La entrada es una reconstrucción 3D; las proyecciones angulares no son cortes espaciales.</p>
-    </section>
+    </section>}
     {error && <div className="gamma-validation fail" role="alert">{error}</div>}
     <div role="status" aria-live="polite" className="tomo-status">{status}</div>
     {fraction !== null && <progress max="1" value={fraction} aria-label="Progreso del barrido" />}
@@ -169,6 +190,10 @@ export default function TomoUniformity() {
       <section className="calc-card"><h2>3. Explorar y colocar esferas</h2>
         <div className="tomo-legend"><span style={{ color: TOMO_COLORS.cylinder }}>Cilindro</span><span style={{ color: TOMO_COLORS.margin }}>Interior tras el margen</span><span style={{ color: TOMO_COLORS.minimum }}>Mínimo</span><span style={{ color: TOMO_COLORS.maximum }}>Máximo</span><span style={{ color: TOMO_COLORS.manual }}>Manuales</span><span>Blanco: cursor</span></div>
         <TomoVolumeViews series={series} cylinder={cylinder} cursor={cursor} onCursor={setCursor} spheres={spheres} windowMax={windowMax} showOverlays={showOverlays} />
+        {onCapture && <div className="gamma-actions"><button disabled={busy} onClick={() => {
+          try { validateCylinder(series, cylinder); onCapture(captureTomoReportViews(series, cursor, windowMax, cylinder)); setStatus('Los tres planos seleccionados se han añadido al informe mensual.') }
+          catch (e) { setError(e.message) }
+        }}>Usar estos tres cortes en el informe</button></div>}
         <div className="tomo-explore"><div>
           <p className="gamma-hint">Pulsa sobre un corte o mueve sus deslizadores. Los contornos son las intersecciones reales de las esferas 3D con cada plano.</p>
           <div className="tomo-fields">
@@ -182,7 +207,7 @@ export default function TomoUniformity() {
           <p className="gamma-hint">La ventana solo cambia la imagen mostrada. Se conserva la intensidad original para los cálculos, incluidos los valores negativos.</p>
         </div><TomoGeometry3D series={series} cylinder={cylinder} spheres={spheres} /></div>
         {probes.length > 0 && <div className="gamma-table-scroll"><table><thead><tr><th>Esfera</th><th>Diámetro</th><th>Centro X, Y, Z</th><th>Media ({series.units})</th><th>Vóxeles</th><th>Acciones</th></tr></thead><tbody>
-          {probes.map(p => <tr key={p.id}><td>{p.id}</td><td>{p.diameterMm} mm</td><td>{position(p.center)}</td><td>{fmt(p.mean, 4)}</td><td>{p.voxelCount}</td><td><button onClick={() => { setCursor(p.center); setProbeDiameter(String(p.diameterMm)) }}>Ver</button> <button onClick={() => setProbes(ps => ps.filter(v => v.id !== p.id))}>Retirar</button></td></tr>)}
+          {probes.map(p => <tr key={p.id}><td>{p.id}</td><td>{p.diameterMm} mm</td><td>{position(p.center)}</td><td>{fmt(p.mean, 4)}</td><td>{p.voxelCount}</td><td><button onClick={() => { setCursor(p.center); setProbeDiameter(String(p.diameterMm)) }}>Ver</button> <button onClick={() => changeProbes(probes.filter(v => v.id !== p.id))}>Retirar</button></td></tr>)}
         </tbody></table></div>}
       </section>
       <section className="calc-card"><h2>4. Barrido automático por diámetro</h2>

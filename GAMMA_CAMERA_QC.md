@@ -58,7 +58,7 @@ Referencia: IAEA HHS 6 §2.3.9. La integración temporal exacta es una implement
 
 La lista de pruebas esperadas contiene uniformidad, sensibilidad y resolución X/Y por cabezal, COR y revisión tomográfica. Se puede indicar 1, 2 o 3 cabezales. Un informe incompleto se puede imprimir como incompleto; no recibe un estado conforme. Se exporta JSON con medidas, parámetros, tolerancias, fecha, equipo y versiones, y una vista de impresión/PDF.
 
-La revisión tomográfica muestra los frames NM y permite anotar protocolo, hallazgos y valoración del especialista. No calcula todavía índices tomográficos de fantoma ni reconstruye proyecciones. La conformidad visual exige texto y confirmación del usuario. Debe validarse con una adquisición reconstruida representativa antes de introducir un protocolo cuantitativo específico.
+La revisión tomográfica muestra los frames NM y permite anotar protocolo, hallazgos y valoración del especialista. El volumen se valida también con el lector estricto `tomoDicom.js`; las proyecciones no se aceptan como cortes. Integra la aplicación de esferas 3D, sin reconstruir proyecciones. La conformidad visual exige texto y confirmación del usuario y es independiente del índice cuantitativo complementario.
 
 El botón «Preparar imagen y consulta» descarga un mosaico PNG de hasta doce frames (incluye el seleccionado), con escala lineal común y números de frame, y copia una consulta orientativa. El usuario abre ChatGPT y adjunta el PNG. No hay envío automático, clave ni llamada a OpenAI desde el navegador. El mosaico es un apoyo: no sustituye revisar el resto de cortes.
 
@@ -95,3 +95,66 @@ radio y reescalado, el recentrado por vista y el rechazo de rotaciones mezcladas
 El visor COR permite comprobar los centroides y ROI. Si se editan las condiciones,
 el resultado se invalida y se recalcula con «Analizar / actualizar todas las pruebas».
 El JSON conserva los centroides y la versión COR junto con los datos de adquisición.
+
+### Informe mensual gamma-qc-2.0
+
+El resumen reproduce los cinco bloques del informe facilitado: uniformidad intrínseca
+(UDCC, UDCT, UICC, UICT), resolución FWHM/FWTM con X, Y y media, sensibilidad,
+cuatro cotas COR y revisión tomográfica con tres planos. UDCC y UDCT son el máximo
+de las dos direcciones diferenciales en CFOV y UFOV; una dirección ausente no se
+oculta mediante un máximo parcial. Se corrige la asociación de claves DU a sus
+límites (DUvertUfov → DUufov, DUvertCfov → DUcfov).
+
+«Aplicar límites del informe de referencia» es una acción explícita: configura los
+límites del ejemplo de agosto 2026, sin copiar resultados, actividades, protocolos
+ni confirmaciones de adquisición. No cambia el píxel de análisis NEMA. Este se
+revisa por DICOM (Auto o binning hacia 78 × 78); los números geométricos no se
+presentan como equivalentes al procesamiento propietario de Siemens.
+
+**Unidades de sensibilidad:** el 202 del ejemplo carece de unidad impresa, pero
+coincide con la especificación Siemens Symbia LEHR a 10 cm, **202 cpm/µCi**,
+equivalente a **90,99099099 cps/MBq**. La equivalencia exacta es
+1 cps/MBq = 2,22 cpm/µCi. Se añade comparación por mínimo absoluto, además de
+desviación respecto a referencia. Resultado y límite usan la misma unidad elegida.
+Cambiar de unidad borra los valores de referencia/límite de ese cabezal para
+evitar reinterpretar el mismo número. El cálculo y su incertidumbre estadística
+siguen almacenados internamente en cps/MBq.
+
+Fuente del fabricante:
+https://www.siemens-healthineers.com/es/refurbished-systems-medical-imaging-and-therapy/ecoline-refurbished-systems/molecular-imaging-ecoline/symbia-intevo-eco
+
+**Resolución:** el resumen permite comparar la media aritmética X/Y, como el
+ejemplo, o cada eje por separado. Para la media se requieren ambas medidas,
+límites coincidentes, procedencia/protocolo y verificación de ambas adquisiciones.
+Una anchura ausente no se promedia. El JSON y el anexo conservan las medidas y
+evaluaciones individuales y explican cuándo el criterio del resumen es distinto.
+
+**Repeticiones:** todas las imágenes se validan y analizan. Dos resultados para
+la misma prueba/cabezal/eje bloquean la preparación del resumen; no se elige el
+más reciente ni el mejor automáticamente. «Incluir» permite excluir una adquisición
+del resumen indicando un motivo; la fecha, tipo, archivo y motivo permanecen en
+JSON y en el anexo. Los archivos excluidos siguen pasando la validación de cámara,
+mes, legibilidad y duplicados SOP. Los informes incompletos pueden prepararse con
+sus ausencias y errores explícitos; las repeticiones ambiguas deben resolverse.
+
+**Tomografía:** se proponen tres planos centrales recortados al cilindro detectado.
+En «Explorar los tres planos» se pueden cambiar posiciones, ventana y geometría y
+capturarlos para el informe. Se etiquetan XY/XZ/YZ nativos, sin inventar planos
+anatómicos. El mismo worker de la aplicación 3D calcula la curva y la incorpora
+al JSON y a un anexo con tabla y gráfica. Cambiar geometría/parámetros elimina el
+resultado anterior y exige recalcular; el índice no altera el veredicto visual.
+
+La cabecera, sala, número de serie, responsable y observaciones son editables. Se
+puede aportar un logotipo y una imagen de QC diario PNG/JPEG, exclusivamente en
+memoria. La impresión A4 usa una hoja de resumen para el caso de dos cabezales y
+notas breves, seguida de trazabilidad opcional y del anexo cuantitativo cuando exista.
+Notas largas o más cabezales pueden ocupar más páginas. No se incorporan informes,
+logotipos privados, DICOM ni capturas reales al repositorio.
+
+Verificación: `test:gamma` incluye `test-gamma-monthly.mjs`. La variable opcional
+`GAMMA_MONTHLY_FIXTURE_DIR=/ruta/local` prueba un lote mensual completo sin copiarlo
+al repositorio. Se ha comprobado localmente el lote de siete DICOM aportado, con
+dos COR, ambos ejes de resolución y una reconstrucción 128 × 128 × 49. La prueba
+en navegador cubre importación, selección COR, worker 3D, invalidación, JSON y
+maquetación PDF. La verificación informática no establece una nueva referencia
+clínica ni permite calcular sensibilidad sin la actividad medida.

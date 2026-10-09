@@ -1,0 +1,74 @@
+.gamma-monthly-report { color: #172d43; background: #e5eaf0; padding: 24px; border-radius: 8px; margin-top: 24px; }
+.gamma-qc .gamma-report-sheet { background: #fff; max-width: 800px; margin: 0 auto 24px; padding: 32px 36px; font: 12px/1.4 Arial, sans-serif; box-shadow: 0 2px 12px #0001; overflow-wrap: anywhere; }
+.gamma-qc .gamma-report-header { display: flex; align-items: center; justify-content: space-between; gap: 15px; color: #087eac; padding-bottom: 15px; border-bottom: 2px solid #1381ad; }
+.gamma-qc .gamma-report-header img { max-width: 150px; max-height: 55px; object-fit: contain; }
+.gamma-qc .gamma-report-header strong { font-size: 14px; display: block; }
+.gamma-qc .gamma-report-header span { font-size: 10px; display: block; }
+.gamma-qc .gamma-report-header > span { text-align: right; }
+.gamma-qc .gamma-report-title, .gamma-qc .gamma-report-equipment, .gamma-qc .gamma-report-verdict { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.gamma-qc .gamma-report-title { margin-top: 16px; }
+.gamma-qc .gamma-report-title h1, .gamma-qc .gamma-report-annex h1 { font: bold 19px/1.2 Arial, sans-serif; margin: 0 0 10px; }
+.gamma-qc .gamma-report-title > strong { color: #687685; text-transform: capitalize; white-space: nowrap; }
+.gamma-qc .gamma-report-equipment h2 { font-size: 15px; margin: 0; }
+.gamma-qc .gamma-report-equipment > strong { font-size: 11px; }
+.gamma-qc .gamma-report-verdict { border: 1px solid #d7e1eb; border-radius: 4px; padding: 8px 10px; margin-top: 12px; font-size: 10px; }
+.gamma-qc .gamma-report-block { margin-top: 13px; }
+.gamma-qc .gamma-report-block > h2 { margin: 0 0 7px; padding: 4px 10px; background: #2f74b5; color: white; text-transform: uppercase; font-size: 11px; letter-spacing: .35px; }
+.gamma-qc .gamma-report-sheet p { margin: 6px 0; font-size: inherit; line-height: inherit; }
+.gamma-qc .gamma-report-sheet table { font-size: 11px; width: 100%; border-collapse: collapse; text-align: center; margin-top: 6px; }
+.gamma-qc .gamma-report-sheet th, .gamma-qc .gamma-report-sheet td { padding: 4px 7px; border: 1px solid #a8bacd; color: #172d43; vertical-align: middle; }
+.gamma-qc .gamma-report-sheet th { background: #dce7f4; font-weight: 600; }
+.gamma-qc .gamma-report-sheet td { background: #fffaf0; }
+.gamma-qc .gamma-report-sheet td small { margin: 1px 0 0; font-size: 9px; color: #53667b; display: block; }
+.gamma-qc .gamma-report-sheet caption { background: #dce7f4; color: #172d43; font-weight: bold; padding: 4px; }
+.gamma-qc .gamma-report-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.gamma-qc .gamma-report-sheet .gamma-report-note { font-size: 9px; color: #526575; line-height: 1.4; margin-top: 5px; }
+.gamma-qc .gamma-report-state { font-weight: bold; }
+.gamma-qc .gamma-report-state.is-fail, .gamma-qc .gamma-report-exceeded { color: #b2172d; font-weight: bold; }
+.gamma-qc .gamma-report-state.is-pass { color: #21633b; }
+.gamma-qc .gamma-report-state.is-pending, .gamma-qc .gamma-report-pending { color: #855507; }
+.gamma-qc .gamma-report-sheet .gamma-report-cor { max-width: 420px; }
+.gamma-qc .gamma-report-observation { font-style: italic; white-space: pre-wrap; }
+.gamma-qc .gamma-report-images { display: flex; gap: 14px; align-items: flex-start; margin: 10px 0 5px; }
+.gamma-qc .gamma-report-images figure { flex: 1; min-width: 0; margin: 0; text-align: center; }
+.gamma-qc .gamma-report-images img { max-width: 100%; height: 105px; max-height: 115px; object-fit: contain; background: #000; }
+.gamma-qc .gamma-report-images figcaption { font-size: 9px; margin-top: 3px; }
+.gamma-qc .gamma-report-sheet footer { margin-top: 14px; border-top: 1px solid #b7c8d8; padding-top: 7px; font-size: 9px; color: #526575; }
+.gamma-qc .gamma-report-conclusion { white-space: pre-wrap; }
+.gamma-qc .gamma-report-trace { border-bottom: 1px solid #d7e1eb; padding-bottom: 10px; margin: 16px 0; }
+.gamma-qc .gamma-report-trace h3 { font-size: 13px; margin: 0 0 6px; }
+.gamma-qc .gamma-report-trace p, .gamma-qc .gamma-report-trace li { font-size: 10px; }
+.gamma-qc .gamma-report-trace ul { padding-left: 18px; }
+.gamma-qc .gamma-report-curve { width: 100%; max-height: 280px; }
+.gamma-tomo-embedded { padding: 0; max-width: none; }
+.gamma-tomo-embedded .page-header { margin-top: 25px; }
+.gamma-tomo-embedded .page-title { font-size: 1.5rem; }
+.gamma-file-excluded { opacity: .7; }
+@media (max-width: 600px) {
+  .gamma-monthly-report { padding: 8px; }
+  .gamma-qc .gamma-report-sheet { padding: 16px 12px; }
+  .gamma-qc .gamma-report-title, .gamma-qc .gamma-report-equipment, .gamma-qc .gamma-report-verdict { flex-direction: column; gap: 4px; }
+  .gamma-qc .gamma-report-pair { grid-template-columns: 1fr; }
+  .gamma-qc .gamma-report-header > span { display: none; }
+  .gamma-qc .gamma-report-sheet th, .gamma-qc .gamma-report-sheet td { padding: 4px; font-size: 10px; }
+}
+@media print {
+  @page { size: A4 portrait; margin: 10mm; }
+  .gamma-monthly-report { padding: 0 !important; background: white; }
+  .gamma-monthly-report * { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .gamma-qc .gamma-report-sheet { padding: 0; margin: 0; max-width: none; box-shadow: none; font-size: 8.5pt; line-height: 1.25; }
+  .gamma-qc .gamma-report-header { padding-bottom: 8px; }
+  .gamma-qc .gamma-report-title { margin-top: 10px; }
+  .gamma-qc .gamma-report-title h1 { font-size: 13pt; margin-bottom: 7px; }
+  .gamma-qc .gamma-report-sheet p { margin: 4px 0; }
+  .gamma-qc .gamma-report-verdict { padding: 5px 8px; margin-top: 7px; }
+  .gamma-qc .gamma-report-block { margin-top: 6px; break-inside: avoid; }
+  .gamma-qc .gamma-report-block > h2 { padding: 3px 8px; font-size: 8.5pt; margin-bottom: 4px; }
+  .gamma-qc .gamma-report-sheet table { font-size: 8pt; }
+  .gamma-qc .gamma-report-sheet th, .gamma-qc .gamma-report-sheet td { padding: 2px 6px; }
+  .gamma-qc .gamma-report-sheet .gamma-report-note, .gamma-qc .gamma-report-sheet footer { font-size: 7pt; }
+  .gamma-qc .gamma-report-images img { height: 22mm; max-height: 22mm; }
+  .gamma-qc .gamma-report-annex { break-before: page; padding-top: 3mm; }
+  .gamma-qc .gamma-report-trace { break-inside: avoid; }
+  .gamma-qc .gamma-report-trace p, .gamma-qc .gamma-report-trace li { font-size: 8pt; }
+}
