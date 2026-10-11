@@ -39,6 +39,7 @@ import GammaCameraQC, { GammaMonthly } from './pages/GammaCameraQC'
 import MccAnalyzer from './pages/MccAnalyzer'
 
 const ShieldingPage = lazy(() => import('./pages/ShieldingPage'))
+const VimQuest = lazy(() => import('./pages/VimQuest'))
 
 function App() {
   return (
@@ -60,6 +61,7 @@ function App() {
         <Route path="acr-qc" element={<AcrQcPage />} />
         <Route path="comparar-protocolos-rm" element={<MriProtocolCompare />} />
         <Route path="lector" element={<LectorRapido />} />
+        <Route path="vim-quest" element={<Suspense fallback={<p role="status">Preparando la aventura…</p>}><VimQuest /></Suspense>} />
         <Route path="informe-tanques" element={<InformeTanques />} />
         <Route path="pet-nema-fraccionamiento" element={<PetNemaFractionation />} />
         <Route path="pet-nema-analisis" element={<PetNemaAnalysis />} />

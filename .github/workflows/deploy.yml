@@ -42,6 +42,9 @@ jobs:
       - name: Test Morse learning
         run: npm run test:morse
 
+      - name: Test Vim Quest
+        run: npm run test:vim
+
       - name: Test emergency radio simulation
         run: npm run test:emergency-radio
 

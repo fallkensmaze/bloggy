@@ -29,5 +29,6 @@ export const NAV_LINKS = [
   { href: '/radioaficionado', icon: 'bi-mortarboard', label: 'Examen radio', section: 'Radioafición', admin: true },
   { href: '/lector', icon: 'bi-speedometer2', label: 'Lector rápido', section: 'Herramientas' },
   { href: '/blindajes', icon: 'bi-bounding-box', label: 'Taller de blindajes', section: 'Herramientas', admin: true },
-  { href: '/quizzes', icon: 'bi-trophy', label: 'Quizzes', section: 'Juegos' }
+  { href: '/quizzes', icon: 'bi-trophy', label: 'Quizzes', section: 'Juegos' },
+  { href: '/vim-quest', icon: 'bi-terminal', label: 'Vim Quest', section: 'Juegos' }
 ]
