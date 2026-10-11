@@ -11,6 +11,7 @@ npm run preview   # Preview production build locally
 npm run audit:public    # Reject sensitive tracked files or public artifacts
 npm run test:anon      # DICOM anonymizer regression suite (PHI, conformance, RT references)
 npm run test:morse     # Morse trainer assertions (CW timing, Koch decks, quiz invariants)
+npm run test:vim       # Vim Quest missions, editor semantics, grading and local progress
 npm run test:nema      # NEMA NU 1 intrinsic uniformity (edge rule, CFOV, DICOM geometry, states)
 npm run test:radio     # Radio-exam XML parsing and quiz building
 npm run test:emergency-radio # Per-receiver audio, hidden terminals, routing and ACKs
@@ -134,6 +135,7 @@ Routes inside `<Layout />` use the shared sidebar and mobile topbar:
 - `/rt-anonymizer` - in-browser anonymizer for complete radiotherapy DICOM studies
 - `/q-codes` - amateur radio Q-code study quiz
 - `/morse` - Morse code (CW) trainer
+- `/vim-quest` - progressive Vim editing game with 34 missions and free practice
 - `/fdtd-simulator` - 3D FDTD antenna simulator powered by Rust/WebAssembly
 - `/red-emergencia` - experimental emergency-radio network and per-receiver audio simulation
 - `/estacion-radio` - client-side microphone/speaker BFSK station with VOX and direct acknowledgments
@@ -192,6 +194,8 @@ Firestore collections:
 
 - `src/pages/GammaCameraQC.jsx`, `src/components/GammaImage.jsx`, `src/utils/gamma*.js` — planar line-source resolution, sensitivity and the private monthly report. Read `GAMMA_CAMERA_QC.md`. Never start monthly analysis until every DICOM is readable and the acquisition month and camera identity match; do not substitute export dates or silently split a batch. Keep per-file declarations and per-frame count duration/background. Missing activity, limits, acquisition checks or tomography review cannot yield conformity. The report uses the existing owner login and memory-only data; no private Firestore collection or browser persistence is added. The ChatGPT helper is manual image/prompt preparation, not an API call. Run `test:gamma`, `test:nema`, `test:cor` after changing the batch adapters.
 - `src/utils/navigation.js` — common categorized catalog for desktop and mobile; private report and radio exam links require the existing admin session.
+
+- `src/pages/VimQuest.jsx`, `src/utils/vimQuest.js`, `src/utils/vimQuestEditor.js` — browser-local Vim game. Read `VIM_QUEST.md`; run `test:vim` and `build:web`. Keep actual Vim semantics, isolated mission histories/registers, exact goals, and progress-only persistence. Inserted text must not satisfy command requirements. The jsdom suite does not validate browser layout or native mobile keyboards.
 
 - `src/pages/Blog.jsx` - paginated Firestore feed. Renders Markdown, code highlighting and math.
 - `src/pages/UniformidadGamma.jsx` - DICOM flood upload, NEMA NU 1-2007 calculation, Pylinac-like
