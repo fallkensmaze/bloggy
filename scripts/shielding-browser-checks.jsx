@@ -145,6 +145,62 @@ const assertEmpty = () => {
   assert(!document.querySelector('[data-entity]'), 'el trabajo no sobrevive a la sesión')
   assert(!document.querySelector('.sh-canvas-background'), 'el plano no se recupera después de salir')
 }
+const calculationInput = label => [...document.querySelectorAll('input')].find(el => el.getAttribute('aria-label') === label)
+const selectValue = async (label, value) => {
+  const element = [...document.querySelectorAll('select')].find(el => el.getAttribute('aria-label') === label)
+  assert(element, `No encuentro selector: ${label}`)
+  await act(async () => { element.value = value; element.dispatchEvent(new Event('change', { bubbles: true })) })
+}
+const ncrpResult = () => [...document.querySelectorAll('.shielding-method-result')].find(el => el.querySelector('h4')?.textContent === 'NCRP 147')
+const ncrpTotal = () => ncrpResult()?.querySelector('dd:last-of-type strong')?.textContent
+const defaultCalculationRegression = async () => {
+  stage('dibujar y calcular con valores NCRP iniciales')
+  await click('Orientación del equipo')
+  await point(.4, .4); await point(.65, .4)
+  assert(document.querySelector('.sh-canvas-beam path'), 'el haz se dibuja sin escribir una apertura')
+  assert(document.querySelector('[data-handle="patient"]'), 'el segundo clic coloca el paciente')
+  // Dragging the initially linked patient also rotates the direction; no hidden
+  // stale target can leave the new patient outside the beam.
+  const handle = document.querySelector('[data-handle="patient"]')
+  const from = { x: Number(handle.getAttribute('cx')), y: Number(handle.getAttribute('cy')) }
+  await entityPointer(handle, from, { x: from.x, y: from.y + .2 })
+  const axis = document.querySelector('.sh-canvas-beam line')
+  samePoint({ x: Number(axis.getAttribute('x2')), y: Number(axis.getAttribute('y2')) },
+    { x: from.x, y: from.y + .2 }, 'mover el paciente enlazado actualiza también la dirección')
+  await click('Deshacer')
+  await click('Rehacer')
+  await click('Deshacer')
+  await click('Punto de cálculo'); await point(.8, .4)
+  assert(calculationInput('Ocupación NCRP (T)').value === '1', 'T = 1 al crear el punto')
+  await click('Resultados'); await click('Calcular CSN y NCRP')
+  const total = ncrpTotal()
+  assert(total && total !== 'Pendiente', 'NCRP calcula al dibujar, sin entradas numéricas ni confirmaciones')
+  assert(!ncrpResult().querySelector('.shielding-missing-data'), 'NCRP está completo con los valores iniciales')
+  const selector = document.querySelector('.shielding-calculation-inputs>summary')
+  await act(async () => selector.click())
+  assert(calculationInput('Pacientes de esta configuración · Orientación 1').value === '120', 'N típico visible')
+  await field('Pacientes de esta configuración · Orientación 1', '240')
+  assert(!document.querySelector('.shielding-calculation-results'), 'editar un valor invalida el resultado anterior')
+  await click('Calcular CSN y NCRP')
+  assert(ncrpTotal() !== total && ncrpTotal() !== 'Pendiente', 'N editado cambia el resultado')
+  await field('K¹ primaria a 1 m · Orientación 1', '')
+  await click('Calcular CSN y NCRP')
+  assert(ncrpTotal() === 'Pendiente', 'borrar un valor no lo rellena silenciosamente')
+  await click('Restaurar valores NCRP')
+  await click('Calcular CSN y NCRP')
+  assert(ncrpTotal() === total, 'restaurar el perfil recupera el resultado inicial')
+  await selectValue('Uso del espacio NCRP · P1', 'corridor')
+  assert(calculationInput('Ocupación T · NCRP · P1').value === '0.2', 'el uso del espacio cambia T')
+  await click('Calcular CSN y NCRP')
+  assert(ncrpTotal() !== total && ncrpTotal() !== 'Pendiente', 'la ocupación seleccionada entra en el cálculo')
+  await selectValue('Perfil inicial NCRP · Orientación 1', 'chest')
+  assert(calculationInput('Pacientes de esta configuración · Orientación 1').value === '200', 'cambiar perfil actualiza N')
+  assert(calculationInput('K¹ primaria a 1 m · Orientación 1').value === '1.2', 'cambiar perfil actualiza Kp')
+  await click('Calcular CSN y NCRP')
+  assert(!ncrpResult().querySelector('.shielding-missing-data'), 'el nuevo perfil calcula directamente')
+  await access({ loading: false, isAdmin: false, user: null }); await access(owner)
+  assertEmpty()
+}
 try {
   if (preview) {
     await render(<ShieldingWorkspace />)
@@ -160,6 +216,7 @@ try {
     await access(owner)
     assert(document.querySelector('.sh-canvas'), 'lienzo visible')
     assert(!document.querySelector('[data-entity="wall"]'), 'no hay sala física por defecto')
+    await defaultCalculationRegression()
     await click('Sala rectangular')
     await point(.2, .2); await point(.65, .65)
     assert(document.querySelectorAll('[data-entity="wall"]').length >= 4, 'rectángulo crea cuatro paredes')

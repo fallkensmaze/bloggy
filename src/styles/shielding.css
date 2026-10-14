@@ -70,7 +70,7 @@
 .sh-card small { display:block; font-size:10px; color:#bac6d5; margin-top:10px; }
 .sh-field,.shielding-field { display:flex; flex-direction:column; gap:6px; margin-bottom:14px; min-width:0; }
 .sh-field>span,.shielding-field>span { color:#c2cede; font-size:11px; }
-.sh-field input,.shielding-field input,.shielding-field textarea { border:1px solid #536176; border-radius:6px; padding:9px 10px; width:100%; min-width:0; color:#eef5fc; background:#202937; font:inherit; font-size:12px; }
+.sh-field input,.shielding-field input,.shielding-field textarea,.shielding-field select { border:1px solid #536176; border-radius:6px; padding:9px 10px; width:100%; min-width:0; color:#eef5fc; background:#202937; font:inherit; font-size:12px; }
 .sh-field input:hover,.shielding-field input:hover { border-color:#8b9cb1; }
 .sh-two-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
 .sh-help,.shielding-help { font-size:11px; color:#b4c2d3; line-height:1.65; }
@@ -123,6 +123,12 @@
 .sh-access>div { max-width:430px; }.sh-access-icon { display:block; font-size:43px; color:#a5d9e2; margin-bottom:16px; }.sh-access h1 { font-size:30px; margin:10px 0; font-weight:500; }.sh-access p { color:#c7d5e5; margin-bottom:20px; }.sh-access a,.sh-access small { display:block; margin-top:22px; }.sh-access small { color:#b3c2d5; font-size:11px; }
 /* The calculation inspector expands its content vertically, never covers the plan. */
 .shielding-calculation-panel { font-size:11px; }
+.shielding-preset { padding:12px; border:1px solid #5c7b85; border-radius:7px; background:#2b414d; margin:12px 0; }
+.shielding-preset .sh-text-button { padding-top:3px; }
+.shielding-preset a { color:#b5e4ed; text-decoration:underline; }
+.shielding-calculation-inputs { margin-top:18px; }
+.shielding-calculation-inputs>summary { cursor:pointer; font-weight:600; margin-bottom:14px; }
+.shielding-profile-total { color:#c9dce8; margin:6px 0; }
 .shielding-calculation-scope { padding:13px; border:1px solid #8a765b; background:#473f34; border-radius:7px; color:#eed9b6; margin-bottom:18px; line-height:1.6; }
 .shielding-calculation-scope h3 { font-size:13px; margin:0 0 6px; }
 .shielding-calculation-scope p { margin:7px 0; }

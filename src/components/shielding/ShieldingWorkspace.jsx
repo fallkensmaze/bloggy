@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import ShieldingCanvas from './ShieldingCanvas'
 import ShieldingCalculationPanel from './ShieldingCalculationPanel'
+import { NcrpPresetSelector, NcrpOccupancySelector } from './ShieldingDefaults'
 import { emptyScene, newHistory, commitScene, undoScene, redoScene, scaleScene, updateEntity, removeEntity } from '../../utils/shieldingScene'
 import { distanceMeters, createCalibration, classifyPrimary, validateWorkloadDistribution, segmentIntersection } from '../../utils/shieldingGeometry'
 import { checkPlanFile, loadPlanImage, openPlanPdf, renderPlanPdf, rotatePlanImage } from '../../utils/shieldingFiles'
 import { evaluateShielding } from '../../utils/shieldingCalculations'
+import { createShieldingConfiguration, createShieldingPoint, allocateNcrpPatients, applyNcrpPreset, applyNcrpOccupancy } from '../../utils/shieldingPresets'
 import '../../styles/shielding.css'
 
 const TOOLS = [
@@ -19,7 +21,7 @@ const INSTRUCTIONS = {
   select: 'Selecciona un elemento para editarlo. Arrastra sus tiradores para corregirlo.', pan: 'Arrastra el plano para desplazarte. Usa la rueda para acercar o alejar.',
   rectangle: 'Marca dos esquinas opuestas de la sala.', room: 'Marca los vértices de la sala. Pulsa Cerrar sala al terminar.',
   wall: 'Marca el inicio y el final de la pared.', door: 'Marca los dos extremos de la puerta.', window: 'Marca los dos extremos de la ventana.',
-  configuration: 'Marca la posición del foco y después hacia dónde apunta.', point: 'Pulsa donde quieras evaluar la radiación.',
+  configuration: 'Marca el foco y después la entrada del haz en el paciente. Ambos puntos definen la dirección. El perfil NCRP se carga automáticamente.', point: 'Pulsa donde quieras evaluar la radiación. Ocupación inicial NCRP: T = 1, editable.',
   patient: 'Marca dónde entra el haz en el paciente para esta orientación.', measure: 'Marca dos puntos para medir su distancia.', calibrate: 'Marca los extremos de una distancia conocida del plano.',
 }
 const INITIAL_VIEW = { x: -1, y: -1, width: 12, height: 8 }
@@ -64,6 +66,7 @@ export default function ShieldingWorkspace() {
   const removeSelected = () => {
     if (!selected) return
     let next = removeEntity(scene, selection.type, selected.id)
+    if (selection.type === 'configuration') next = allocateNcrpPatients(next)
     if (selection.type === 'room') next = { ...next, walls: next.walls.filter(w => w.roomId !== selected.id) }
     commit(next); setSelection(null); setMessage('Elemento eliminado. Puedes recuperarlo con Deshacer.')
   }
@@ -141,12 +144,12 @@ export default function ShieldingWorkspace() {
   const draw = p => {
     if (!scene.calibrated && !['calibrate', 'pan', 'select'].includes(tool)) { chooseTool('calibrate'); setError('Calibra el plano con una distancia conocida antes de dibujar.'); return }
     if (tool === 'point') {
-      const point = { id: id('point'), name: `P${scene.points.length + 1}`, ...p, csn_occupancy: '', ncrp_occupancy: '' }
+      const point = createShieldingPoint({ id: id('point'), name: `P${scene.points.length + 1}`, ...p })
       commit({ ...scene, points: [...scene.points, point] }); setSelection({ type: 'point', id: point.id }); chooseTool('select'); return
     }
     if (tool === 'patient') {
       if (selection?.type !== 'configuration' || !selected) return
-      patchSelected({ patient: p }); chooseTool('select'); return
+      patchSelected({ patient: p, patientFollowsTarget: false }); chooseTool('select'); return
     }
     if (tool === 'room') { setDraft(d => d.length && distanceMeters(d[d.length - 1], p) < 1e-6 ? d : [...d, p]); return }
     if (['wall', 'door', 'window', 'rectangle', 'configuration', 'measure', 'calibrate'].includes(tool)) {
@@ -159,8 +162,8 @@ export default function ShieldingWorkspace() {
         addRoom([start, { x: p.x, y: start.y }, p, { x: start.x, y: p.y }]); return
       }
       if (tool === 'configuration') {
-        const configuration = { id: id('configuration'), name: `Orientación ${scene.configurations.length + 1}`, source: start, target: p, patient: null, apertureDeg: '', usePercent: '', csn: {}, ncrp: {} }
-        commit({ ...scene, configurations: [...scene.configurations, configuration] }); setSelection({ type: 'configuration', id: configuration.id }); setStep('Equipo')
+        const configuration = createShieldingConfiguration({ id: id('configuration'), name: `Orientación ${scene.configurations.length + 1}`, source: start, target: p })
+        commit(allocateNcrpPatients({ ...scene, configurations: [...scene.configurations, configuration] })); setSelection({ type: 'configuration', id: configuration.id }); setStep('Equipo')
       } else {
         const wall = { id: id('wall'), name: `${tool === 'wall' ? 'Pared' : tool === 'door' ? 'Puerta' : 'Ventana'} ${scene.walls.length + 1}`, start, end: p, kind: tool }
         commit({ ...scene, walls: [...scene.walls, wall] }); setSelection({ type: 'wall', id: wall.id })
@@ -196,7 +199,10 @@ export default function ShieldingWorkspace() {
     let patch
     if (d.selection.type === 'point') patch = shifted(entity)
     else if (d.selection.type === 'wall') patch = d.handle ? { [d.handle]: p } : { start: shifted(entity.start), end: shifted(entity.end) }
-    else if (d.selection.type === 'configuration') patch = d.handle ? { [d.handle]: p } : { source: shifted(entity.source), target: shifted(entity.target), patient: shifted(entity.patient) }
+    else if (d.selection.type === 'configuration') {
+      patch = d.handle ? { [d.handle]: p } : { source: shifted(entity.source), target: shifted(entity.target), patient: shifted(entity.patient) }
+      if (entity.patientFollowsTarget && ['target', 'patient'].includes(d.handle)) patch = { target: p, patient: p }
+    }
     else patch = { vertices: entity.vertices.map((v, index) => d.handle ? d.handle === `vertex:${index}` ? p : v : shifted(v)) }
     let next = updateEntity(d.scene, d.selection.type, entity.id, patch)
     if (d.selection.type === 'room') {
@@ -282,20 +288,24 @@ export default function ShieldingWorkspace() {
             <Field label={selection.type === 'configuration' ? 'Nombre de la orientación' : 'Nombre'} value={selected.name} onChange={name => patchSelected({ name })} />
             {selection.type === 'wall' && <p className="sh-property-value">Longitud <strong>{fmt(distanceMeters(selected.start, selected.end))} m</strong></p>}
             {selection.type === 'configuration' && <>
-              <div className="sh-two-fields"><NumberField label="Carga de trabajo (%)" value={selected.usePercent} onChange={usePercent => patchSelected({ usePercent })} min="0" max="100" /><NumberField label="Apertura del haz en planta (°)" value={selected.apertureDeg} onChange={apertureDeg => patchSelected({ apertureDeg })} min="0" max="179.99" /></div>
-              <p className="sh-help">Porcentaje de la carga semanal en mA·min. Define la apertura para ver qué puntos quedan dentro del haz en planta.</p>
+              <NcrpPresetSelector configuration={selected} onApply={presetId => commit(applyNcrpPreset(scene, selected.id, presetId))} />
+              <div className="sh-two-fields"><NumberField label="Carga de trabajo (%)" value={selected.usePercent} onChange={usePercent => patchSelected({ usePercent })} min="0" max="100" /><NumberField label="Apertura del haz en planta (°)" value={selected.apertureDeg} onChange={apertureDeg => patchSelected({ apertureDeg, apertureMode: 'manual' })} min="0" max="179.99" /></div>
+              <p className="sh-help">El porcentaje solo reparte la carga CSN. NCRP ya tiene pacientes y coeficientes iniciales; puedes editarlos en Resultados.</p>
+              <p className="sh-help">La apertura inicial se estima con el ancho del campo de referencia (43 cm en tórax; cuadrado equivalente en otros perfiles). Es una hipótesis geométrica editable, no una apertura universal de NCRP.</p>
               <button className="sh-button sh-button-secondary" onClick={() => chooseTool('patient')}>{icon('person')} {selected.patient ? 'Mover entrada al paciente' : 'Situar entrada al paciente'}</button>
-              <small>{selected.patient ? 'Superficie de entrada situada. Arrastra su marcador para corregirla.' : 'Marca la superficie de entrada del haz, no el centro del paciente.'}</small>
+              <small>{selected.patientFollowsTarget ? 'El segundo clic sitúa el paciente y orienta el haz. Al arrastrarlo se mueven juntos; este botón permite situarlo por separado.' : selected.patient ? 'Superficie de entrada situada. Arrastra su marcador para corregirla.' : 'Marca la superficie de entrada del haz, no el centro del paciente.'}</small>
             </>}
             {selection.type === 'point' && <>
               <div className="sh-two-fields"><NumberField label="X del punto (m)" value={selected.x} onChange={x => { if (x !== '' && Number.isFinite(Number(x))) patchSelected({ x: Number(x) }) }} /><NumberField label="Y del punto (m)" value={selected.y} onChange={y => { if (y !== '' && Number.isFinite(Number(y))) patchSelected({ y: Number(y) }) }} /></div>
+              <NcrpOccupancySelector point={selected} onChange={type => patchSelected(applyNcrpOccupancy(selected, type))} />
+              <NumberField label="Ocupación NCRP (T)" value={selected.ncrp_occupancy} min="0" max="1" onChange={ncrp_occupancy => patchSelected({ ncrp_occupancy, ncrp_occupancy_type: 'manual' })} />
               <div className="sh-point-radiation"><h4>Radiación en este punto</h4>{scene.configurations.map(c => { const state = classifyPrimary(selected, { ...c, apertureDeg: numeric(c.apertureDeg) }); return <div key={c.id}><span>{c.name}</span><strong className={`sh-state-${state.status}`}>{state.status === 'inside' ? 'Primaria en planta' : state.status === 'outside' ? 'Fuera del haz en planta' : 'Haz por definir'}</strong></div> })}<p>Dispersión y fuga se evalúan en todas las orientaciones. Las paredes no eliminan una contribución por sí solas.</p></div>
             </>}
             <button className="sh-delete" onClick={removeSelected}>{icon('trash3')} Eliminar {selection.type === 'configuration' ? 'orientación' : 'elemento'}</button>
           </section>}
           {step === 'Plano' && !selected && tool !== 'calibrate' && <section className="sh-card"><Field label="Nombre de la sala" value={scene.name} onChange={name => commit({ ...scene, name })} /><h3>Un plano, tres pasos</h3><ol className="sh-checklist"><li className={scene.background ? 'done' : ''}><b>Abre o dibuja</b><span>Tu plano como fondo, o una sala desde cero.</span></li><li className={scene.calibrated ? 'done' : ''}><b>Comprueba la escala</b><span>{scene.background ? 'Usa una distancia conocida.' : 'La cuadrícula en blanco ya está en metros.'}</span></li><li className={scene.configurations.length ? 'done' : ''}><b>Sitúa el equipo</b><span>Añade sus orientaciones y puntos de cálculo.</span></li></ol></section>}
           {scene.background && <section className="sh-card"><h3>{icon('image')} Plano de fondo</h3><p className="sh-file-name">{scene.background.name}</p><label className="sh-range">Opacidad<input aria-label="Opacidad del plano" type="range" min="0" max="1" step=".05" value={backgroundOpacity} onChange={e => setBackgroundOpacity(Number(e.target.value))} /></label>{!scene.calibrated && <button className="sh-button sh-button-secondary" disabled={busy} onClick={rotate}>{icon('arrow-clockwise')} Girar 90°</button>}<button className="sh-text-button" onClick={() => chooseTool('calibrate')}>Volver a calibrar</button></section>}
-          {(step === 'Equipo' || scene.configurations.length > 0) && <section className="sh-card"><div className="sh-card-heading"><h3>Un equipo, varias orientaciones</h3><button aria-label="Añadir orientación" onClick={() => chooseTool('configuration')}>{icon('plus-lg')}</button></div><p className="sh-help">Dibuja el foco y el destino de cada posición de trabajo.</p>{scene.configurations.map(c => <button key={c.id} className={`sh-orientation ${selection?.id === c.id ? 'is-active' : ''}`} onClick={() => { setSelection({ type: 'configuration', id: c.id }); chooseTool('select') }}><span>{icon('broadcast')} {c.name}</span><b>{c.usePercent === '' ? '—' : c.usePercent}%</b></button>)}<div className={`sh-distribution ${distribution.valid ? 'is-complete' : ''}`}><span>Carga repartida</span><strong>{fmt(distribution.totalPercent)} / 100 %</strong></div>{!distribution.valid && scene.configurations.length > 0 && <p className="sh-help">Completa el reparto hasta el 100 %. No se ajusta automáticamente.</p>}</section>}
+          {(step === 'Equipo' || scene.configurations.length > 0) && <section className="sh-card"><div className="sh-card-heading"><h3>Un equipo, varias orientaciones</h3><button aria-label="Añadir orientación" onClick={() => chooseTool('configuration')}>{icon('plus-lg')}</button></div><p className="sh-help">Dibuja el foco y la entrada al paciente de cada posición. NCRP carga sus valores iniciales automáticamente.</p>{scene.configurations.map(c => <button key={c.id} className={`sh-orientation ${selection?.id === c.id ? 'is-active' : ''}`} onClick={() => { setSelection({ type: 'configuration', id: c.id }); chooseTool('select') }}><span>{icon('broadcast')} {c.name}</span><b>{c.usePercent === '' ? '—' : c.usePercent}%</b></button>)}<div className={`sh-distribution ${distribution.valid ? 'is-complete' : ''}`}><span>Reparto de carga CSN</span><strong>{fmt(distribution.totalPercent)} / 100 %</strong></div>{!distribution.valid && scene.configurations.length > 0 && <p className="sh-help">Para comparar también por CSN, completa su reparto hasta el 100 %. NCRP puede calcularse sin este dato.</p>}</section>}
           {allEntities.length > 0 && <section className="sh-card"><h3>Elementos del plano <span className="sh-count">{allEntities.length}</span></h3><div className="sh-entity-list">{allEntities.map(e => <button key={e.id} className={selection?.id === e.id ? 'is-active' : ''} onClick={() => { setSelection({ type: e.type, id: e.id }); chooseTool('select') }}>{icon(e.type === 'point' ? 'geo-alt' : e.type === 'configuration' ? 'broadcast' : 'bounding-box')}<span>{e.name}</span>{icon('chevron-right')}</button>)}</div></section>}
         </>}
       </aside>

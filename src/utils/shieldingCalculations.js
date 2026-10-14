@@ -1,5 +1,5 @@
 /**
- * In-memory, unshielded kerma in a declared horizontal plane. No physical defaults.
+ * In-memory, unshielded kerma in a declared horizontal plane.
  *
  * CSN equations: WEB_BLINDAJES/METODOLOGIA_ES.md §§4, 5.1, 5.2, implemented in
  * csn_{primary,scatter,leakage}_barrier.py. The source coefficients are already in
@@ -12,8 +12,8 @@
  * an envelope for all evaluated directions; no angle table is inferred.
  * https://www.aapm.org/pubs/protected_files/NCRP/NCRP_Report_147_AAPM.pdf
  *
- * Coefficients, profiles and provenance are provided by the user during this
- * session. This module contains no licensed tables, clinical presets or hashes.
+ * Explicit scene inputs can come from shieldingPresets.js or user edits. This
+ * evaluator never fills or resets missing inputs and does not infer clinical data.
  */
 
 const PERCENT_TOTAL = 100;
