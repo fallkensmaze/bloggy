@@ -27,7 +27,7 @@
     "test:film": "node scripts/test-film-dosimetry.mjs",
     "test:mri": "node scripts/test-mri-protocols.mjs",
     "test:mri:browser": "node scripts/test-mri-browser.mjs",
-    "test:shielding": "node scripts/test-shielding-geometry.mjs && node scripts/test-shielding-scene.mjs && node scripts/test-shielding-files.mjs && node scripts/test-shielding-calculations.mjs",
+    "test:shielding": "node scripts/test-shielding-geometry.mjs && node scripts/test-shielding-scene.mjs && node scripts/test-shielding-files.mjs && node scripts/test-shielding-calculations.mjs && node scripts/test-shielding-presets.mjs",
     "test:shielding:browser": "node scripts/test-shielding-browser.mjs",
     "dev:shielding": "node scripts/test-shielding-browser.mjs --serve",
     "test:mcc": "node scripts/test-mcc.mjs && node scripts/test-mcc-kq.mjs",

@@ -73,7 +73,7 @@ function DirectionBeam({ configuration, viewBox, unit, markerId }) {
       strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
     <path d={`M ${target.x - 3 * unit} ${target.y} H ${target.x + 3 * unit} M ${target.x} ${target.y - 3 * unit} V ${target.y + 3 * unit}`}
       stroke={colors.beam} strokeWidth="1" vectorEffect="non-scaling-stroke" />
-    <Label x={target.x + 10 * unit} y={target.y + 4 * unit} unit={unit} color={colors.beam}>Dirección</Label>
+    {!configuration.patientFollowsTarget && <Label x={target.x + 10 * unit} y={target.y + 4 * unit} unit={unit} color={colors.beam}>Dirección</Label>}
   </g>
 }
 
@@ -280,7 +280,7 @@ export default function ShieldingCanvas({
         </g>}
         {showHandles && isSelected && <>
           <Handle point={source} name="source" unit={unit} color={colors.beam} />
-          <Handle point={configuration.target} name="target" unit={unit} color={colors.beam} />
+          {!configuration.patientFollowsTarget && <Handle point={configuration.target} name="target" unit={unit} color={colors.beam} />}
           <Handle point={patient} name="patient" unit={unit} color={colors.patient} />
         </>}
       </g>

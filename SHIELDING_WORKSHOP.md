@@ -30,6 +30,9 @@ la escena. Cambiar datos o geometría invalida los resultados anteriores.
   medidas, borrado, deshacer y rehacer.
 - Varias configuraciones del mismo equipo: foco, dirección, apertura completa
   del haz, entrada del haz en el paciente y porcentaje de carga CSN.
+- Parámetros NCRP iniciales editables: se puede calcular después de dibujar.
+  El segundo clic de una orientación sitúa la entrada al paciente y la dirección;
+  ambos se mueven juntos hasta usar «Mover entrada al paciente» por separado.
 - Puntos de cálculo con ocupaciones CSN/NCRP independientes y comparación de
   resultados mediante un único botón.
 
@@ -49,8 +52,51 @@ Para cada configuración `i` y punto `q`, se obtienen tres distancias en metros:
 `d_fq` (foco–punto), `d_fp` (foco–paciente) y `d_pq` (paciente–punto).
 `I_i(q)` vale uno cuando la proyección del punto está dentro del haz declarado,
 incluido su borde, y cero cuando está fuera. Una geometría incompleta produce un
-estado pendiente, nunca un cero supuesto. La entrada al paciente se declara
-separadamente y debe pertenecer al haz.
+estado pendiente, nunca un cero supuesto. La entrada al paciente se sitúa al
+dibujar y puede moverse por separado; debe pertenecer al haz.
+
+### Valores iniciales NCRP
+
+A petición del propietario, el taller precarga referencias numéricas seleccionadas
+de NCRP 147 mediante `shieldingPresets.js`; el motor de cálculo sigue exigiendo
+entradas explícitas y no sustituye campos borrados por valores supuestos.
+
+- Inicio: radiología general, componente bucky mural; N = 120 pacientes/semana,
+  Kp¹ = 2,3 y Ksec¹ = 0,0073 mGy/paciente a 1 m. Los puntos comienzan con T = 1.
+- Otros perfiles: radiología general/otras direcciones, sala dedicada de tórax y
+  tubo radiográfico de sala R&F. No son perfiles de TC, mamografía o fluoroscopia.
+- Referencias: tablas 4.1 (ocupación), 4.3 (N de actividad media), 4.5 (primaria)
+  y 4.7 (secundaria), páginas impresas 31, 40, 43 y 46–47. La secundaria incluye
+  fuga y usa el mayor de los valores direccionales tabulados para ese perfil.
+
+La apertura inicial es una hipótesis geométrica de la aplicación:
+`2 atan(ancho / (2 distancia_referencia))`. Se usa el lado de 43 cm para tórax
+y un campo cuadrado equivalente de 1.000 cm² para los demás perfiles. No es una
+apertura universal prescrita por NCRP ni una dimensión deducida del plano.
+El perfil conserva su campo/espectro de referencia: el dibujo aporta posiciones,
+no recalcula los coeficientes para otros tamaños de campo o distribuciones de kV.
+No hay atenuación implícita por el paciente o el receptor.
+
+Al añadir o eliminar orientaciones, las que mantienen N automático reciben
+`N_típico / número_de_orientaciones_del_mismo_perfil`. Este reparto uniforme es
+una elección inicial editable de la aplicación, no un factor U de NCRP. Bucky
+y otras direcciones son componentes diferentes y cada uno usa N de la sala,
+como explica §4.1.4. No se añade una segunda contribución «all barriers».
+
+Editar N lo convierte en manual y lo conserva literalmente, incluso en blanco.
+Las orientaciones automáticas siguen usando el número total de posiciones de
+su perfil como divisor; los N manuales se suman tal como se han declarado. El
+panel muestra la suma por perfil para revisar cargas personalizadas: con
+entradas manuales la suma no tiene por qué coincidir con N típico. Cambiar el
+porcentaje CSN no modifica N. Cambiar o restaurar un perfil restablece sus datos
+NCRP y el reparto automático; conserva las posiciones y la apertura si se editó.
+
+Los valores pueden cambiarse individualmente; editar Ksec¹ desactiva la
+aceptación automática de la envolvente y exige revisar su aplicabilidad.
+Los parámetros modificados se identifican como personalizados. El uso del
+espacio carga T NCRP y admite un valor manual, sin modificar T CSN. Borrar
+cualquier dato necesario vuelve a dejar el resultado pendiente. Cada cambio
+invalida resultados y se puede deshacer o rehacer.
 
 ### CSN con distribución direccional declarada
 
@@ -98,9 +144,9 @@ constantes se expresan en mGy/paciente a 1 m y pertenecen al mismo perfil.
 Repetir un perfil de sala completa con todos sus pacientes en cada orientación
 duplicaría la carga.
 
-La secundaria integra dispersión y fuga. Su aplicabilidad como envolvente para
-todas las direcciones evaluadas debe confirmarse expresamente. No se calcula
-ni suma otra fuga NCRP.
+La secundaria integra dispersión y fuga. Los perfiles iniciales usan la envolvente
+tabulada; un coeficiente secundario editado requiere confirmar su aplicabilidad
+para las direcciones evaluadas. No se calcula ni suma otra fuga NCRP.
 
 ```text
 d_sec = min(d_fq, d_pq)
@@ -111,8 +157,8 @@ K_total = suma_i(K_primaria,i + K_secundaria,i)
 
 Referencias: [NCRP Report 147, copia publicada por AAPM](https://www.aapm.org/pubs/protected_files/NCRP/NCRP_Report_147_AAPM.pdf),
 §4.1.7.3, ecuación 4.4 y elección conservadora de distancia, página impresa 48;
-apéndice B, ecuación B.6, página 127. Estas referencias no autorizan incorporar
-sus tablas al repositorio.
+apéndice B, ecuación B.6, página 127. El repositorio incluye solo las referencias
+numéricas necesarias para los perfiles, con atribución; no redistribuye el informe.
 
 ### Salidas y validación
 
@@ -133,9 +179,10 @@ suelo, techo, transmisión por paredes/receptores ni capas de materiales. No
 obtiene espesores, límites regulatorios, conformidad o prescripciones. La
 dirección declarada CSN no equivale al cálculo completo de la Guía 5.11.
 
-Los coeficientes se introducen durante la sesión con procedencia. El repositorio
-no contiene tablas protegidas, datos clínicos de equipos ni datos reales
-inventados. Los casos numéricos de las pruebas están marcados como ficticios.
+Los coeficientes NCRP se inicializan con referencias publicadas y pueden editarse
+durante la sesión. No son medidas del equipo del usuario. Los coeficientes CSN
+siguen siendo manuales e independientes. Las pruebas distinguen los oráculos
+ficticios del motor de los valores bibliográficos de los perfiles iniciales.
 No hay snapshots persistidos, cadenas de hashes o flujos de aprobación.
 
 Siguientes pasos técnicos, cuando se habiliten:
@@ -162,5 +209,8 @@ npm run build:web
 Las pruebas de cálculo usan oráculos aritméticos ficticios, reparto de carga,
 ausencia de datos, distancias singulares, régimen de dispersión, invariancia
 geométrica y estabilidad numérica. Las pruebas de navegador cubren los flujos
-del editor y la pérdida del trabajo al reiniciar. Pasarlas verifica este alcance
+del editor, cálculo NCRP directo, edición/restauración y pérdida del trabajo al
+reiniciar. `test-shielding-presets.mjs` comprueba los perfiles con cálculos
+independientes, reparto sin duplicación, ocupación y conservación de cambios.
+Pasarlas verifica este alcance
 implementado; no valida un cálculo completo de blindajes que aún no existe.

@@ -1,4 +1,6 @@
 import React from 'react';
+import { NcrpPresetSelector, NcrpOccupancySelector } from './ShieldingDefaults';
+import { allocateNcrpPatients, applyNcrpPreset, applyNcrpOccupancy, editNcrpParameter, getNcrpPreset } from '../../utils/shieldingPresets';
 
 const CSN_FIELDS = [
   ['output_mGy_m2_per_mA_min', 'Rendimiento primario', 'mGy·m²/(mA·min)'],
@@ -14,10 +16,10 @@ const NCRP_FIELDS = [
   ['secondary_mGy_per_patient_at_1m', 'K¹ secundaria total a 1 m', 'mGy/paciente'],
 ];
 
-function NumberField({ label, unit, value, onChange, max }) {
+function NumberField({ label, unit, value, onChange, max, context }) {
   return <label className="shielding-field">
     <span>{label} <small>{unit}</small></span>
-    <input type="number" min="0" max={max} step="any" inputMode="decimal" value={value ?? ''}
+    <input aria-label={context ? `${label} · ${context}` : label} type="number" min="0" max={max} step="any" inputMode="decimal" value={value ?? ''}
       placeholder="Sin definir" onChange={event => onChange(event.target.value)} />
   </label>;
 }
@@ -64,9 +66,12 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
   const points = scene.points || [];
   const updateConfiguration = (index, method, field, value) => onChangeScene({ ...scene,
     configurations: configurations.map((configuration, current) => current !== index ? configuration :
-      { ...configuration, [method]: { ...configuration[method], [field]: value } }) });
+      { ...configuration, [method]: method === 'ncrp' ? editNcrpParameter(configuration.ncrp, field, value) :
+        { ...configuration[method], [field]: value } }) });
   const updatePoint = (index, field, value) => onChangeScene({ ...scene,
-    points: points.map((point, current) => current === index ? { ...point, [field]: value } : point) });
+    points: points.map((point, current) => current === index ? { ...point, [field]: value,
+      ...(field === 'ncrp_occupancy' ? { ncrp_occupancy_type: 'manual' } : {}) } : point) });
+  const profileIds = [...new Set(configurations.map(c => c.ncrp?.preset_id).filter(id => getNcrpPreset(id)))];
 
   return <section className="shielding-calculation-panel" aria-label="Cálculos CSN y NCRP">
     <div className="shielding-calculation-scope">
@@ -74,8 +79,23 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
       <p>Compara el kerma que llega a cada punto antes de las barreras. Las paredes, puertas y
         receptores dibujados todavía no atenúan la radiación. No calcula espesores ni conformidad.</p>
     </div>
-    <details className="shielding-calculation-inputs" open={!results}>
-      <summary>Datos para calcular</summary>
+    <p className="shielding-help">Dibuja el foco, la entrada al paciente y los puntos; pulsa Calcular.
+      NCRP empieza con valores de referencia editables y T = 1. La comparación CSN requiere sus propios datos.</p>
+    <button className="shielding-calculate-button" type="button" onClick={onCalculate}
+      disabled={!configurations.length || !points.length || !scene.calibrated}>Calcular CSN y NCRP</button>
+    {!scene.calibrated && <p className="shielding-help">Primero calibra el plano o define las dimensiones de la sala.</p>}
+    <details className="shielding-calculation-inputs">
+      <summary>Editar parámetros y valores NCRP</summary>
+      <p className="shielding-help">Las orientaciones del mismo perfil se reparten por igual su N de referencia.
+        Es un reparto inicial de la aplicación, editable, no un factor U tabulado. Bucky y otras direcciones
+        son perfiles complementarios: cada uno usa N de la sala sin repetir la secundaria de sala completa.</p>
+      {profileIds.map(id => {
+        const members = configurations.filter(c => c.ncrp?.preset_id === id);
+        const counts = members.map(c => c.ncrp.patients_per_week);
+        const valid = counts.every(n => (typeof n === 'number' || (typeof n === 'string' && n.trim() !== '')) && Number.isFinite(Number(n)) && Number(n) >= 0);
+        return <p className="shielding-profile-total" key={id}>{getNcrpPreset(id).label}: suma N = {valid ? dose(counts.reduce((sum, n) => sum + Number(n), 0)) : 'pendiente'} pacientes/semana
+          {members.some(c => c.ncrp.patients_mode === 'manual') && ' · incluye valores manuales; revisa la carga total del perfil.'}</p>;
+      })}
       <NumberField label="Carga total del equipo · CSN" unit="mA·min/semana" value={scene.csnTotalWorkload}
         onChange={value => onChangeScene({ ...scene, csnTotalWorkload: value })} />
       <p className="shielding-help">Esta carga se reparte con el porcentaje de cada orientación.
@@ -84,6 +104,8 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
       {configurations.map((configuration, index) => <details className="shielding-config-data"
         key={configuration.id ?? index} open={configurations.length === 1}>
         <summary>{configuration.name || `Orientación ${index + 1}`} · coeficientes</summary>
+        <NcrpPresetSelector configuration={configuration}
+          onApply={presetId => onChangeScene(applyNcrpPreset(scene, configuration.id, presetId))} />
         {!configuration.patient && <p className="shielding-help">Falta colocar la entrada del haz en el paciente en esta orientación.</p>}
         <details className="shielding-method-inputs">
           <summary>Guía CSN · carga y rendimientos</summary>
@@ -98,15 +120,20 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
               placeholder="Referencia, fecha, tensión y condiciones de medida o cálculo"
               onChange={event => updateConfiguration(index, 'csn', 'provenance', event.target.value)} /></label>
         </details>
-        <details className="shielding-method-inputs">
+        <details className="shielding-method-inputs" open>
           <summary>NCRP 147 · pacientes y perfil</summary>
-          <p className="shielding-help">Introduce los pacientes correspondientes solo a esta orientación
-            y sus coeficientes del mismo perfil. K¹ primaria no debe llevar otro reparto direccional.
-            K¹ secundaria ya incluye dispersión y fuga. Cada pareja de pacientes y coeficientes debe
-            cubrir solo esta configuración: repetir un perfil de sala completa con todos sus pacientes
-            en cada orientación duplicaría la carga.</p>
+          <p className="shielding-help">K¹ secundaria incluye dispersión y fuga; se precarga el valor mayor de las
+            direcciones tabuladas. N corresponde a esta orientación, después del reparto inicial del perfil.
+            Al editar N, tu valor queda fijo aunque añadas o borres otras orientaciones.</p>
           {NCRP_FIELDS.map(([key, label, unit]) => <NumberField key={key} label={label} unit={unit}
-            value={configuration.ncrp?.[key]} onChange={value => updateConfiguration(index, 'ncrp', key, value)} />)}
+            context={configuration.name} value={configuration.ncrp?.[key]} onChange={value => updateConfiguration(index, 'ncrp', key, value)} />)}
+          {getNcrpPreset(configuration.ncrp?.preset_id) && <label className="shielding-checkbox">
+            <input type="checkbox" aria-label={`Reparto automático NCRP · ${configuration.name}`}
+              checked={configuration.ncrp.patients_mode === 'automatic'}
+              onChange={event => onChangeScene(allocateNcrpPatients({ ...scene, configurations: configurations.map((c, i) =>
+                i === index ? { ...c, ncrp: { ...c.ncrp, patients_mode: event.target.checked ? 'automatic' : 'manual' } } : c) }))} />
+            <span>Repartir automáticamente N de referencia entre las orientaciones de este perfil.</span>
+          </label>}
           <label className="shielding-field"><span>Perfil NCRP</span>
             <input type="text" value={configuration.ncrp?.profile ?? ''} placeholder="Distribución de carga y condiciones aplicables"
               onChange={event => updateConfiguration(index, 'ncrp', 'profile', event.target.value)} /></label>
@@ -116,8 +143,8 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
           <label className="shielding-checkbox">
             <input type="checkbox" checked={configuration.ncrp?.secondary_envelope_confirmed === true}
               onChange={event => updateConfiguration(index, 'ncrp', 'secondary_envelope_confirmed', event.target.checked)} />
-            <span>K¹ secundaria incluye dispersión y fuga y es una envolvente válida para todas las
-              direcciones y condiciones que estoy evaluando.</span>
+            <span>Usar K¹ secundaria como envolvente de dispersión y fuga para las direcciones evaluadas.
+              Activo de inicio para el perfil tabulado; al editar K¹ secundaria hay que revisar esta opción.</span>
           </label>
           <p className="shielding-help">La distancia secundaria será la menor entre foco–punto y
             paciente–punto, conforme a la opción conservadora de NCRP 147 §4.1.7.3.</p>
@@ -128,27 +155,26 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
         {!points.length && <p>Coloca un punto sobre el plano para evaluarlo.</p>}
         {points.map((point, index) => <fieldset key={point.id ?? index}>
           <legend>{point.name || `Punto ${index + 1}`}</legend>
+          <NcrpOccupancySelector point={point} onChange={type => onChangeScene({ ...scene,
+            points: points.map((p, i) => i === index ? applyNcrpOccupancy(p, type) : p) })} />
           <NumberField label="Ocupación T · CSN" unit="fracción, mayor que 0 y hasta 1" max="1"
-            value={point.csn_occupancy} onChange={value => updatePoint(index, 'csn_occupancy', value)} />
+            context={point.name} value={point.csn_occupancy} onChange={value => updatePoint(index, 'csn_occupancy', value)} />
           <NumberField label="Ocupación T · NCRP" unit="fracción, mayor que 0 y hasta 1" max="1"
-            value={point.ncrp_occupancy} onChange={value => updatePoint(index, 'ncrp_occupancy', value)} />
+            context={point.name} value={point.ncrp_occupancy} onChange={value => updatePoint(index, 'ncrp_occupancy', value)} />
         </fieldset>)}
       </details>
-      <p className="shielding-help">Sin valores físicos precargados. Los datos y referencias permanecen
-        solo en esta pestaña.</p>
+      <p className="shielding-help">Perfiles radiográficos NCRP 147: tablas 4.1, 4.3, 4.5 y 4.7.
+        No incluyen TC, mamografía ni el tubo fluoroscópico. Los cambios permanecen solo en esta pestaña.</p>
     </details>
-    <button className="shielding-calculate-button" type="button" onClick={onCalculate}
-      disabled={!configurations.length || !points.length || !scene.calibrated}>Calcular CSN y NCRP</button>
-    {!scene.calibrated && <p className="shielding-help">Primero calibra el plano o define las dimensiones de la sala.</p>}
     {results && <div className="shielding-calculation-results" aria-live="polite">
       <h3>Resultados · mGy/semana con ocupación T</h3>
       {results.points.map(point => <section className="shielding-point-result" key={point.pointId}>
         <h3>{point.name}</h3>
         <div className="shielding-method-comparison">
-          <MethodResult method={point.csn} title="CSN · dirección declarada" components={[
-            ['primary_mGy_per_week', 'Primaria'], ['scatter_mGy_per_week', 'Dispersa'], ['leakage_mGy_per_week', 'Fuga']]} />
           <MethodResult method={point.ncrp} title="NCRP 147" components={[
             ['primary_mGy_per_week', 'Primaria'], ['secondary_mGy_per_week', 'Dispersa + fuga']]} />
+          <MethodResult method={point.csn} title="CSN · dirección declarada" components={[
+            ['primary_mGy_per_week', 'Primaria'], ['scatter_mGy_per_week', 'Dispersa'], ['leakage_mGy_per_week', 'Fuga']]} />
         </div>
       </section>)}
       <details className="shielding-calculation-limitations"><summary>Alcance de esta evaluación</summary>
