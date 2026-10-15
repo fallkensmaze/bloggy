@@ -28,6 +28,7 @@ const INSTRUCTIONS = {
 const INITIAL_VIEW = { x: -1, y: -1, width: 12, height: 8 }
 const fmt = v => Number.isFinite(v) ? v.toLocaleString('es-ES', { maximumFractionDigits: 2 }) : '—'
 const numeric = value => value === '' || value == null ? NaN : Number(value)
+const shortDose = v => Number.isFinite(v) ? v.toLocaleString('es-ES', { maximumSignificantDigits: 3 }) : '—'
 const hasWork = s => Boolean(s.background || s.walls.length || s.points.length || s.configurations.length || s.rooms.length)
 const icon = name => <i className={`bi bi-${name}`} aria-hidden="true" />
 function Field({ label, value, onChange, type = 'text', ...rest }) {
@@ -146,7 +147,8 @@ export default function ShieldingWorkspace() {
     if (!scene.calibrated && !['calibrate', 'pan', 'select'].includes(tool)) { chooseTool('calibrate'); setError('Calibra el plano con una distancia conocida antes de dibujar.'); return }
     if (tool === 'point') {
       const point = createShieldingPoint({ id: id('point'), name: `P${scene.points.length + 1}`, ...p, csnPresetId: scene.csnPresetId })
-      commit({ ...scene, points: [...scene.points, point] }); setSelection({ type: 'point', id: point.id }); chooseTool('select'); return
+      commit({ ...scene, points: [...scene.points, point] }); setSelection({ type: 'point', id: point.id }); chooseTool('select')
+      setMessage(scene.configurations.length ? `${point.name} añadido. Pulsa «Calcular» para ver la dosis con NCRP por defecto.` : `${point.name} añadido. Falta dibujar una orientación del equipo (E).`); return
     }
     if (tool === 'patient') {
       if (selection?.type !== 'configuration' || !selected) return
@@ -165,6 +167,7 @@ export default function ShieldingWorkspace() {
       if (tool === 'configuration') {
         const configuration = createShieldingConfiguration({ id: id('configuration'), name: `Orientación ${scene.configurations.length + 1}`, source: start, target: p, csnPresetId: scene.csnPresetId })
         commit(allocateCsnWorkload(allocateNcrpPatients({ ...scene, configurations: [...scene.configurations, configuration] }))); setSelection({ type: 'configuration', id: configuration.id }); setStep('Equipo')
+        chooseTool('select'); setMessage(`${configuration.name} añadida con valores NCRP por defecto. ${scene.points.length ? 'Pulsa «Calcular» o añade más puntos (P).' : 'Ahora coloca un punto de cálculo (P).'}`); return
       } else {
         const wall = { id: id('wall'), name: `${tool === 'wall' ? 'Pared' : tool === 'door' ? 'Puerta' : 'Ventana'} ${scene.walls.length + 1}`, start, end: p, kind: tool }
         commit({ ...scene, walls: [...scene.walls, wall] }); setSelection({ type: 'wall', id: wall.id })
@@ -256,6 +259,13 @@ export default function ShieldingWorkspace() {
     const generation = ++importGeneration.current; setBusy(true)
     try { registerImage(await rotatePlanImage(scene.background), scene.background.name, generation) } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
+  const calculate = () => {
+    setStep('Resultados')
+    try { setResults(evaluateShielding(scene)); setMessage('Cálculo hecho: el total semanal aparece junto a cada punto. Cualquier cambio lo invalida.') } catch (e) { setError(e.message) }
+  }
+  const canCalculate = scene.calibrated && scene.configurations.length > 0 && scene.points.length > 0
+  const pointLabels = Object.fromEntries((results?.points || []).map(p => [p.pointId,
+    `NCRP ${shortDose(p.ncrp?.total_mGy_per_week)} · CSN ${shortDose(p.csn?.total_mGy_per_week)} mGy/sem`]))
   const allEntities = [...scene.rooms.map(e => ({ ...e, type: 'room' })), ...scene.configurations.map(e => ({ ...e, type: 'configuration' })), ...scene.points.map(e => ({ ...e, type: 'point' })), ...scene.walls.map(e => ({ ...e, type: 'wall' }))]
   return <div className="sh-workspace">
     <header className="sh-header">
@@ -271,17 +281,17 @@ export default function ShieldingWorkspace() {
       <section className="sh-stage" aria-label="Editor de sala" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); importFile(e.dataTransfer.files[0]) }}>
         <div className="sh-canvas-heading"><span>{scene.name}</span><span>{scene.calibrated ? 'Planta · metros' : 'Escala pendiente'}</span></div>
         <div className="sh-canvas-wrap">
-          <ShieldingCanvas scene={display} viewBox={viewBox} selection={selection} tool={tool} draft={draft} cursor={cursor} activeConfigurationId={activeConfiguration?.id} backgroundOpacity={backgroundOpacity} svgRef={svgRef} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onDoubleClick={() => { if (tool === 'room' && draft.length >= 3) addRoom(draft) }} />
+          <ShieldingCanvas scene={display} viewBox={viewBox} selection={selection} tool={tool} draft={draft} cursor={cursor} activeConfigurationId={activeConfiguration?.id} backgroundOpacity={backgroundOpacity} pointLabels={previewScene ? {} : pointLabels} svgRef={svgRef} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onDoubleClick={() => { if (tool === 'room' && draft.length >= 3) addRoom(draft) }} />
           {!hasWork(scene) && tool === 'select' && <div className="sh-empty"><div className="sh-empty-icon">{icon('bounding-box')}</div><h2>Tu sala empieza aquí</h2><p>Abre un plano o dibuja directamente sobre la cuadrícula.</p><div><button className="sh-button sh-button-primary" onClick={() => fileRef.current.click()}>{icon('upload')} Importar plano</button><button className="sh-button sh-button-light" onClick={() => chooseTool('rectangle')}>Dibujar una sala</button></div><small>PDF, PNG o JPEG · el archivo se queda en tu navegador</small></div>}
           <div className="sh-view-controls"><button aria-label="Deshacer" disabled={!history.past.length} onClick={undo}>{icon('arrow-counterclockwise')}</button><button aria-label="Rehacer" disabled={!history.future.length} onClick={redo}>{icon('arrow-clockwise')}</button><span /><button aria-label="Alejar" onClick={() => zoom(1.25)}>{icon('dash-lg')}</button><button aria-label="Acercar" onClick={() => zoom(.8)}>{icon('plus-lg')}</button><button aria-label="Ajustar plano" onClick={() => fit()}>{icon('arrows-fullscreen')}</button></div>
           {busy && <div className="sh-busy" role="status">Preparando el plano…</div>}
         </div>
-        <div className="sh-guidance" aria-live="polite">{icon('info-circle')}<span>{message || INSTRUCTIONS[tool]}</span>{tool === 'room' && <button onClick={() => addRoom(draft)} disabled={draft.length < 3}>Cerrar sala ({draft.length})</button>}{draft.length > 0 && <button onClick={() => { setDraft([]); setMessage('') }}>Cancelar</button>}</div>
+        <div className="sh-guidance" aria-live="polite">{icon('info-circle')}<span>{message || INSTRUCTIONS[tool]}</span>{tool === 'room' && <button onClick={() => addRoom(draft)} disabled={draft.length < 3}>Cerrar sala ({draft.length})</button>}{draft.length > 0 && <button onClick={() => { setDraft([]); setMessage('') }}>Cancelar</button>}{canCalculate && !draft.length && <button className="sh-guidance-primary" onClick={calculate}>{icon('calculator')} {results ? 'Recalcular' : 'Calcular'}</button>}</div>
       </section>
       <aside className={`sh-inspector ${step === 'Resultados' ? 'sh-inspector--results' : ''}`} aria-label="Propiedades y cálculo">
         <div className="sh-inspector-title"><div><span className="sh-eyebrow">ESPACIO DE TRABAJO</span><h2>{step === 'Resultados' ? 'Comparar métodos' : selected ? 'Elemento seleccionado' : step === 'Equipo' ? 'Equipo y orientaciones' : 'Preparar el plano'}</h2></div></div>
         {error && <div className="sh-error" role="alert">{error}</div>}
-        {step === 'Resultados' ? <ShieldingCalculationPanel scene={scene} onChangeScene={commit} results={results} onCalculate={() => { try { setResults(evaluateShielding(scene)) } catch (e) { setError(e.message) } }} /> : <>
+        {step === 'Resultados' ? <ShieldingCalculationPanel scene={scene} onChangeScene={commit} results={results} onCalculate={calculate} /> : <>
           {tool === 'calibrate' && <section className="sh-card sh-calibration"><h3>{icon('arrows-expand')} Calibrar el plano</h3><p>Marca dos puntos cuya separación real conozcas.</p><div className="sh-calibration-steps"><span className={draft.length ? 'done' : ''}>1 · Primer punto</span><span className={draft.length === 2 ? 'done' : ''}>2 · Segundo punto</span></div><NumberField label="Distancia real (m)" value={realLength} onChange={setRealLength} min="0" /><button className="sh-button sh-button-primary" disabled={draft.length !== 2 || !realLength} onClick={applyCalibration}>Aplicar escala</button>{scene.calibrated && hasWork(scene) && <small>Al recalibrar cambiarán todas las medidas de la escena. Puedes deshacerlo.</small>}</section>}
           {tool === 'measure' && draft.length === 2 && <section className="sh-card"><h3>Distancia medida</h3><strong className="sh-measure">{fmt(distanceMeters(...draft))} {scene.calibrated ? 'm' : 'unidades sin calibrar'}</strong></section>}
           {selected && <section className="sh-card sh-properties">

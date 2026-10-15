@@ -1,5 +1,5 @@
 import { allocateCsnWorkload, applyCsnPreset, applyCsnOccupancy, editCsnParameter, getCsnPreset } from '../../utils/shieldingCsnPresets';
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { NcrpPresetSelector, NcrpOccupancySelector, CsnPresetSelector, CsnOccupancySelector } from './ShieldingDefaults';
 import { allocateNcrpPatients, applyNcrpPreset, applyNcrpOccupancy, editNcrpParameter, getNcrpPreset } from '../../utils/shieldingPresets';
 
@@ -32,7 +32,7 @@ function dose(value) {
     notation: value < 0.001 || value >= 10000 ? 'scientific' : 'standard' }).format(value);
 }
 
-function MethodResult({ method, title, components }) {
+function MethodResult({ method, title, components, hint }) {
   if (!method) return null;
   return <div className="shielding-method-result">
     <h4>{title}</h4>
@@ -43,6 +43,7 @@ function MethodResult({ method, title, components }) {
       <dt><strong>Total con ocupación T</strong></dt>
       <dd><strong>{dose(method.total_mGy_per_week)}</strong></dd>
     </dl>
+    {hint && <p className="shielding-result-hint">{hint}</p>}
     {!!method.errors.length && <details className="shielding-missing-data">
       <summary>Revisar {method.errors.length} {method.errors.length === 1 ? 'dato' : 'datos'}</summary>
       <ul>{method.errors.map((error, index) => <li key={index}>{error}</li>)}</ul>
@@ -74,6 +75,17 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
       ...(field === 'ncrp_occupancy' ? { ncrp_occupancy_type: 'manual' } : {}),
       ...(field === 'csn_occupancy' ? { csn_occupancy_type: 'manual' } : {}) } : point) });
   const profileIds = [...new Set(configurations.map(c => c.ncrp?.preset_id).filter(id => getNcrpPreset(id)))];
+  const csnPreset = getCsnPreset(scene.csnPresetId);
+  const readiness = [
+    [scene.calibrated, scene.calibrated ? 'Escala en metros' : 'Calibra el plano'],
+    [configurations.length > 0, configurations.length ? `${configurations.length} ${configurations.length === 1 ? 'orientación' : 'orientaciones'} del equipo` : 'Dibuja una orientación del equipo (E)'],
+    [points.length > 0, points.length ? `${points.length} ${points.length === 1 ? 'punto' : 'puntos'} de cálculo` : 'Coloca un punto de cálculo (P)'],
+  ];
+  const ready = readiness.every(([done]) => done);
+  const resultsRef = useRef(null);
+  useEffect(() => {
+    if (results) resultsRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  }, [results]);
 
   return <section className="shielding-calculation-panel" aria-label="Cálculos CSN y NCRP">
     <div className="shielding-calculation-scope">
@@ -81,12 +93,15 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
       <p>Compara el kerma que llega a cada punto antes de las barreras. Las paredes, puertas y
         receptores dibujados todavía no atenúan la radiación. No calcula espesores ni conformidad.</p>
     </div>
-    <p className="shielding-help">Dibuja el foco, la entrada al paciente y los puntos; pulsa Calcular.
-      NCRP empieza con valores de referencia editables y T = 1. Para CSN, selecciona su perfil o introduce tus datos.</p>
+    <ul className="shielding-readiness" aria-label="Datos para calcular">
+      {readiness.map(([done, label]) => <li key={label} className={done ? 'done' : ''}>{label}</li>)}
+      <li className="done">NCRP 147 · valores de referencia cargados, T = 1</li>
+      <li className={csnPreset ? 'done' : 'optional'}>{csnPreset ? `CSN 5.11 · ${csnPreset.label}` : 'CSN 5.11 · elige un perfil para calcularlo (opcional)'}</li>
+    </ul>
     <CsnPresetSelector scene={scene} onApply={presetId => onChangeScene(applyCsnPreset(scene, presetId))} />
     <button className="shielding-calculate-button" type="button" onClick={onCalculate}
-      disabled={!configurations.length || !points.length || !scene.calibrated}>Calcular CSN y NCRP</button>
-    {!scene.calibrated && <p className="shielding-help">Primero calibra el plano o define las dimensiones de la sala.</p>}
+      disabled={!ready}>Calcular CSN y NCRP</button>
+    {!ready && <p className="shielding-help">Para calcular falta: {readiness.filter(([done]) => !done).map(([, label]) => label).join(' · ')}.</p>}
     <details className="shielding-calculation-inputs">
       <summary>Editar parámetros y valores CSN / NCRP</summary>
       <p className="shielding-help">Las orientaciones del mismo perfil se reparten por igual su N de referencia.
@@ -193,14 +208,15 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
       <p className="shielding-help">Perfiles radiográficos NCRP 147: tablas 4.1, 4.3, 4.5 y 4.7.
         No incluyen TC, mamografía ni el tubo fluoroscópico. Los cambios permanecen solo en esta pestaña.</p>
     </details>
-    {results && <div className="shielding-calculation-results" aria-live="polite">
+    {results && <div className="shielding-calculation-results" aria-live="polite" ref={resultsRef}>
       <h3>Resultados · mGy/semana con ocupación T</h3>
       {results.points.map(point => <section className="shielding-point-result" key={point.pointId}>
         <h3>{point.name}</h3>
         <div className="shielding-method-comparison">
           <MethodResult method={point.ncrp} title="NCRP 147" components={[
             ['primary_mGy_per_week', 'Primaria'], ['secondary_mGy_per_week', 'Dispersa + fuga']]} />
-          <MethodResult method={point.csn} title="CSN · dirección declarada" components={[
+          <MethodResult method={point.csn} title="CSN · dirección declarada"
+            hint={csnPreset ? null : 'Sin perfil CSN: selecciona uno arriba o introduce los datos en «Editar parámetros».'} components={[
             ['primary_mGy_per_week', 'Primaria'], ['scatter_mGy_per_week', 'Dispersa'], ['leakage_mGy_per_week', 'Fuga']]} />
         </div>
       </section>)}

@@ -140,6 +140,7 @@ export default function ShieldingCanvas({
   onPointerUp,
   onWheel,
   onDoubleClick,
+  pointLabels = {},
 }) {
   const id = useId().replace(/:/g, '')
   const gridId = `shielding-grid-${id}`
@@ -296,6 +297,9 @@ export default function ShieldingCanvas({
           strokeWidth="2" vectorEffect="non-scaling-stroke" />
         <circle cx={point.x} cy={point.y} r={2.3 * unit} fill={colors.point} pointerEvents="none" />
         <Label x={point.x + 10 * unit} y={point.y + 4 * unit} unit={unit} color={colors.point}>{point.name}</Label>
+        {pointLabels[point.id] && (point.x + (pointLabels[point.id].length * 6.3 + 24) * unit > viewBox.x + viewBox.width
+          ? <Label x={point.x + 10 * unit} y={point.y + 25 * unit} anchor="end" unit={unit} color="#334a5b">{pointLabels[point.id]}</Label>
+          : <Label x={point.x + 10 * unit} y={point.y + 25 * unit} unit={unit} color="#334a5b">{pointLabels[point.id]}</Label>)}
       </g>
     })}
 

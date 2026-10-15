@@ -35,6 +35,11 @@ la escena. Cambiar datos o geometría invalida los resultados anteriores.
   ambos se mueven juntos hasta usar «Mover entrada al paciente» por separado.
 - Puntos de cálculo con ocupaciones CSN/NCRP independientes y comparación de
   resultados mediante un único botón.
+- Resultados guiados: una lista indica qué falta para calcular (escala,
+  orientación, punto) y si CSN tiene perfil; la barra inferior ofrece «Calcular»
+  en cuanto hay orientación y punto. Tras calcular, el panel se desplaza a los
+  resultados y cada punto muestra en el plano su total semanal NCRP/CSN. La
+  etiqueta desaparece con cualquier cambio, igual que los resultados.
 
 Las coordenadas de la escena son metros en planta; el eje Y de SVG crece hacia
 abajo. El zoom modifica la vista, nunca las distancias físicas. El marcador de
