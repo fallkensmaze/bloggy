@@ -35,6 +35,17 @@ la escena. Cambiar datos o geometría invalida los resultados anteriores.
   ambos se mueven juntos hasta usar «Mover entrada al paciente» por separado.
 - Puntos de cálculo con ocupaciones CSN/NCRP independientes y comparación de
   resultados mediante un único botón.
+- Blindaje declarado por capas (material y espesor en mm) en paredes, puertas y
+  ventanas. «Añadir blindaje» en una sala añade la misma capa a todas sus paredes;
+  editarla desde la sala cambia todas las copias que siguen agrupadas, y editar
+  una pared concreta la separa del grupo para que una edición posterior de la sala
+  no la sobrescriba. La herramienta «Barrera blindada» (B) dibuja una pared que
+  nace con la capa elegida en el panel. El espesor empieza en blanco y nunca se
+  supone. La lógica pura está en `shieldingBarriers.js`
+  (`scripts/test-shielding-barriers.mjs`). **El blindaje declarado no atenúa:**
+  el cálculo sigue siendo sin blindaje y el panel de resultados lo advierte. La
+  transmisión debe añadirse más adelante con coeficientes verificados por
+  material y perfil, nunca con valores supuestos.
 - Resultados guiados: una lista indica qué falta para calcular (escala,
   orientación, punto) y si CSN tiene perfil; la barra inferior ofrece «Calcular»
   en cuanto hay orientación y punto. Tras calcular, el panel se desplaza a los

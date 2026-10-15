@@ -1,4 +1,5 @@
 import { allocateCsnWorkload, applyCsnPreset, applyCsnOccupancy, editCsnParameter, getCsnPreset } from '../../utils/shieldingCsnPresets';
+import { shieldedWallCount } from '../../utils/shieldingBarriers';
 import React, { useEffect, useRef } from 'react';
 import { NcrpPresetSelector, NcrpOccupancySelector, CsnPresetSelector, CsnOccupancySelector } from './ShieldingDefaults';
 import { allocateNcrpPatients, applyNcrpPreset, applyNcrpOccupancy, editNcrpParameter, getNcrpPreset } from '../../utils/shieldingPresets';
@@ -92,6 +93,7 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
       <strong>En planta · Sin blindaje</strong>
       <p>Compara el kerma que llega a cada punto antes de las barreras. Las paredes, puertas y
         receptores dibujados todavía no atenúan la radiación. No calcula espesores ni conformidad.</p>
+      {shieldedWallCount(scene) > 0 && <p>Hay blindaje declarado en {shieldedWallCount(scene)} {shieldedWallCount(scene) === 1 ? 'barrera' : 'barreras'}: se guarda y se ve en el plano, pero no se aplica a estos resultados.</p>}
     </div>
     <ul className="shielding-readiness" aria-label="Datos para calcular">
       {readiness.map(([done, label]) => <li key={label} className={done ? 'done' : ''}>{label}</li>)}

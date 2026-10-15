@@ -1,9 +1,11 @@
+import { shieldingSummary } from '../../utils/shieldingBarriers'
 import React, { useId, useLayoutEffect, useState } from 'react'
 
 const colors = {
   wall: '#334a5b',
   selected: '#087c86',
   point: '#07838b',
+  shielding: '#5a4a9c',
   beam: '#bd8117',
   door: '#a27648',
   window: '#4688aa',
@@ -216,6 +218,7 @@ export default function ShieldingCanvas({
       const length = lineLength(wall.start, wall.end)
       const center = midpoint(wall.start, wall.end)
       const color = isSelected ? colors.selected : colors[wall.kind] || colors.wall
+      const shielding = shieldingSummary(wall.shielding)
       const angle = Math.atan2(wall.end.y - wall.start.y, wall.end.x - wall.start.x) * 180 / Math.PI
       const labelAngle = angle > 90 ? angle - 180 : angle < -90 ? angle + 180 : angle
       const normal = length > 0 ? {
@@ -230,6 +233,9 @@ export default function ShieldingCanvas({
         {isSelected && <line x1={wall.start.x} y1={wall.start.y} x2={wall.end.x} y2={wall.end.y}
           stroke={colors.selected} strokeOpacity="0.13" strokeWidth="16" strokeLinecap="round"
           vectorEffect="non-scaling-stroke" />}
+        {shielding && <line className="sh-canvas-shielding" x1={wall.start.x} y1={wall.start.y} x2={wall.end.x} y2={wall.end.y}
+          stroke={colors.shielding} strokeOpacity="0.55" strokeWidth="13" strokeLinecap="round"
+          vectorEffect="non-scaling-stroke" />}
         <line x1={wall.start.x} y1={wall.start.y} x2={wall.end.x} y2={wall.end.y}
           stroke={wall.kind === 'window' ? '#fff' : color} strokeWidth={wall.kind === 'door' ? 3 : 7}
           strokeDasharray={wall.kind === 'door' ? '8 4' : undefined} strokeLinecap="round"
@@ -238,10 +244,11 @@ export default function ShieldingCanvas({
           x1={wall.start.x + normal.x * side} y1={wall.start.y + normal.y * side}
           x2={wall.end.x + normal.x * side} y2={wall.end.y + normal.y * side}
           stroke={color} strokeWidth="1.7" vectorEffect="non-scaling-stroke" />)}
-        {(scene.calibrated || isSelected) && <g transform={`translate(${center.x} ${center.y}) rotate(${labelAngle})`}>
+        {(scene.calibrated || isSelected || shielding) && <g transform={`translate(${center.x} ${center.y}) rotate(${labelAngle})`}>
           <Label x={0} y={-11 * unit} anchor="middle" unit={unit} color={color}>
             {scene.calibrated ? `${cleanNumber(length)} m` : wall.name}
           </Label>
+          {shielding && <Label x={0} y={18 * unit} anchor="middle" unit={unit} color={colors.shielding}>{shielding}</Label>}
         </g>}
         {showHandles && isSelected && <>
           <Handle point={wall.start} name="start" unit={unit} />
