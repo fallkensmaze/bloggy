@@ -1,3 +1,5 @@
+import { createCsnParameters, getCsnPreset } from './shieldingCsnPresets.js';
+
 // Selected numerical reference data, not a copy of the NCRP tables.
 // NCRP 147 (2004), Tables 4.3, 4.5 and 4.7, printed pp. 40, 43, 46–47.
 // Secondary = leakage + forward/backscatter (the larger tabulated direction).
@@ -43,15 +45,15 @@ export function createNcrpParameters(id = DEFAULT_NCRP_PRESET) {
   };
 }
 
-export function createShieldingConfiguration({ id, name, source, target }) {
+export function createShieldingConfiguration({ id, name, source, target, csnPresetId }) {
   const preset = getNcrpPreset(DEFAULT_NCRP_PRESET);
   return { id, name, source: { ...source }, target: { ...target }, patient: { ...target },
     patientFollowsTarget: true, apertureDeg: presetAperture(preset), apertureMode: 'preset',
-    usePercent: '', csn: {}, ncrp: createNcrpParameters() };
+    usePercent: '', usePercentMode: 'automatic', csn: getCsnPreset(csnPresetId) ? createCsnParameters(csnPresetId) : {}, ncrp: createNcrpParameters() };
 }
 
-export function createShieldingPoint({ id, name, x, y }) {
-  return { id, name, x, y, csn_occupancy: '', ncrp_occupancy: 1, ncrp_occupancy_type: 'full' };
+export function createShieldingPoint({ id, name, x, y, csnPresetId }) {
+  return { id, name, x, y, csn_occupancy: getCsnPreset(csnPresetId) ? 1 : '', csn_occupancy_type: getCsnPreset(csnPresetId) ? 'full' : 'unset', ncrp_occupancy: 1, ncrp_occupancy_type: 'full' };
 }
 
 /** Equal initial allocation is an application assumption, NOT an NCRP use factor.

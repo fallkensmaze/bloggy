@@ -1,5 +1,6 @@
+import { allocateCsnWorkload, applyCsnPreset, applyCsnOccupancy, editCsnParameter, getCsnPreset } from '../../utils/shieldingCsnPresets';
 import React from 'react';
-import { NcrpPresetSelector, NcrpOccupancySelector } from './ShieldingDefaults';
+import { NcrpPresetSelector, NcrpOccupancySelector, CsnPresetSelector, CsnOccupancySelector } from './ShieldingDefaults';
 import { allocateNcrpPatients, applyNcrpPreset, applyNcrpOccupancy, editNcrpParameter, getNcrpPreset } from '../../utils/shieldingPresets';
 
 const CSN_FIELDS = [
@@ -67,10 +68,11 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
   const updateConfiguration = (index, method, field, value) => onChangeScene({ ...scene,
     configurations: configurations.map((configuration, current) => current !== index ? configuration :
       { ...configuration, [method]: method === 'ncrp' ? editNcrpParameter(configuration.ncrp, field, value) :
-        { ...configuration[method], [field]: value } }) });
+        editCsnParameter(configuration.csn, field, value) }) });
   const updatePoint = (index, field, value) => onChangeScene({ ...scene,
     points: points.map((point, current) => current === index ? { ...point, [field]: value,
-      ...(field === 'ncrp_occupancy' ? { ncrp_occupancy_type: 'manual' } : {}) } : point) });
+      ...(field === 'ncrp_occupancy' ? { ncrp_occupancy_type: 'manual' } : {}),
+      ...(field === 'csn_occupancy' ? { csn_occupancy_type: 'manual' } : {}) } : point) });
   const profileIds = [...new Set(configurations.map(c => c.ncrp?.preset_id).filter(id => getNcrpPreset(id)))];
 
   return <section className="shielding-calculation-panel" aria-label="Cálculos CSN y NCRP">
@@ -80,12 +82,13 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
         receptores dibujados todavía no atenúan la radiación. No calcula espesores ni conformidad.</p>
     </div>
     <p className="shielding-help">Dibuja el foco, la entrada al paciente y los puntos; pulsa Calcular.
-      NCRP empieza con valores de referencia editables y T = 1. La comparación CSN requiere sus propios datos.</p>
+      NCRP empieza con valores de referencia editables y T = 1. Para CSN, selecciona su perfil o introduce tus datos.</p>
+    <CsnPresetSelector scene={scene} onApply={presetId => onChangeScene(applyCsnPreset(scene, presetId))} />
     <button className="shielding-calculate-button" type="button" onClick={onCalculate}
       disabled={!configurations.length || !points.length || !scene.calibrated}>Calcular CSN y NCRP</button>
     {!scene.calibrated && <p className="shielding-help">Primero calibra el plano o define las dimensiones de la sala.</p>}
     <details className="shielding-calculation-inputs">
-      <summary>Editar parámetros y valores NCRP</summary>
+      <summary>Editar parámetros y valores CSN / NCRP</summary>
       <p className="shielding-help">Las orientaciones del mismo perfil se reparten por igual su N de referencia.
         Es un reparto inicial de la aplicación, editable, no un factor U tabulado. Bucky y otras direcciones
         son perfiles complementarios: cada uno usa N de la sala sin repetir la secundaria de sala completa.</p>
@@ -97,7 +100,7 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
           {members.some(c => c.ncrp.patients_mode === 'manual') && ' · incluye valores manuales; revisa la carga total del perfil.'}</p>;
       })}
       <NumberField label="Carga total del equipo · CSN" unit="mA·min/semana" value={scene.csnTotalWorkload}
-        onChange={value => onChangeScene({ ...scene, csnTotalWorkload: value })} />
+        onChange={value => onChangeScene({ ...scene, csnTotalWorkload: value, csnWorkloadModified: true })} />
       <p className="shielding-help">Esta carga se reparte con el porcentaje de cada orientación.
         NCRP usa sus propios pacientes por orientación; no se les aplica ese porcentaje.</p>
       {!configurations.length && <p>Añade una orientación del equipo sobre el plano.</p>}
@@ -112,8 +115,30 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
           <p className="shielding-help">Distribución direccional declarada, que sustituye al U tabulado.
             Introduce rendimientos en kerma a la tensión de trabajo. La fuga efectiva debe incluir
             la corrección que corresponda; no se añade ningún factor implícito.</p>
+          {configuration.csn?.coefficients_modified && <p className="shielding-help">Parámetros personalizados desde el perfil CSN seleccionado.</p>}
+          <NumberField label="Carga CSN de esta orientación" unit="% del total del equipo" max="100" context={configuration.name}
+            value={configuration.usePercent} onChange={value => onChangeScene({ ...scene,
+              configurations: configurations.map((c, i) => i === index ? { ...c, usePercent: value, usePercentMode: 'manual' } : c) })} />
+          {getCsnPreset(scene.csnPresetId) && <label className="shielding-checkbox">
+            <input type="checkbox" aria-label={`Reparto automático CSN · ${configuration.name}`}
+              checked={configuration.usePercentMode === 'automatic'} onChange={event => onChangeScene(allocateCsnWorkload({ ...scene,
+                configurations: configurations.map((c, i) => i === index ? { ...c, usePercentMode: event.target.checked ? 'automatic' : 'manual' } : c) }))} />
+            <span>Repartir por igual la carga CSN entre las orientaciones. Revisa que la suma sea 100 % si hay porcentajes manuales.</span>
+          </label>}
+          {getCsnPreset(configuration.csn?.preset_id) && <>
+            <p className="shielding-help">Fuga L = límite × f / Qh. Editar Qh, f o el límite recalcula L;
+              editar L directamente activa un rendimiento de fuga manual.</p>
+            {[
+              ['qh_mA_min_per_hour', 'Carga máxima en una hora Qh', 'mA·min/h'],
+              ['leakage_factor', 'Factor de corrección de fuga f', 'adimensional'],
+              ['leakage_limit_mGy_per_hour_at_1m', 'Límite de fuga a 1 m', 'mGy/h'],
+            ].map(([key, label, unit]) => <NumberField key={key} label={label} unit={unit} context={configuration.name}
+              max={key === 'leakage_factor' ? 1 : undefined} value={configuration.csn?.[key]}
+              onChange={value => updateConfiguration(index, 'csn', key, value)} />)}
+            <p className="shielding-help">{configuration.csn.leakage_mode === 'manual' ? 'L manual: Qh, f y el límite mostrados no se aplican hasta editarlos.' : 'L calculado a partir de Qh, f y el límite mostrados.'}</p>
+          </>}
           {CSN_FIELDS.map(([key, label, unit]) => <NumberField key={key} label={label} unit={unit}
-            max={key === 'scatter_fraction' ? 1 : undefined} value={configuration.csn?.[key]}
+            context={configuration.name} max={key === 'scatter_fraction' ? 1 : undefined} value={configuration.csn?.[key]}
             onChange={value => updateConfiguration(index, 'csn', key, value)} />)}
           <label className="shielding-field"><span>Procedencia y condiciones CSN</span>
             <textarea rows="2" value={configuration.csn?.provenance ?? ''}
@@ -155,6 +180,8 @@ export default function ShieldingCalculationPanel({ scene, onChangeScene, result
         {!points.length && <p>Coloca un punto sobre el plano para evaluarlo.</p>}
         {points.map((point, index) => <fieldset key={point.id ?? index}>
           <legend>{point.name || `Punto ${index + 1}`}</legend>
+          <CsnOccupancySelector point={point} onChange={type => onChangeScene({ ...scene,
+            points: points.map((p, i) => i === index ? applyCsnOccupancy(p, type) : p) })} />
           <NcrpOccupancySelector point={point} onChange={type => onChangeScene({ ...scene,
             points: points.map((p, i) => i === index ? applyNcrpOccupancy(p, type) : p) })} />
           <NumberField label="Ocupación T · CSN" unit="fracción, mayor que 0 y hasta 1" max="1"
