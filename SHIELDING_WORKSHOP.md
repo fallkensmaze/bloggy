@@ -98,6 +98,55 @@ espacio carga T NCRP y admite un valor manual, sin modificar T CSN. Borrar
 cualquier dato necesario vuelve a dejar el resultado pendiente. Cada cambio
 invalida resultados y se puede deshacer o rehacer.
 
+### Valores iniciales CSN 5.11
+
+El selector «Valores iniciales CSN 5.11 · equipo completo» aparece en Equipo y
+Resultados. Carga un escenario de radiografía convencional para todas las
+orientaciones del mismo equipo, conservando geometría y datos NCRP. Puede
+seleccionarse antes o después de dibujar. Los perfiles son escenarios alternativos,
+no tres cargas que deban sumarse.
+
+| Perfil | W (mA·min/semana) | G aproximado (mGy·m²/(mA·min)) | Qh (mA·min/h) |
+| --- | ---: | ---: | ---: |
+| Radiografía sin radioscopia, 100 kVp | 160 | 10 | 300 |
+| Radiografía sin radioscopia, 125 kVp | 80 | 15 | 240 |
+| Radiografía sin radioscopia, 150 kVp | 40 | 20 | 200 |
+
+Fuente: CSN GS 5.11, octubre de 1990, páginas **impresas** 16–18, 21 y 23.
+W procede de la tabla 2 y Qh de los ejemplos de la página 18. G es una lectura
+gráfica redondeada de la figura 1 para wolframio, tensión constante y 2 mm Al.
+La figura expresa Γ en mSv·m²/(mA·min): estos perfiles adoptan explícitamente
+la equivalencia numérica aproximada mSv/mGy = 1 que la guía admite para
+radiodiagnóstico en la página 18. No es una medición del rendimiento en kerma del
+equipo ni una conversión a dosis efectiva; la UI y la procedencia lo indican.
+No se extrapolan estos perfiles a TC, mamografía o radioscopia.
+
+La fracción dispersa inicial es 0,002 para 400 cm² (p. 17). El campo real inicial
+20 × 20 cm es una hipótesis editable de la aplicación; no se deduce del plano ni
+modifica la apertura dibujada. Deben revisarse ambos datos para el campo real.
+La fuga se calcula como `L = límite × f / Qh`, inicialmente con límite
+1 mGy/h a 1 m y f = 1 conservador, sin reducción por tensión de diseño de la
+carcasa. Qh, f y límite pueden editarse: se recalcula L; un campo borrado o
+inválido deja L pendiente. Editar L directamente lo convierte en manual, como
+indica el panel. Volver a editar Qh, f o límite reactiva la fórmula.
+
+Seleccionar/restaurar el perfil carga W y los coeficientes de todas las
+orientaciones. Inicia T CSN = 1 solo en puntos aún sin ocupación. Conserva
+ocupaciones elegidas, porcentajes manuales y blancos introducidos manualmente.
+Las orientaciones automáticas reciben 100/n por ciento; es una hipótesis inicial
+de la aplicación, no U tabulado. Añadir o quitar orientaciones recalcula solo los
+porcentajes automáticos; con porcentajes manuales se exige revisar la suma 100 %.
+Los nuevos puntos y orientaciones heredan el perfil activo. Borrar cualquier
+entrada necesaria deja CSN pendiente hasta editarla o restaurar expresamente el
+perfil; el motor nunca rellena datos.
+
+La ocupación CSN es independiente de NCRP: total 1, parcial 1/4 y ocasional 1/16
+(p. 16). Los dos valores reducidos se ofrecen para público; para personal expuesto
+se indica T = 1. Un uso desconocido comienza en 1 por decisión conservadora de
+la aplicación. Esta distribución direccional no incorpora el mínimo U×T = 0,1
+recomendado para el método de barreras con U tabulado: ese método sigue fuera
+del alcance actual.
+
 ### CSN con distribución direccional declarada
 
 Esta primera ruta adapta el término fuente a las orientaciones dibujadas. La
@@ -130,9 +179,10 @@ K_total = suma_i(K_primaria,i + K_dispersa,i + K_fuga,i)
 
 La dispersión exige `d_pq > 5 × lado_mayor`, con desigualdad estricta. La fuga
 efectiva debe incluir la corrección correspondiente a las condiciones de trabajo.
-La aplicación no incorpora una corrección ni una conversión mSv→mGy implícitas.
-La normalización `a/S_ref` debe proceder de datos coherentes; no hay valor físico
-precargado. Las ecuaciones parten del anexo «Cálculo de blindajes», apartados
+El motor no incorpora una corrección ni una conversión mSv→mGy implícitas;
+la aproximación del perfil inicial se declara al cargarlo, como se explica arriba.
+La normalización `a/S_ref` debe proceder de datos coherentes; el perfil CSN usa
+0,002/400 cm² como se indica arriba. Las ecuaciones parten del anexo «Cálculo de blindajes», apartados
 a.1 y a.2, de la [Guía CSN GS 05-11, octubre de 1990](https://www.csn.es/documents/10182/896572/GS%2005-11%20Aspectos%20t%C3%A9cnicos%20de%20seguridad%20y%20protecci%C3%B3n%20radiol%C3%B3gica%20de%20instalaciones%20m%C3%A9dicas%20de%20rayos%20X%20para%20diagn%C3%B3stico%20%28Octubre%201990%29).
 
 ### NCRP 147 por configuración
@@ -181,7 +231,7 @@ dirección declarada CSN no equivale al cálculo completo de la Guía 5.11.
 
 Los coeficientes NCRP se inicializan con referencias publicadas y pueden editarse
 durante la sesión. No son medidas del equipo del usuario. Los coeficientes CSN
-siguen siendo manuales e independientes. Las pruebas distinguen los oráculos
+pueden cargarse con sus propios perfiles y editarse independientemente. Las pruebas distinguen los oráculos
 ficticios del motor de los valores bibliográficos de los perfiles iniciales.
 No hay snapshots persistidos, cadenas de hashes o flujos de aprobación.
 
@@ -212,5 +262,8 @@ geométrica y estabilidad numérica. Las pruebas de navegador cubren los flujos
 del editor, cálculo NCRP directo, edición/restauración y pérdida del trabajo al
 reiniciar. `test-shielding-presets.mjs` comprueba los perfiles con cálculos
 independientes, reparto sin duplicación, ocupación y conservación de cambios.
+`test-shielding-csn-presets.mjs` añade los tres escenarios CSN, el cálculo de
+fuga, la independencia de métodos, blancos manuales y herencia del perfil.
+La suite de navegador verifica selección, edición, restauración y ocupación CSN.
 Pasarlas verifica este alcance
 implementado; no valida un cálculo completo de blindajes que aún no existe.
