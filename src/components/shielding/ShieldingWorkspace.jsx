@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import ShieldingCanvas from './ShieldingCanvas'
 import ShieldingCalculationPanel from './ShieldingCalculationPanel'
+import { ShieldingLayerFields, WallShielding, RoomShielding } from './ShieldingBarrierEditor'
+import { addShieldingLayer, newShieldingLayer, removeShieldingGroup, removeShieldingLayer, roomShieldingGroups, shieldedWallCount, shieldingSummary, updateShieldingGroup, updateShieldingLayer } from '../../utils/shieldingBarriers'
 import { NcrpPresetSelector, NcrpOccupancySelector, CsnPresetSelector, CsnOccupancySelector } from './ShieldingDefaults'
 import { emptyScene, newHistory, commitScene, undoScene, redoScene, scaleScene, updateEntity, removeEntity } from '../../utils/shieldingScene'
 import { distanceMeters, createCalibration, classifyPrimary, validateWorkloadDistribution, segmentIntersection } from '../../utils/shieldingGeometry'
@@ -14,20 +16,21 @@ import '../../styles/shielding.css'
 const TOOLS = [
   ['select', 'cursor', 'Seleccionar', 'V'], ['pan', 'arrows-move', 'Mover vista', 'H'],
   ['rectangle', 'bounding-box', 'Sala rectangular', 'R'], ['room', 'pentagon', 'Sala poligonal', ''],
-  ['wall', 'slash-lg', 'Pared', 'W'], ['door', 'door-open', 'Puerta', ''], ['window', 'window', 'Ventana', ''],
+  ['wall', 'slash-lg', 'Pared', 'W'], ['barrier', 'shield-shaded', 'Barrera blindada', 'B'], ['door', 'door-open', 'Puerta', ''], ['window', 'window', 'Ventana', ''],
   ['configuration', 'broadcast', 'Orientación del equipo', 'E'], ['point', 'geo-alt', 'Punto de cálculo', 'P'],
   ['measure', 'rulers', 'Medir', 'M'], ['calibrate', 'arrows-expand', 'Calibrar escala', ''],
 ]
 const INSTRUCTIONS = {
   select: 'Selecciona un elemento para editarlo. Arrastra sus tiradores para corregirlo.', pan: 'Arrastra el plano para desplazarte. Usa la rueda para acercar o alejar.',
   rectangle: 'Marca dos esquinas opuestas de la sala.', room: 'Marca los vértices de la sala. Pulsa Cerrar sala al terminar.',
-  wall: 'Marca el inicio y el final de la pared.', door: 'Marca los dos extremos de la puerta.', window: 'Marca los dos extremos de la ventana.',
+  wall: 'Marca el inicio y el final de la pared.', barrier: 'Elige material y espesor en el panel y marca los dos extremos de la barrera.', door: 'Marca los dos extremos de la puerta.', window: 'Marca los dos extremos de la ventana.',
   configuration: 'Marca el foco y después la entrada del haz en el paciente. Ambos puntos definen la dirección. El perfil NCRP se carga automáticamente.', point: 'Pulsa donde quieras evaluar la radiación. Ocupación inicial NCRP: T = 1, editable.',
   patient: 'Marca dónde entra el haz en el paciente para esta orientación.', measure: 'Marca dos puntos para medir su distancia.', calibrate: 'Marca los extremos de una distancia conocida del plano.',
 }
 const INITIAL_VIEW = { x: -1, y: -1, width: 12, height: 8 }
 const fmt = v => Number.isFinite(v) ? v.toLocaleString('es-ES', { maximumFractionDigits: 2 }) : '—'
 const numeric = value => value === '' || value == null ? NaN : Number(value)
+const shortDose = v => Number.isFinite(v) ? v.toLocaleString('es-ES', { maximumSignificantDigits: 3 }) : '—'
 const hasWork = s => Boolean(s.background || s.walls.length || s.points.length || s.configurations.length || s.rooms.length)
 const icon = name => <i className={`bi bi-${name}`} aria-hidden="true" />
 function Field({ label, value, onChange, type = 'text', ...rest }) {
@@ -49,6 +52,7 @@ export default function ShieldingWorkspace() {
   const [viewBox, setViewBox] = useState(INITIAL_VIEW), [backgroundOpacity, setBackgroundOpacity] = useState(.6)
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false)
   const [realLength, setRealLength] = useState(''), [results, setResults] = useState(null)
+  const [barrierLayer, setBarrierLayer] = useState({ material: 'lead', thickness_mm: '' })
   const [pdfChoice, setPdfChoice] = useState(null), [pdfPage, setPdfPage] = useState(1)
   const svgRef = useRef(null), fileRef = useRef(null), drag = useRef(null), nextId = useRef(1)
   const modalRef = useRef(null)
@@ -146,14 +150,15 @@ export default function ShieldingWorkspace() {
     if (!scene.calibrated && !['calibrate', 'pan', 'select'].includes(tool)) { chooseTool('calibrate'); setError('Calibra el plano con una distancia conocida antes de dibujar.'); return }
     if (tool === 'point') {
       const point = createShieldingPoint({ id: id('point'), name: `P${scene.points.length + 1}`, ...p, csnPresetId: scene.csnPresetId })
-      commit({ ...scene, points: [...scene.points, point] }); setSelection({ type: 'point', id: point.id }); chooseTool('select'); return
+      commit({ ...scene, points: [...scene.points, point] }); setSelection({ type: 'point', id: point.id }); chooseTool('select')
+      setMessage(scene.configurations.length ? `${point.name} añadido. Pulsa «Calcular» para ver la dosis con NCRP por defecto.` : `${point.name} añadido. Falta dibujar una orientación del equipo (E).`); return
     }
     if (tool === 'patient') {
       if (selection?.type !== 'configuration' || !selected) return
       patchSelected({ patient: p, patientFollowsTarget: false }); chooseTool('select'); return
     }
     if (tool === 'room') { setDraft(d => d.length && distanceMeters(d[d.length - 1], p) < 1e-6 ? d : [...d, p]); return }
-    if (['wall', 'door', 'window', 'rectangle', 'configuration', 'measure', 'calibrate'].includes(tool)) {
+    if (['wall', 'barrier', 'door', 'window', 'rectangle', 'configuration', 'measure', 'calibrate'].includes(tool)) {
       if (!draft.length || draft.length === 2) { setDraft([p]); setMessage(''); return }
       const start = draft[0]
       if (distanceMeters(start, p) < 1e-6) { setError('Los dos puntos deben ser distintos.'); return }
@@ -165,8 +170,10 @@ export default function ShieldingWorkspace() {
       if (tool === 'configuration') {
         const configuration = createShieldingConfiguration({ id: id('configuration'), name: `Orientación ${scene.configurations.length + 1}`, source: start, target: p, csnPresetId: scene.csnPresetId })
         commit(allocateCsnWorkload(allocateNcrpPatients({ ...scene, configurations: [...scene.configurations, configuration] }))); setSelection({ type: 'configuration', id: configuration.id }); setStep('Equipo')
+        chooseTool('select'); setMessage(`${configuration.name} añadida con valores NCRP por defecto. ${scene.points.length ? 'Pulsa «Calcular» o añade más puntos (P).' : 'Ahora coloca un punto de cálculo (P).'}`); return
       } else {
-        const wall = { id: id('wall'), name: `${tool === 'wall' ? 'Pared' : tool === 'door' ? 'Puerta' : 'Ventana'} ${scene.walls.length + 1}`, start, end: p, kind: tool }
+        const wall = { id: id('wall'), name: `${{ wall: 'Pared', barrier: 'Barrera', door: 'Puerta', window: 'Ventana' }[tool]} ${scene.walls.length + 1}`, start, end: p, kind: tool === 'barrier' ? 'wall' : tool,
+          ...(tool === 'barrier' ? { shielding: [newShieldingLayer(id('layer'), barrierLayer)] } : {}) }
         commit({ ...scene, walls: [...scene.walls, wall] }); setSelection({ type: 'wall', id: wall.id })
       }
       chooseTool('select')
@@ -256,6 +263,13 @@ export default function ShieldingWorkspace() {
     const generation = ++importGeneration.current; setBusy(true)
     try { registerImage(await rotatePlanImage(scene.background), scene.background.name, generation) } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
+  const calculate = () => {
+    setStep('Resultados')
+    try { setResults(evaluateShielding(scene)); setMessage('Cálculo hecho: el total semanal aparece junto a cada punto. Cualquier cambio lo invalida.') } catch (e) { setError(e.message) }
+  }
+  const canCalculate = scene.calibrated && scene.configurations.length > 0 && scene.points.length > 0
+  const pointLabels = Object.fromEntries((results?.points || []).map(p => [p.pointId,
+    `NCRP ${shortDose(p.ncrp?.total_mGy_per_week)} · CSN ${shortDose(p.csn?.total_mGy_per_week)} mGy/sem`]))
   const allEntities = [...scene.rooms.map(e => ({ ...e, type: 'room' })), ...scene.configurations.map(e => ({ ...e, type: 'configuration' })), ...scene.points.map(e => ({ ...e, type: 'point' })), ...scene.walls.map(e => ({ ...e, type: 'wall' }))]
   return <div className="sh-workspace">
     <header className="sh-header">
@@ -271,23 +285,34 @@ export default function ShieldingWorkspace() {
       <section className="sh-stage" aria-label="Editor de sala" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); importFile(e.dataTransfer.files[0]) }}>
         <div className="sh-canvas-heading"><span>{scene.name}</span><span>{scene.calibrated ? 'Planta · metros' : 'Escala pendiente'}</span></div>
         <div className="sh-canvas-wrap">
-          <ShieldingCanvas scene={display} viewBox={viewBox} selection={selection} tool={tool} draft={draft} cursor={cursor} activeConfigurationId={activeConfiguration?.id} backgroundOpacity={backgroundOpacity} svgRef={svgRef} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onDoubleClick={() => { if (tool === 'room' && draft.length >= 3) addRoom(draft) }} />
+          <ShieldingCanvas scene={display} viewBox={viewBox} selection={selection} tool={tool} draft={draft} cursor={cursor} activeConfigurationId={activeConfiguration?.id} backgroundOpacity={backgroundOpacity} pointLabels={previewScene ? {} : pointLabels} svgRef={svgRef} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onDoubleClick={() => { if (tool === 'room' && draft.length >= 3) addRoom(draft) }} />
           {!hasWork(scene) && tool === 'select' && <div className="sh-empty"><div className="sh-empty-icon">{icon('bounding-box')}</div><h2>Tu sala empieza aquí</h2><p>Abre un plano o dibuja directamente sobre la cuadrícula.</p><div><button className="sh-button sh-button-primary" onClick={() => fileRef.current.click()}>{icon('upload')} Importar plano</button><button className="sh-button sh-button-light" onClick={() => chooseTool('rectangle')}>Dibujar una sala</button></div><small>PDF, PNG o JPEG · el archivo se queda en tu navegador</small></div>}
           <div className="sh-view-controls"><button aria-label="Deshacer" disabled={!history.past.length} onClick={undo}>{icon('arrow-counterclockwise')}</button><button aria-label="Rehacer" disabled={!history.future.length} onClick={redo}>{icon('arrow-clockwise')}</button><span /><button aria-label="Alejar" onClick={() => zoom(1.25)}>{icon('dash-lg')}</button><button aria-label="Acercar" onClick={() => zoom(.8)}>{icon('plus-lg')}</button><button aria-label="Ajustar plano" onClick={() => fit()}>{icon('arrows-fullscreen')}</button></div>
           {busy && <div className="sh-busy" role="status">Preparando el plano…</div>}
         </div>
-        <div className="sh-guidance" aria-live="polite">{icon('info-circle')}<span>{message || INSTRUCTIONS[tool]}</span>{tool === 'room' && <button onClick={() => addRoom(draft)} disabled={draft.length < 3}>Cerrar sala ({draft.length})</button>}{draft.length > 0 && <button onClick={() => { setDraft([]); setMessage('') }}>Cancelar</button>}</div>
+        <div className="sh-guidance" aria-live="polite">{icon('info-circle')}<span>{message || INSTRUCTIONS[tool]}</span>{tool === 'room' && <button onClick={() => addRoom(draft)} disabled={draft.length < 3}>Cerrar sala ({draft.length})</button>}{draft.length > 0 && <button onClick={() => { setDraft([]); setMessage('') }}>Cancelar</button>}{canCalculate && !draft.length && <button className="sh-guidance-primary" onClick={calculate}>{icon('calculator')} {results ? 'Recalcular' : 'Calcular'}</button>}</div>
       </section>
       <aside className={`sh-inspector ${step === 'Resultados' ? 'sh-inspector--results' : ''}`} aria-label="Propiedades y cálculo">
         <div className="sh-inspector-title"><div><span className="sh-eyebrow">ESPACIO DE TRABAJO</span><h2>{step === 'Resultados' ? 'Comparar métodos' : selected ? 'Elemento seleccionado' : step === 'Equipo' ? 'Equipo y orientaciones' : 'Preparar el plano'}</h2></div></div>
         {error && <div className="sh-error" role="alert">{error}</div>}
-        {step === 'Resultados' ? <ShieldingCalculationPanel scene={scene} onChangeScene={commit} results={results} onCalculate={() => { try { setResults(evaluateShielding(scene)) } catch (e) { setError(e.message) } }} /> : <>
+        {step === 'Resultados' ? <ShieldingCalculationPanel scene={scene} onChangeScene={commit} results={results} onCalculate={calculate} /> : <>
           {tool === 'calibrate' && <section className="sh-card sh-calibration"><h3>{icon('arrows-expand')} Calibrar el plano</h3><p>Marca dos puntos cuya separación real conozcas.</p><div className="sh-calibration-steps"><span className={draft.length ? 'done' : ''}>1 · Primer punto</span><span className={draft.length === 2 ? 'done' : ''}>2 · Segundo punto</span></div><NumberField label="Distancia real (m)" value={realLength} onChange={setRealLength} min="0" /><button className="sh-button sh-button-primary" disabled={draft.length !== 2 || !realLength} onClick={applyCalibration}>Aplicar escala</button>{scene.calibrated && hasWork(scene) && <small>Al recalibrar cambiarán todas las medidas de la escena. Puedes deshacerlo.</small>}</section>}
+          {tool === 'barrier' && <section className="sh-card"><h3>{icon('shield-shaded')} Nueva barrera blindada</h3><p className="sh-help">Cada barrera que dibujes nacerá con esta capa. Puedes añadir más capas al seleccionarla.</p><ShieldingLayerFields layer={barrierLayer} context="nueva barrera" onChange={patch => setBarrierLayer(l => ({ ...l, ...patch }))} /></section>}
           {tool === 'measure' && draft.length === 2 && <section className="sh-card"><h3>Distancia medida</h3><strong className="sh-measure">{fmt(distanceMeters(...draft))} {scene.calibrated ? 'm' : 'unidades sin calibrar'}</strong></section>}
           {selected && <section className="sh-card sh-properties">
             <span className="sh-tag">{selection.type === 'configuration' ? 'Equipo RX · orientación' : selection.type === 'point' ? 'Punto de cálculo' : selection.type === 'room' ? 'Recinto' : selected.kind === 'door' ? 'Puerta' : selected.kind === 'window' ? 'Ventana' : 'Pared'}</span>
             <Field label={selection.type === 'configuration' ? 'Nombre de la orientación' : 'Nombre'} value={selected.name} onChange={name => patchSelected({ name })} />
             {selection.type === 'wall' && <p className="sh-property-value">Longitud <strong>{fmt(distanceMeters(selected.start, selected.end))} m</strong></p>}
+            {selection.type === 'wall' && <WallShielding wall={selected}
+              onAdd={() => commit(addShieldingLayer(scene, [selected.id], {}, () => id('layer')))}
+              onUpdate={(layerId, patch) => commit(updateShieldingLayer(scene, selected.id, layerId, patch))}
+              onRemove={layerId => commit(removeShieldingLayer(scene, selected.id, layerId))} />}
+            {selection.type === 'room' && <RoomShielding room={selected} summary={roomShieldingGroups(scene, selected.id)}
+              walls={scene.walls.filter(w => w.roomId === selected.id)} describe={shieldingSummary}
+              onAdd={() => commit(addShieldingLayer(scene, scene.walls.filter(w => w.roomId === selected.id).map(w => w.id), { groupId: id('shielding') }, () => id('layer')))}
+              onUpdateGroup={(groupId, patch) => commit(updateShieldingGroup(scene, groupId, patch))}
+              onRemoveGroup={groupId => commit(removeShieldingGroup(scene, groupId))}
+              onSelectWall={wallId => setSelection({ type: 'wall', id: wallId })} />}
             {selection.type === 'configuration' && <>
               <NcrpPresetSelector configuration={selected} onApply={presetId => commit(applyNcrpPreset(scene, selected.id, presetId))} />
               <div className="sh-two-fields"><NumberField label="Carga de trabajo (%)" value={selected.usePercent} onChange={usePercent => patchSelected({ usePercent, usePercentMode: 'manual' })} min="0" max="100" /><NumberField label="Apertura del haz en planta (°)" value={selected.apertureDeg} onChange={apertureDeg => patchSelected({ apertureDeg, apertureMode: 'manual' })} min="0" max="179.99" /></div>
@@ -314,7 +339,7 @@ export default function ShieldingWorkspace() {
         </>}
       </aside>
     </div>
-    <footer className="sh-footer"><span>{icon('shield-lock')} Trabajo local · sin subida de archivos</span><span>Proyección 2D en planta</span><span>{scene.walls.length} barreras · {scene.configurations.length} orientaciones · {scene.points.length} puntos</span></footer>
+    <footer className="sh-footer"><span>{icon('shield-lock')} Trabajo local · sin subida de archivos</span><span>Proyección 2D en planta</span><span>{scene.walls.length} barreras ({shieldedWallCount(scene)} con blindaje) · {scene.configurations.length} orientaciones · {scene.points.length} puntos</span></footer>
     {pdfChoice && <div className="sh-modal-scrim"><section ref={modalRef} className="sh-modal" role="dialog" aria-modal="true" aria-labelledby="sh-pdf-title"><h2 id="sh-pdf-title">Elige la página del plano</h2><p>{pdfChoice.name} · {pdfChoice.pdf.numPages} páginas</p><NumberField label="Página del PDF" value={pdfPage} min="1" max={pdfChoice.pdf.numPages} onChange={setPdfPage} /><p className="sh-help">La página se convertirá en una imagen local para dibujar sobre ella.</p>{error && <p role="alert" className="sh-error">{error}</p>}<div><button className="sh-button" disabled={busy} onClick={closePdf}>Cancelar</button><button className="sh-button sh-button-primary" disabled={busy} onClick={acceptPdf}>{busy ? 'Preparando…' : 'Usar esta página'}</button></div></section></div>}
   </div>
 }

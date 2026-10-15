@@ -44,16 +44,20 @@ export function CsnPresetSelector({ scene, onApply }) {
     </label>
     {preset && <>
       <p className="shielding-help">{modified ? 'Parámetros CSN personalizados desde este perfil.' : 'Valores CSN cargados y editables.'}
-        {' '}Referencia: W = {preset.workload} mA·min/semana; G ≈ {preset.output} mGy·m²/(mA·min); Qh = {preset.qh} mA·min/h.</p>
+        {' '}Referencia: W = {preset.workload} mA·min/semana; G ≈ {preset.output} mGy·m²/(mA·min); Qh = {preset.qh} mA·min/h.
+        {' '}Hipótesis: G aproximado con mSv/mGy ≈ 1 y campo supuesto de 20 × 20 cm.</p>
       <button type="button" className="sh-text-button" onClick={() => onApply(preset.id)}>Restaurar valores CSN</button>
     </>}
-    <p className="shielding-help">Carga W y los coeficientes CSN de todas las orientaciones de este equipo.
-      Las ocupaciones y los porcentajes manuales se conservan. Los porcentajes automáticos se reparten por igual.
-      {' '}<a href={CSN_REFERENCE_URL} target="_blank" rel="noreferrer">Guía CSN 5.11 · 1990</a></p>
-    <p className="shielding-help">G es una lectura aproximada de la figura 1 para 2 mm Al y tensión constante,
-      con equivalencia numérica aproximada mSv/mGy = 1 indicada por la guía para radiodiagnóstico.
-      Campo inicial supuesto: 20 × 20 cm; revisa el campo real y la apertura dibujada.
-      Fuga: límite 1 mGy/h a 1 m, f = 1 conservador. Puedes editar Qh, f y el límite en Resultados.</p>
+    <details className="shielding-preset-notes">
+      <summary>Qué carga el perfil CSN y sus hipótesis</summary>
+      <p className="shielding-help">Carga W y los coeficientes CSN de todas las orientaciones de este equipo.
+        Las ocupaciones y los porcentajes manuales se conservan. Los porcentajes automáticos se reparten por igual.
+        {' '}<a href={CSN_REFERENCE_URL} target="_blank" rel="noreferrer">Guía CSN 5.11 · 1990</a></p>
+      <p className="shielding-help">G es una lectura aproximada de la figura 1 para 2 mm Al y tensión constante,
+        con equivalencia numérica aproximada mSv/mGy = 1 indicada por la guía para radiodiagnóstico.
+        Campo inicial supuesto: 20 × 20 cm; revisa el campo real y la apertura dibujada.
+        Fuga: límite 1 mGy/h a 1 m, f = 1 conservador. Puedes editar Qh, f y el límite en Resultados.</p>
+    </details>
   </div>;
 }
 
