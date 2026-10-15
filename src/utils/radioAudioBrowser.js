@@ -2,6 +2,8 @@ import captureUrl from '../worklets/radioCapture.worklet.js?worker&url'
 import { SAMPLE_RATE } from './emergencyRadioAudio.js'
 import { voxAudio } from './radioAudioModem.js'
 import { AudioStationProtocol } from './radioAudioStation.js'
+import { AutoAudioStationProtocol } from './radioAudioAutoStation.js'
+import { browserIdentity } from './radioAudioIdentity.js'
 
 const now = () => performance.now() / 1000
 
@@ -9,13 +11,34 @@ const now = () => performance.now() / 1000
 // speech recognition, WebRTC peer or server is part of the radio transport.
 export class BrowserRadioAudio {
   constructor(config, callbacks = {}) {
-    this.config = config; this.callbacks = callbacks; this.closed = false; this.active = false
+    this.callbacks = callbacks; this.closed = false; this.active = false
     const epoch = crypto.getRandomValues(new Uint16Array(1))[0]
-    this.protocol = new AudioStationProtocol({ ...config, epoch })
+    if (config.autoId) {
+      let storage; try { storage = globalThis.localStorage } catch { /* temporary identity */ }
+      const { identity, persistent } = browserIdentity(storage)
+      this.protocol = new AutoAudioStationProtocol({ ...config, id: config.automaticId, identity, identityPersistent: persistent, epoch })
+    } else this.protocol = new AudioStationProtocol({ ...config, epoch })
+    this.config = this.protocol.config
     this.lastEnergy = now(); this.nextTransmitAt = 0; this.source = null; this.receiving = false
     this.recording = false; this.recordingId = 0
   }
-  notify() { this.nextNotifyAt = now() + 1; this.callbacks.onChange?.(this.protocol.snapshot(now())) }
+  notify() {
+    this.nextNotifyAt = now() + 1; this.callbacks.onChange?.(this.protocol.snapshot(now()))
+    if (this.protocol.joinState === 'ready' && this.savedAddress !== this.protocol.config.id) {
+      this.savedAddress = this.protocol.config.id; this.callbacks.onAddress?.(this.savedAddress)
+    }
+  }
+  async lockIdentity() {
+    if (!this.config.autoId || !navigator.locks?.request) return
+    await new Promise((resolve, reject) => {
+      this.lockTask = navigator.locks.request('bloggy-radio-audio-session', { ifAvailable: true }, async lock => {
+        if (!lock) { reject(new Error('La estación ya está activa en otra pestaña de este navegador. Detén esa sesión primero.')); return }
+        if (this.closed) { resolve(); return }
+        const held = new Promise(release => { this.releaseIdentityLock = release })
+        resolve(); await held
+      }).catch(reject)
+    })
+  }
   async start() {
     const Audio = window.AudioContext || window.webkitAudioContext
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error('El micrófono necesita HTTPS o localhost.')
@@ -23,6 +46,8 @@ export class BrowserRadioAudio {
     this.context = new Audio({ latencyHint: 'interactive' })
     try {
       await this.context.resume()
+      if (this.closed) return
+      await this.lockIdentity()
       if (this.closed) return
       this.stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: {
         channelCount: { ideal: 1 }, echoCancellation: false, noiseSuppression: false, autoGainControl: false,
@@ -63,6 +88,7 @@ export class BrowserRadioAudio {
       if (this.context.state !== 'running') throw new Error('No se ha podido activar el audio después del permiso. Pulsa Activar estación de nuevo.')
       if (!track || track.readyState === 'ended') throw new Error('El micrófono se ha desconectado durante el inicio. Vuelve a activar la estación.')
       this.active = true
+      this.protocol.join?.(now())
       track.onended = () => this.stopWithReason('El micrófono se ha desconectado. Vuelve a activar la estación.')
       this.context.onstatechange = () => { if (this.active && this.context.state !== 'running') this.stopWithReason('El navegador ha suspendido el audio. Vuelve a activar la estación.') }
       this.visibilityHandler = () => { if (document.hidden) this.stopWithReason('Se ha detenido la estación al ocultar la pestaña. Mantén la app en primer plano.') }
@@ -120,6 +146,7 @@ export class BrowserRadioAudio {
   setShareTopology(value) { this.protocol.setShareTopology(value); this.notify() }
   recordDiagnostic() {
     if (!this.active || this.context.state !== 'running') throw new Error('Activa la estación antes de grabar.')
+    if (this.config.autoId && this.protocol.joinState !== 'ready') throw new Error('Espera a que termine la incorporación antes de grabar.')
     if (this.recording || this.source || now() < this.nextTransmitAt) throw new Error('Espera a que termine la emisión o la grabación.')
     if (this.protocol.queue.length || this.protocol.topologyDue !== Infinity || this.protocol.messages.some(m => m.status === 'waitingAck')) throw new Error('Espera a que terminen los envíos pendientes antes de grabar.')
     this.recording = true
@@ -138,6 +165,7 @@ export class BrowserRadioAudio {
   async stop() {
     if (this.closed) return
     this.closed = true; this.active = false; clearInterval(this.timer)
+    this.releaseIdentityLock?.(); this.releaseIdentityLock = null
     this.cancelRecording()
     document.removeEventListener('visibilitychange', this.visibilityHandler)
     window.removeEventListener('pagehide', this.pageHandler)
