@@ -6,7 +6,8 @@ This file provides guidance to coding agents working in this repository.
 
 ```bash
 npm run dev       # Start Vite at http://localhost:5173
-npm run build     # Build to dist/ and audit public artifacts
+npm run build     # build:wasm (needs wasm-pack) + build:web
+npm run build:web # Vite build to dist/ and audit public artifacts, without rebuilding the WASM
 npm run preview   # Preview production build locally
 npm run audit:public    # Reject sensitive tracked files or public artifacts
 npm run test:anon      # DICOM anonymizer regression suite (PHI, conformance, RT references)
@@ -26,11 +27,21 @@ npm run test:tomo      # 3D SPECT sphere uniformity, anisotropic geometry and re
 npm run test:fdtd      # FDTD fallback, PEC geometry and JSON configuration
 npm run test:shielding # Shielding geometry, transient history, file bounds and CSN/NCRP arithmetic
 npm run test:shielding:browser # Real Chrome: access, local imports, calibration and editor interactions
+npm run dev:shielding  # Development-only isolated shielding editor without Firebase (never routed in production)
+npm run test:mcc       # PTW MCC parsing, PDD/profile analysis and TRS-398 kQ
+npm run test:mri       # MRI protocol comparison and report export (test:mri:browser runs it in Chrome)
+npm run test:film      # Film dosimetry TIFF decoding, calibration and lateral correction
+npm run test:tg43      # TG-43 brachytherapy calculations
+npm run test:cpt       # Continuous performance test sequence and timing invariants
 npm run check:security # Anonymizer and paste tests, then build and audit the GitHub Pages artifact
 npm run deploy         # Build, audit and deploy dist/ to GitHub Pages
 ```
 
-No test framework is configured. Use `npm run build` as the minimum integration check. For calculation modules, add or run focused Node assertions against the pure utility functions.
+Use Node 24 (README and CI). No test framework is configured: every suite is a standalone
+Node script, so a single one runs as `node scripts/test-<name>.mjs` (some `test:*` scripts chain
+several files; see `package.json`). CI (`.github/workflows/deploy.yml`) lists the suites it runs
+explicitly, so a new suite must also be added there. Use `npm run build:web` as the minimum
+integration check when `wasm-pack` is unavailable. For calculation modules, add or run focused Node assertions against the pure utility functions.
 
 Some modules do have real suites. The Morse trainer has `scripts/test-morse.mjs`
 (`npm run test:morse`); run it after touching `src/utils/morse.js` or
@@ -141,6 +152,11 @@ Routes inside `<Layout />` use the shared sidebar and mobile topbar:
 - `/red-emergencia` - experimental emergency-radio network and per-receiver audio simulation
 - `/estacion-radio` - client-side microphone/speaker BFSK station with VOX and direct acknowledgments
 - `/aprs` - receive-only APRS decoder (AFSK 1200, AX.25) from the microphone or an audio file
+- `/resolucion-espacial-gamma`, `/sensibilidad-gamma` and `/informe-mensual-gamma` - planar gamma-camera QC and the private monthly report
+- `/dosimetria-pelicula` - EBT3 film dosimetry
+- `/analizador-mcc` - PTW MCC PDD/profile analysis
+- `/comparar-protocolos-rm` - MRI protocol comparison
+- `/radioaficionado` - private radio exam (admin)
 
 Standalone routes:
 
@@ -148,9 +164,9 @@ Standalone routes:
 
 - `/quiz-creator` - quiz editor
 - `/quizzes` - public quiz list
-- `/quiz/:quizId` - single-player quiz
 - `/host/:quizId` and `/join` - real-time multiplayer quiz flow
 - `/ptb` and `/ptb/:pasteId` - encrypted Secure Paste flow
+- `/admin`, `/exam-admin`, `/exam-admin/:sessionId` (and `/print`) and `/exam/join/:sessionId/:ticketSecret` - admin and QR exam flow
 
 ### Firebase (`src/firebase.js`)
 
@@ -266,18 +282,14 @@ Keep domain calculations in `src/utils/petNemaFractionation.js` and UI concerns 
 
 ### Styles
 
-Global styles live in `src/styles.css`. Feature-specific stylesheets live in `src/styles/`:
-
-- `acr-qc.css`
-- `lector.css`
-- `morse.css`
-- `pet-nema.css`
-- `quiz.css`
-- `rtplan.css`
-- `tg43.css`
-- `uniformidad.css`
+Global styles live in `src/styles.css`; each page imports its own `src/styles/<module>.css`.
 
 The UI uses CSS custom properties from `src/styles.css`, such as `--bg-secondary`, `--text-muted`, `--accent-blue` and `--border`.
+
+### Documentation files
+
+`.gitignore` ignores `*.md` except an explicit allowlist (`!SECURITY.md`, `!GAMMA_CAMERA_QC.md`, ...).
+A new module document is silently left out of commits unless it gets its own `!NAME.md` entry.
 
 ### COR source review
 
