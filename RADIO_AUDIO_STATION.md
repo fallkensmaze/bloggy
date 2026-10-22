@@ -56,7 +56,11 @@ aplicable; estas pruebas de software no validan un enlace RF.
 - Formato común de audio: prefijo AA AA AA AA D3 91, cabecera de 16 bytes,
   longitud y payload, CRC-16/CCITT-FALSE. Los bytes viajan MSB primero.
 - Captura con AudioWorklet a la frecuencia nativa. Filtros de 300 y 3000 Hz
-  antes de un remuestreador continuo a 9600 Hz. Se solicita captura sin eco,
+  y un paso bajo FIR (sinc con ventana de Hamming, corte de 3,84 kHz) antes de
+  un remuestreador continuo a 9600 Hz. Sin ese FIR, 7,2 y 8,4 kHz se pliegan
+  exactamente sobre 2400 y 1200 Hz; ahora quedan al menos 60 dB por debajo y
+  los tonos pasan con menos de 0,02 dB de variación. Los instantes de salida
+  compensan el retardo del filtro (menos de 1 ms). Se solicita captura sin eco,
   supresión de ruido ni ganancia automática; se muestran los ajustes que el
   navegador informa, porque el dispositivo puede no respetarlos.
 - El receptor mantiene la correlación de un símbolo completo con ocho fases
@@ -65,8 +69,17 @@ aplicable; estas pruebas de software no validan un enlace RF.
   prueban 17 balances de energía de −12 a +12 dB, en pasos de 1,5 dB.
   El camino corto tolera diferencias
   entre tonos y transiciones mezcladas por eco; las energías interpoladas permiten
-  probar las fases intermedias sin modificar las muestras. El estado está
-  acotado a 1224 candidatos a 300 bit/s y 680 a 600 bit/s.
+  probar las fases intermedias sin modificar las muestras.
+- Un tercer juego de candidatos de símbolo completo sigue el reloj del emisor.
+  En cada cambio de bit compara las ventanas un octavo de símbolo antes y
+  después (puerta adelantada/retrasada) y, cuando el error medio supera el
+  umbral, intercambia su trama en curso con la fase vecina, sin descartar
+  ningún candidato. Los candidatos de fase fija se conservan para no perder
+  sensibilidad al ruido. Sin seguimiento, la trama más larga (158 bytes) se
+  perdía por encima de unos ±400 ppm de diferencia entre las tarjetas de
+  sonido; se prueba hasta ±3000 ppm (0,3 %). El estado está acotado a 1360
+  candidatos a 300 bit/s y 816 a 600 bit/s, y procesar 10 s de audio a 48 kHz
+  cuesta unos 160 ms en Node.
   Encuentra el prefijo en el flujo continuo sin una marca externa de
   inicio o fin. Adquiere un candidato cuando coinciden los 48 bits del prefijo;
   solo entrega una trama tras comprobar cabecera, longitud y CRC. El contraste
@@ -225,7 +238,10 @@ fallo real, pero no constituye una corrección validada en iPhone ni en RF.
 ## Verificación y límites
 
 `npm run test:radio-audio` cubre sincronización con comienzo y bloques
-desconocidos, captura a 44,1/48 kHz, ruido y pequeñas diferencias de reloj,
+desconocidos, captura a 44,1/48 kHz, ruido y diferencias de reloj (±200 ppm
+en un texto de 96 bytes; ±1000 y ±3000 ppm en la trama de mapa más larga, que
+falla si se desactiva el seguimiento del reloj), atenuación del plegado de
+7,2 y 8,4 kHz,
 CRC corrupto y recuperación, VOX, intercambio DATA/ACK mediante muestras,
 identidades de acuse incorrectas, acuse perdido, reintentos y caducidad,
 difusión, silencio sin tráfico, canal ocupado, parada, IDs duplicados y límites.

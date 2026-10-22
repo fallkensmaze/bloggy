@@ -198,7 +198,7 @@ export default function RadioAudioStation() {
       <p>La página se detiene al pasar a segundo plano o suspenderse el audio, para evitar emisiones acumuladas al volver. Los mensajes quedan en memoria;
         se borran al recargar o iniciar una sesión nueva. Solo se guardan preferencias en este navegador.</p>
       <p>Modulación BFSK de 1200/2400 Hz, entrenamiento de 16 bytes AA, prefijo AA AA AA AA D3 91, cabecera de 16 bytes y CRC-16/CCITT-FALSE.
-        El receptor busca el prefijo con distintas alineaciones y compensa diferencias entre tonos; acepta únicamente tramas con CRC válido. Los mensajes y acuses usan TTL 1;
+        El receptor busca el prefijo con distintas alineaciones, compensa diferencias entre tonos y sigue el reloj del emisor; acepta únicamente tramas con CRC válido. Los mensajes y acuses usan TTL 1;
         los informes del mapa se propagan hasta cuatro saltos, con caducidad y supresión de duplicados. Grupo 17 por defecto; no es interoperable con el protocolo del simulador.
         No hay FEC, autenticación ni confirmación de lectura humana.</p>
       <p>Esta versión necesita pruebas con grabaciones y equipos reales; la autoprueba no valida la transmisión por RF. En España, la <a href="https://www.boe.es/buscar/act.php?id=BOE-A-2026-15661" target="_blank" rel="noreferrer">UN-110 del CNAF</a>

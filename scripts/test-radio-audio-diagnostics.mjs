@@ -72,7 +72,12 @@ try {
       assert.equal(r.id, 7); assert.equal(r.samples.length, 96000); assert.equal(r.sampleRate, 9600)
       assert.equal(p.recording, null)
       // A 1.2 kHz sine has period 8 samples after resampling; no normalization.
-      assert.ok(Math.abs(r.samples[2] - 0.2) < 0.003)
+      // The anti-alias filter delays the output by under a millisecond, so the
+      // phase at the start of the take is arbitrary and feed() restarts the
+      // sine there: check the RMS over whole periods well after that step.
+      const settled = r.samples.subarray(40, 120)
+      const rms = Math.sqrt(settled.reduce((sum, x) => sum + x * x, 0) / settled.length)
+      assert.ok(Math.abs(rms - 0.2 / Math.SQRT2) < 0.003, `RMS ${rms}`)
       assert.equal(r.before.accepted, 0); assert.equal(r.after.accepted, 0)
       const wav = new DataView(wavBytes(r.samples))
       assert.equal(wav.getUint32(24, true), 9600); assert.equal(wav.getUint32(40, true), 192000)

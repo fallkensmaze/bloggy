@@ -134,6 +134,30 @@ test('44.1 and 48 kHz capture, noise and ±200 ppm sample-clock mismatch on a 96
     assert.equal(found.length, 1, `${rate} Hz, ${baud} bit/s, ${ppm} ppm`); assert.deepEqual(found[0].packet, p)
   }
 })
+test('The largest frame survives ±1000 and ±3000 ppm only because the bit clock is tracked', () => {
+  // A full map report: 32-byte name and 32 neighbours, 134 payload bytes, 158
+  // bytes on air. At 3000 ppm it slides by almost four symbols end to end; the
+  // fixed-phase receiver lost it beyond about ±400 ppm.
+  const payload = [0x52, 0x41, 1, 0, 0, 32, ...Array(32).fill(65), ...Array.from({ length: 32 }, (_, i) => [i + 2, 0, 5]).flat()]
+  const big = { type: T.TOPOLOGY, net: 17, origin: 1, sender: 1, dst: 255, next: 255, ttl: 4, priority: 2, epoch: 9, seq: 1, attempt: 0, payload }
+  assert.equal(encodeFrame(big).length, 158)
+  for (const baud of [300, 600]) for (const rate of [44100, 48000]) for (const ppm of [-3000, -1000, 1000, 3000]) {
+    const found = nativeStream(capture(voxAudio(big, { baud }), rate, ppm, 0.02), rate, baud)
+    assert.equal(found.length, 1, `${rate} Hz, ${baud} bit/s, ${ppm} ppm`); assert.deepEqual(found[0].packet, big)
+  }
+})
+test('Anti-alias filter: 7.2 and 8.4 kHz no longer fold onto the tones; the tones pass unchanged', () => {
+  // At 9600 Hz, 7200 Hz aliases exactly onto 2400 Hz and 8400 Hz onto 1200 Hz.
+  // Linear interpolation alone passed both at about 0 dB.
+  const level = (rate, f) => {
+    const y = new AudioResampler(rate).push(Float32Array.from({ length: rate }, (_, i) => Math.sin(2 * Math.PI * f * i / rate))).subarray(200)
+    return 20 * Math.log10(Math.sqrt(y.reduce((sum, x) => sum + x * x, 0) / y.length) / Math.SQRT1_2)
+  }
+  for (const rate of [44100, 48000]) {
+    for (const f of [7200, 8400]) assert.ok(level(rate, f) < -50, `${rate} Hz: ${f} Hz at ${level(rate, f).toFixed(1)} dB`)
+    for (const f of [1200, 2400]) assert.ok(Math.abs(level(rate, f)) < 0.1, `${rate} Hz: ${f} Hz at ${level(rate, f).toFixed(2)} dB`)
+  }
+})
 test('Resampling is identical across chunk boundaries and retains its clock', () => {
   const input = capture(voxAudio(packet), 44100)
   const full = new AudioResampler(44100).push(input); const r = new AudioResampler(44100); const parts = []
