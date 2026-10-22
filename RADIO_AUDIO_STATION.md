@@ -1,4 +1,4 @@
-# Estación de audio · VOX v0.2
+# Estación de audio · VOX v0.3
 
 La ruta pública `/estacion-radio` es una aplicación de micrófono y altavoz,
 independiente del simulador `/red-emergencia`. El navegador recibe muestras reales,
@@ -15,7 +15,7 @@ añadido caché offline, PWA ni ejecución fiable en segundo plano.
 1. Primero usa la autoprueba local, que no emite sonido, y dos dispositivos
    comunicándose por altavoz y micrófono, sin radio.
 2. En cada estación asigna un ID distinto de 1 a 254; por ejemplo, 1 y 2.
-   Usa el mismo grupo (17 por defecto) y tasa (300 bit/s inicialmente).
+   Usa el mismo grupo (17 por defecto) y velocidad (300 símbolos/s inicialmente).
 3. Para la prueba con radio, configura los dos walkies en el mismo canal y
    subtono, activa VOX y coloca cada navegador junto a su equipo. Empieza con
    volumen moderado y permite el micrófono.
@@ -48,41 +48,87 @@ aplicable; estas pruebas de software no validan un enlace RF.
 
 ## Audio y sincronización
 
-- BFSK de fase continua: 1200 Hz para 0 y 2400 Hz para 1, a 300 o 600 bit/s.
-  El audio generado usa 9600 muestras/s; Web Audio lo reproduce a la tasa nativa.
-- Tono VOX de 1200 Hz, 700 ms por defecto, seguido de 16 bytes AA de
-  entrenamiento y la trama. Cola de tono de 120 ms y retorno de 1200 ms por
-  defecto; los tiempos y el volumen se pueden ajustar antes de activar.
-- Formato común de audio: prefijo AA AA AA AA D3 91, cabecera de 16 bytes,
-  longitud y payload, CRC-16/CCITT-FALSE. Los bytes viajan MSB primero.
+- BFSK de fase continua: 1200 Hz para 0 y 2400 Hz para 1, a 300 o 600
+  símbolos/s. Con el código de tasa 1/2, la información útil va a 150 o
+  300 bit/s. El audio generado usa 9600 muestras/s; Web Audio lo reproduce a
+  la tasa nativa.
+- Tono VOX de 1200 Hz, 700 ms por defecto, 64 bits AA de entrenamiento, una
+  palabra de sincronismo de 64 bits (DF 9E 14 A3 12 C8 3D 19) y dos bloques
+  codificados. Cola de tono de 120 ms y retorno de 1200 ms por defecto; los
+  tiempos y el volumen se pueden ajustar antes de activar.
+- Formato v2 (estación v0.3, incompatible con v0.2 y con el simulador, que
+  conserva el v1 sin codificar):
+  - Bloque de cabecera: los 16 bytes de cabecera de siempre con versión 2 y
+    su propio CRC-16/CCITT-FALSE (18 bytes, 300 símbolos codificados). La
+    longitud solo se usa después de comprobar ese CRC.
+  - Bloque de contenido: payload y un CRC-16 sobre cabecera y payload.
+  - Cada bloque lleva un código convolucional K=7 de tasa 1/2 (generadores
+    171/133 octal, el de la NASA/CCSDS) con seis ceros de cierre y un
+    entrelazado por bloques de 16 columnas: los bits codificados vecinos
+    salen separados, de modo que un golpe o una sílaba dañan bits dispersos que
+    el código corrige. Los bytes viajan MSB primero.
+  - Un mensaje de 52 bytes dura unos 4,6 s de datos a 300 símbolos/s (antes,
+    2,5 s sin codificar) o 2,3 s a 600. `frameSeconds()` calcula la duración
+    exacta y la usa el protocolo para sus esperas.
 - Captura con AudioWorklet a la frecuencia nativa. Filtros de 300 y 3000 Hz
-  antes de un remuestreador continuo a 9600 Hz. Se solicita captura sin eco,
+  y un paso bajo FIR (sinc con ventana de Hamming, corte de 3,84 kHz) antes de
+  un remuestreador continuo a 9600 Hz. Sin ese FIR, 7,2 y 8,4 kHz se pliegan
+  exactamente sobre 2400 y 1200 Hz; ahora quedan al menos 60 dB por debajo y
+  los tonos pasan con menos de 0,02 dB de variación. Los instantes de salida
+  compensan el retardo del filtro (menos de 1 ms). Se solicita captura sin eco,
   supresión de ruido ni ganancia automática; se muestran los ajustes que el
   navegador informa, porque el dispositivo puede no respetarlos.
-- El receptor mantiene la correlación de un símbolo completo con ocho fases
-  para conservar sensibilidad al ruido. En paralelo, una ventana de ocho
-  muestras (un ciclo de 1200 Hz) busca fases de media muestra. Ambos caminos
-  prueban 17 balances de energía de −12 a +12 dB, en pasos de 1,5 dB.
-  El camino corto tolera diferencias
-  entre tonos y transiciones mezcladas por eco; las energías interpoladas permiten
-  probar las fases intermedias sin modificar las muestras. El estado está
-  acotado a 1224 candidatos a 300 bit/s y 680 a 600 bit/s.
-  Encuentra el prefijo en el flujo continuo sin una marca externa de
-  inicio o fin. Adquiere un candidato cuando coinciden los 48 bits del prefijo;
-  solo entrega una trama tras comprobar cabecera, longitud y CRC. El contraste
-  de tonos se informa, pero no bloquea la adquisición: un eco puede reducirlo
-  aunque el prefijo y la trama completa sigan siendo correctos. Al aceptar una
-  trama se vacían todos los candidatos para no entregar duplicados. El contraste
-  informado corresponde al balance del candidato que pasó el CRC.
-- Mantiene la tasa nominal dentro de cada trama. No tiene PLL, compensación de
-  grandes diferencias de reloj, FEC, cifrado ni autenticación. CRC detecta errores
-  accidentales; no impide suplantación. El contraste de tonos no es SNR calibrado.
+- El receptor correlaciona un símbolo completo en cada tono y lo lee en ocho
+  fases por símbolo. Cada fase conserva sus 128 últimos símbolos. La
+  correlación suave con la palabra de sincronismo encuentra la trama en el
+  flujo continuo, sin marca externa de inicio o fin; gana la mejor fase de ese
+  símbolo. Con ruido puro, el contraste de un símbolo es uniforme en [−1, 1],
+  así que el umbral (21, unas 4,5 σ) da del orden de una falsa detección cada
+  dos minutos, que el CRC de cabecera rechaza. Además, la puntuación debe ser
+  al menos el 40 % del contraste total, para que los datos limpios de otra
+  trama no parezcan sincronismo. La palabra se eligió por búsqueda: contra el
+  entrenamiento y contra sí misma desplazada nunca supera 9 de 64.
+- Cada trama mide el nivel de cada tono en sus 128 símbolos conocidos y los
+  iguala. Eso compensa el desequilibrio de altavoces, micrófonos y énfasis FM
+  sin probar balances fijos. El valor suave de cada símbolo es el contraste
+  entre tonos igualados, reducido cuando la energía del símbolo supera 1,5
+  veces la esperada: una voz o un golpe encima del tono no vota con plena
+  confianza. Con ese ajuste, las voces se toleran 3 dB más sin perder nada en
+  soplido (se probaron factores de 0,75 a 3).
+- Sigue el reloj del emisor con una puerta adelantada/retrasada en cada cambio
+  de bit y cambia de fase de una en una. La trama de mapa más larga (134 bytes,
+  2616 símbolos) se decodifica con ±3000 ppm (0,3 %) de diferencia entre las
+  tarjetas de sonido.
+- Hasta cuatro candidatos simultáneos; al aceptar una trama se vacían todos
+  para no entregarla dos veces. Procesar 10 s de audio a 48 kHz cuesta unos
+  80 ms en Node. No hay cifrado ni autenticación: el CRC detecta errores
+  accidentales y no impide la suplantación. La confianza media que se informa
+  no es una SNR calibrada.
+
+### Ruido
+
+Relación señal/ruido en potencia a la entrada del decodificador, sobre los
+datos, con ruidos sintéticos (no grabaciones): soplido blanco, seis voces
+superpuestas (pulsos glotales por dos formantes, a ritmo silábico) y golpes
+(ráfagas que decaen, cada 20–230 ms). Último nivel decodificado en 12 de 12
+semillas:
+
+| Ruido | v1 sin código, 300 símb./s | v2, 300 símb./s | v2, 600 símb./s |
+|---|---|---|---|
+| Soplido | 0 dB | −3 dB (10/12 a −6 dB) | 0 dB (10/12 a −3 dB) |
+| Voces | 0 dB | −6 dB (11/12 a −9 dB) | −6 dB |
+| Golpes | 9 dB (3/6 a 6 dB) | −12 dB | −12 dB |
+
+La columna v1 se midió con el receptor anterior y 6 semillas. Son ensayos
+sintéticos: no validan un nivel acústico concreto, voces reales cercanas ni
+interferencias de otro tipo. Con mucho ruido, la opción de 300 símbolos/s es
+la más robusta; 600 dura la mitad.
 
 No se reproduce la entrada del micrófono. Durante la reproducción local se
 descarta la recepción. Al terminar el audio, el decodificador vuelve a escuchar
 inmediatamente, incluido el intervalo de retorno VOX: esa espera bloquea la
 siguiente emisión local, pero no la recepción de un acuse. Usar el mismo
-temporizador para ambas cosas podía perder el prefijo de una respuesta temprana
+temporizador para ambas cosas podía perder el sincronismo de una respuesta temprana
 si las estaciones tenían esperas distintas. El protocolo sigue ignorando el eco
 de su propia sesión. Esto no acorta la retención del VOX de un walkie físico.
 La espera de canal libre exige 600 ms sin audio
@@ -194,10 +240,10 @@ verifica el DSP local sin usar micrófono ni reproducir audio.
 
 ### Diagnóstico de recepción
 
-El panel muestra el nivel de 1200 y 2400 Hz, los candidatos que adquirieron el
-prefijo, los rechazados y las tramas con CRC válido de cualquier grupo. Los
-candidatos se cuentan por ventana, fase de símbolo y balance de tonos, no como
-paquetes independientes. Los contadores duran toda la sesión, incluido el
+El panel muestra el nivel de 1200 y 2400 Hz, los sincronismos detectados, las
+tramas rechazadas por CRC de cabecera o de contenido y las tramas con CRC válido
+de cualquier grupo. Cada sincronismo es la mejor fase de un símbolo, no un
+paquete independiente. Los contadores duran toda la sesión, incluido el
 retorno de TX, para no perder sincronismos demasiado breves para la pantalla.
 Los niveles son el máximo RMS de las ventanas de símbolo en cada intervalo de
 reporte de unos 100 ms, después de los filtros; no son SPL ni SNR calibrado.
@@ -219,28 +265,32 @@ acuses, por lo que esta prueba debe usar un anuncio HELLO remoto y no medir
 tiempos de confirmación. No se inicia mientras haya emisiones pendientes.
 El JSON de diagnóstico incluye ajustes de captura, configuración y contadores
 antes/después; no incluye muestras. El JSON general de sesión sigue sin audio.
-No se altera el prefijo ni se relaja el CRC: el panel permite investigar un
+No se altera el sincronismo ni se relaja el CRC: el panel permite investigar un
 fallo real, pero no constituye una corrección validada en iPhone ni en RF.
 
 ## Verificación y límites
 
 `npm run test:radio-audio` cubre sincronización con comienzo y bloques
-desconocidos, captura a 44,1/48 kHz, ruido y pequeñas diferencias de reloj,
-CRC corrupto y recuperación, VOX, intercambio DATA/ACK mediante muestras,
+desconocidos, captura a 44,1/48 kHz, ruido y diferencias de reloj (±200 ppm
+en un texto de 96 bytes; ±1000 y ±3000 ppm en la trama de mapa más larga, que
+falla si se desactiva el seguimiento del reloj), atenuación del plegado de
+7,2 y 8,4 kHz, soplido, voces y golpes por debajo del nivel de la señal
+(tabla de la sección Ruido), un minuto de voces y otro de soplido sin
+ninguna trama inventada, CRC corrupto y recuperación, VOX, intercambio DATA/ACK mediante muestras,
 identidades de acuse incorrectas, acuse perdido, reintentos y caducidad,
 difusión, silencio sin tráfico, canal ocupado, parada, IDs duplicados y límites.
-Incluye eco sintético de un símbolo a 300/600 bit/s: recepción con bajo contraste
-de tonos y rechazo de una trama con CRC corrupto bajo el mismo canal.
+Incluye eco sintético de un símbolo a 300/600 símbolos/s: recepción con bajo
+contraste de tonos y rechazo de una trama con CRC corrupto bajo el mismo canal.
+Como el código corrige bits cambiados en el aire, las tramas corruptas de las
+pruebas se rompen antes de codificar (`voxBits`), y así el CRC no coincide.
 Incluye desequilibrio sintético de ±9 dB entre tonos junto a un eco, llegadas
 fraccionarias, textos de 96 bytes, CRC corrupto y reinicio de candidatos a
 ambas tasas. Las regresiones sintéticas no contienen grabaciones de usuarios.
 Otro caso combina eco de amplitud 0,25, desequilibrio de ±6 dB y ruido blanco
-con relación señal/ruido de 6 dB a 300 bit/s y 9 dB a 600 bit/s a la entrada
-del decodificador: ocho semillas
-por tasa y balance (48 combinaciones). El balance también se busca en las
-ventanas completas para conservar la integración frente al ruido. Ese ensayo
-no valida voces, interferencias tonales o impulsivas, ni un umbral acústico de
-funcionamiento. El ruido y el eco más intensos aún pueden impedir la recepción.
+con relación señal/ruido de 6 dB a 300 símbolos/s y 9 dB a 600 a la entrada
+del decodificador: ocho semillas por velocidad y balance (48 combinaciones).
+Ninguno de estos ensayos valida un umbral acústico de funcionamiento. El ruido
+y el eco más intensos aún pueden impedir la recepción.
 También ejecuta cuatro pruebas de diagnóstico: niveles RMS de tonos conocidos,
 contadores de sincronismo y CRC, captura acotada a diez segundos a 44,1/48 kHz,
 y cancelación sin retención de audio ni reproducción del micrófono.

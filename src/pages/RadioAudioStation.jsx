@@ -90,7 +90,7 @@ export default function RadioAudioStation() {
   const state = !active ? 'Detenida' : snapshot.conflict ? 'ID duplicado · emisión bloqueada' : transmitting ? `Emitiendo ${typeLabel(txType)}` : recording ? 'Grabando prueba de recepción' : level.receiving ? 'Recibiendo trama' : level.db > config.busyDb ? 'Canal con audio' : 'Escuchando'
 
   return <div className="ra-station">
-    <header className="ra-header"><div><p className="ra-eyebrow">Radioafición · audio real · versión 0.2</p><h1>Estación de audio · VOX</h1>
+    <header className="ra-header"><div><p className="ra-eyebrow">Radioafición · audio real · versión 0.3</p><h1>Estación de audio · VOX</h1>
       <p>El micrófono escucha el walkie; el altavoz reproduce los mensajes codificados. Cada navegador trabaja como una estación independiente.</p></div>
       <Link to="/red-emergencia" className="ra-lab-link"><i className="bi bi-diagram-3" /> Ir al simulador de red</Link></header>
     <div className="ra-intro"><span><i className="bi bi-laptop" /> Audio y mensajes procesados en tu dispositivo</span><span><i className="bi bi-broadcast" /> Comunicación directa por sonido</span></div>
@@ -104,7 +104,7 @@ export default function RadioAudioStation() {
       <div className="ra-settings"><label>Mi identificador<input type="number" min="1" max="254" value={config.id} disabled={locked} onChange={e => change('id', Number(e.target.value))} /></label>
         <label>Nombre<input value={config.name} disabled={locked} onChange={e => change('name', e.target.value)} maxLength="32" /></label>
         <label>Grupo de tramas<input type="number" min="1" max="254" value={config.network} disabled={locked} onChange={e => change('network', Number(e.target.value))} /></label>
-        <label>Tasa de datos<select value={config.baud} disabled={locked} onChange={e => change('baud', Number(e.target.value))}><option value="300">300 bit/s · comenzar aquí</option><option value="600">600 bit/s · menor duración</option></select></label></div>
+        <label>Velocidad<select value={config.baud} disabled={locked} onChange={e => change('baud', Number(e.target.value))}><option value="300">300 símbolos/s · máxima robustez al ruido</option><option value="600">600 símbolos/s · mitad de duración</option></select></label></div>
       <p className="ra-hint">Usa IDs distintos (por ejemplo, 1 y 2), el mismo grupo y la misma tasa en ambos equipos. El grupo es un filtro de tramas; no selecciona la frecuencia del walkie.</p>
       <div className="ra-audio-config"><label>Micrófono<select disabled={locked} value={config.deviceId} onChange={e => change('deviceId', e.target.value)}><option value="">Entrada predeterminada</option>
         {devices.filter(d => d.deviceId !== 'default').map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `Micrófono ${i + 1}`}</option>)}</select></label>
@@ -114,7 +114,7 @@ export default function RadioAudioStation() {
     </section>
 
     <section className="ra-console" aria-label="Estado del audio"><div className="ra-live"><span className={`ra-dot ${active ? transmitting ? 'ra-tx' : 'ra-on' : ''}`} /><strong aria-live="polite">{state}</strong>
-        <p>{active ? `ID ${config.id} · grupo ${config.network} · ${config.baud} bit/s` : 'Activa la estación para escuchar y enviar.'}</p></div>
+        <p>{active ? `ID ${config.id} · grupo ${config.network} · ${config.baud} símbolos/s` : 'Activa la estación para escuchar y enviar.'}</p></div>
       <div><div className="ra-meter"><div style={{ width: `${bar}%` }} className={level.clipping ? 'ra-clipping' : ''} /></div>
         <p className="ra-hint">Micrófono: {level.db > -99 ? `${level.db.toFixed(0)} dBFS` : 'sin señal'} · {level.clipping ? 'Saturación: baja el volumen del walkie.' : 'Nivel después del filtro de audio'}</p></div>
       <div className="ra-counters"><span><b>{snapshot.stats.tx}</b> emisiones</span><span><b>{snapshot.stats.rx}</b> tramas del grupo</span><span><b>{snapshot.stats.acks}</b> confirmados</span><span><b>{snapshot.stats.retries}</b> reintentos</span></div>
@@ -129,12 +129,12 @@ export default function RadioAudioStation() {
         <span>{hz} Hz · tono {i}</span><strong>{toneLevel(level.tonesDb?.[i])}</strong>
         <div className="ra-meter" aria-hidden="true"><div style={{ width: `${Math.max(0, Math.min(100, ((level.tonesDb?.[i] ?? -100) + 80) / 80 * 100))}%` }} /></div>
       </div>)}</div>
-      <div className="ra-counters"><span><b>{level.prefixes || 0}</b> candidatos con prefijo</span><span><b>{level.rejected || 0}</b> candidatos rechazados</span><span><b>{level.accepted || 0}</b> tramas válidas de cualquier grupo</span></div>
-      <p className="ra-hint">Se prueban distintas alineaciones y compensaciones de tonos: una emisión puede producir varios candidatos.
+      <div className="ra-counters"><span><b>{level.prefixes || 0}</b> sincronismos detectados</span><span><b>{level.rejected || 0}</b> rechazados por CRC</span><span><b>{level.accepted || 0}</b> tramas válidas de cualquier grupo</span></div>
+      <p className="ra-hint">El sincronismo se busca en ocho fases por símbolo; la corrección de errores repara bits dañados por el ruido antes de comprobar el CRC.
         {' '}Los niveles son máximos por intervalo de 0,1 s después del filtro, no una medida de señal/ruido.</p>
       <p className="ra-hint">{level.accepted > 0 ? 'Se han descifrado tramas. Si no aparece el mensaje esperado, comprueba su grupo y destino.'
-        : level.prefixes > 0 ? 'Se ha reconocido al menos un prefijo, pero todavía no hay tramas válidas. Prueba con menos volumen y otra posición entre los equipos.'
-        : 'Todavía no se ha reconocido un prefijo. Comprueba 300 bit/s en ambos equipos y observa si llegan los dos tonos durante el anuncio remoto.'}</p>
+        : level.prefixes > 0 ? 'Se ha detectado al menos un sincronismo, pero todavía no hay tramas válidas. Prueba con menos volumen y otra posición entre los equipos.'
+        : 'Todavía no se ha detectado un sincronismo. Comprueba la misma velocidad y la versión 0.3 en ambos equipos, y observa si llegan los dos tonos durante el anuncio remoto.'}</p>
       <p>Para investigar un fallo: desactiva «Compartir y propagar el mapa» en ambos equipos, pulsa «Grabar recepción · 10 s» aquí y después «Anunciar mi presencia» en el otro dispositivo.
         Mantén esta página visible. Durante la grabación se aplazan las emisiones y los acuses de esta estación.</p>
       <div className="ra-actions"><button type="button" disabled={!active || transmitting || recording} onClick={recordDiagnostic}>Grabar recepción · 10 s</button>
@@ -145,7 +145,7 @@ export default function RadioAudioStation() {
             durationSeconds: samples.length / recorded.sampleRate, scope: 'Audio recibido tras filtros y remuestreo a 9600 Hz. No es audio crudo del micrófono. Contadores de sesión antes y después de la grabación.' }, null, 2), 'application/json') }}>Descargar datos de la prueba</button>
           <button type="button" onClick={() => setRecorded(null)}>Descartar grabación</button></>}
       </div>
-      {recorded && <p role="status">Grabación lista: {recorded.after.prefixes - recorded.before.prefixes} candidatos con prefijo y {recorded.after.accepted - recorded.before.accepted} tramas válidas durante la prueba.</p>}
+      {recorded && <p role="status">Grabación lista: {recorded.after.prefixes - recorded.before.prefixes} sincronismos y {recorded.after.accepted - recorded.before.accepted} tramas válidas durante la prueba.</p>}
       <p className="ra-hint">Solo se graba al pulsar el botón. Son 10 s de audio recibido tras el filtro y remuestreo a 9600 Hz; puede incluir voces del entorno.
         No se sube a Internet ni se guarda automáticamente. Puedes descargarlo o descartarlo. Una sesión nueva borra la grabación anterior.</p>
     </section>
@@ -181,7 +181,7 @@ export default function RadioAudioStation() {
       <p>El altavoz de salida se elige en el dispositivo. Se pide captura sin cancelación de eco, supresión de ruido ni ganancia automática, porque pueden alterar los tonos.
         La escucha se reactiva al terminar el audio, también durante la espera de retorno, para recibir los acuses. Durante la emisión local se bloquea la recepción. Nunca se reproduce el micrófono por el altavoz.</p>
       {capture && <p className="ra-hint">Captura: {capture.sampleRate} muestras/s. Procesamiento informado por el navegador: eco {String(capture.settings.echoCancellation ?? 'no informado')},
-        {' '}ruido {String(capture.settings.noiseSuppression ?? 'no informado')}, ganancia {String(capture.settings.autoGainControl ?? 'no informado')}. {level.rejected || 0} candidatos rechazados por cabecera/CRC.</p>}
+        {' '}ruido {String(capture.settings.noiseSuppression ?? 'no informado')}, ganancia {String(capture.settings.autoGainControl ?? 'no informado')}. {level.rejected || 0} tramas rechazadas por CRC de cabecera o de contenido.</p>}
     </details>
     <section className="ra-panel"><h2>Prueba sin walkie</h2><p>Comprueba primero el módem local. Después prueba entre dos dispositivos cercanos: el altavoz de uno transmite y el micrófono del otro recibe.</p>
       <div className="ra-actions"><button type="button" onClick={selfTest} disabled={!bytes || bytes > 96}>Autoprueba local · sin emitir</button>
@@ -191,16 +191,18 @@ export default function RadioAudioStation() {
     </section>
     <details className="ra-panel ra-guide" open><summary>Cómo probar con dos walkies</summary><ol>
       <li>Usa el mismo canal y subtono en ambos walkies, activa VOX y coloca cada dispositivo cerca de su walkie. Empieza con volumen moderado.</li>
-      <li>Abre esta app en cada dispositivo: ID 1 y 2, grupo 17, tasa 300 bit/s. Activa ambas estaciones y permite el micrófono.</li>
+      <li>Abre esta app en cada dispositivo: ID 1 y 2, grupo 17, 300 símbolos/s. Activa ambas estaciones y permite el micrófono.</li>
       <li>Anuncia tu presencia en un equipo. Con «Compartir y propagar el mapa» activado, los demás responden y comparten sus vecinos. Espera a que termine el intercambio; en redes de varios equipos puede tardar más de un minuto.</li>
       <li>Envía un texto breve al otro ID. Espera a «Recepción confirmada». «Sin confirmación» puede significar que se perdió el mensaje o el acuse.</li>
       <li>Ajusta el tono previo, el retorno y el volumen si el VOX recorta la trama. Mantén la app visible y la pantalla encendida.</li></ol>
       <p>La página se detiene al pasar a segundo plano o suspenderse el audio, para evitar emisiones acumuladas al volver. Los mensajes quedan en memoria;
         se borran al recargar o iniciar una sesión nueva. Solo se guardan preferencias en este navegador.</p>
-      <p>Modulación BFSK de 1200/2400 Hz, entrenamiento de 16 bytes AA, prefijo AA AA AA AA D3 91, cabecera de 16 bytes y CRC-16/CCITT-FALSE.
-        El receptor busca el prefijo con distintas alineaciones y compensa diferencias entre tonos; acepta únicamente tramas con CRC válido. Los mensajes y acuses usan TTL 1;
+      <p>Modulación BFSK de 1200/2400 Hz, 64 bits de entrenamiento, sincronismo de 64 bits y dos bloques con corrección de errores: código convolucional K=7 de tasa 1/2
+        con decodificación Viterbi suave y entrelazado, que reparan los bits dañados por golpes, voces o soplido. La cabecera lleva su propio CRC-16/CCITT-FALSE y el contenido otro sobre cabecera y texto.
+        La información útil es la mitad de la velocidad de símbolos. El receptor estima el nivel de cada tono en cada trama y sigue el reloj del emisor; acepta únicamente tramas con CRC válido.
+        La versión 0.3 no es compatible con la 0.2: actualiza la página en todos los equipos. Los mensajes y acuses usan TTL 1;
         los informes del mapa se propagan hasta cuatro saltos, con caducidad y supresión de duplicados. Grupo 17 por defecto; no es interoperable con el protocolo del simulador.
-        No hay FEC, autenticación ni confirmación de lectura humana.</p>
+        No hay autenticación ni confirmación de lectura humana.</p>
       <p>Esta versión necesita pruebas con grabaciones y equipos reales; la autoprueba no valida la transmisión por RF. En España, la <a href="https://www.boe.es/buscar/act.php?id=BOE-A-2026-15661" target="_blank" rel="noreferrer">UN-110 del CNAF</a>
         {' '}excluye el uso de PMR446 como repetidor o estación base. Compartir el mapa incluye retransmitir informes recibidos: desactiva esa opción para ensayos de escucha y mensajes directos.</p>
       <p>El objetivo es estudiar comunicaciones de socorro. El artículo 4.9 del <a href="https://www.itu.int/pub/R-REG-RR-2024" target="_blank" rel="noreferrer">Reglamento de Radiocomunicaciones de la UIT</a>

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { FRAME_TYPES as T, SAMPLE_RATE, textBytes, encodeFrame, modulate, seededRandom } from '../src/utils/emergencyRadioAudio.js'
-import { FskAudioReceiver, AudioResampler, voxAudio } from '../src/utils/radioAudioModem.js'
+import { FRAME_TYPES as T, SAMPLE_RATE, textBytes, seededRandom } from '../src/utils/emergencyRadioAudio.js'
+import { FskAudioReceiver, AudioResampler, KNOWN, airBits, encodeCodedFrame, frameSeconds, voxAudio, voxBits } from '../src/utils/radioAudioModem.js'
 import { AudioStationProtocol } from '../src/utils/radioAudioStation.js'
 
 let checks = 0
@@ -43,7 +43,7 @@ function withEcho(audio, baud, offset = 19) {
   return Float32Array.from({ length: audio.length + delay + offset + 77 }, (_, i) =>
     0.03 * ((audio[i - offset] || 0) + 0.75 * (audio[i - offset - delay] || 0)))
 }
-test('Exact prefix with low tone contrast still delivers a CRC-valid frame through an echo', () => {
+test('Sync with low tone contrast still delivers a CRC-valid frame through an echo', () => {
   for (const baud of [300, 600]) for (const offset of [1, 7, 19, 31]) {
     const rx = new FskAudioReceiver(baud)
     const found = stream(rx, withEcho(voxAudio(packet, { baud }), baud, offset), offset)
@@ -52,12 +52,13 @@ test('Exact prefix with low tone contrast still delivers a CRC-valid frame throu
     assert.ok(rx.prefixes > 0); assert.equal(rx.accepted, 1)
   }
 })
-test('Low-contrast prefix never bypasses CRC or accepts a corrupt echoed payload', () => {
+// The code repairs flipped bits on air, so a corrupt frame is broken before
+// coding: its body CRC no longer matches and the decoder must refuse it.
+function brokenFrame(p = packet) { const f = encodeCodedFrame(p); f.body[3] ^= 1; return airBits(f) }
+test('Sync with low tone contrast never bypasses the CRC of a corrupt echoed payload', () => {
   for (const baud of [300, 600]) {
-    const bad = encodeFrame(packet); bad[28] ^= 1
-    const audio = modulate(Uint8Array.from([...Array(16).fill(170), ...bad]), baud)
     const rx = new FskAudioReceiver(baud)
-    assert.equal(stream(rx, withEcho(audio, baud)).length, 0)
+    assert.equal(stream(rx, withEcho(voxBits(brokenFrame(), { baud }), baud)).length, 0)
     assert.ok(rx.prefixes > 0); assert.ok(rx.rejected > 0); assert.equal(rx.accepted, 0)
     rx.push(new Float32Array(2000))
     const found = stream(rx, withEcho(voxAudio(packet, { baud }), baud))
@@ -91,13 +92,11 @@ test('Unequal tone levels and delayed paths decode at both rates without duplica
 })
 test('Tone compensation still rejects corrupted CRCs and reset clears every partial candidate', () => {
   for (const baud of [300, 600]) for (const db of [-9, 9]) {
-    const bad = encodeFrame(packet); bad[28] ^= 1
-    const audio = modulate(Uint8Array.from([...Array(16).fill(170), ...bad]), baud)
     const rx = new FskAudioReceiver(baud)
-    assert.equal(stream(rx, withToneImbalance(audio, baud, db)).length, 0)
+    assert.equal(stream(rx, withToneImbalance(voxBits(brokenFrame(), { baud }), baud, db)).length, 0)
     assert.ok(rx.prefixes > 0); assert.ok(rx.rejected > 0); assert.equal(rx.accepted, 0)
-    const partial = withToneImbalance(modulate(Uint8Array.from([...Array(16).fill(170), ...encodeFrame(packet)]), baud), baud, db)
-    rx.push(partial.subarray(0, (16 + 8) * 8 * SAMPLE_RATE / baud))
+    const partial = withToneImbalance(voxAudio(packet, { baud }), baud, db)
+    rx.push(partial.subarray(0, Math.round(0.7 * SAMPLE_RATE) + (KNOWN.length + 40) * SAMPLE_RATE / baud))
     assert.equal(rx.receiving, true)
     const prefixes = rx.prefixes
     rx.reset(); assert.equal(rx.receiving, false); assert.equal(rx.prefixes, prefixes)
@@ -108,8 +107,8 @@ test('Tone compensation still rejects corrupted CRCs and reset clears every part
 test('Full-symbol tone compensation retains reception with noise, imbalance and moderate echo together', () => {
   for (const baud of [300, 600]) for (const db of [-6, 0, 6]) {
     const audio = withToneImbalance(voxAudio(packet, { baud }), baud, db, 19.5, 0.25)
-    const start = Math.round(0.7 * SAMPLE_RATE) + 16 * 8 * SAMPLE_RATE / baud + 20
-    const data = audio.subarray(start, start + encodeFrame(packet).length * 8 * SAMPLE_RATE / baud)
+    const start = Math.round(0.7 * SAMPLE_RATE) + KNOWN.length * SAMPLE_RATE / baud + 20
+    const data = audio.subarray(start, start + (airBits(encodeCodedFrame(packet)).length - KNOWN.length) * SAMPLE_RATE / baud)
     const power = data.reduce((sum, x) => sum + x * x, 0) / data.length
     // Defined at the decoder input over frame data, before tone correlation:
     // 6 dB at 300 bit/s and 9 dB at 600 bit/s signal / white-noise power.
@@ -126,12 +125,92 @@ test('Full-symbol tone compensation retains reception with noise, imbalance and 
     }
   }
 })
+// Noisy rooms, synthesised (no recordings): hiss, six overlapping voices
+// (glottal pulse trains through two formants, gated at syllable rate) and
+// knocks (decaying bursts every 20–230 ms). Unit RMS at 9600 samples/s.
+const unit = a => { const rms = Math.sqrt(a.reduce((sum, x) => sum + x * x, 0) / a.length); return a.map(x => x / rms) }
+const hiss = (n, r) => unit(Float32Array.from({ length: n }, () => r() * 2 - 1))
+function babble(n, r) {
+  const out = new Float32Array(n)
+  const resonator = (f, bw) => { const R = Math.exp(-Math.PI * bw / SAMPLE_RATE); return [2 * R * Math.cos(2 * Math.PI * f / SAMPLE_RATE), -R * R] }
+  for (let v = 0; v < 6; v++) {
+    const f0 = 90 + r() * 160, [a1, a2] = resonator(400 + r() * 500, 120), [b1, b2] = resonator(1000 + r() * 1500, 180)
+    const rate = 3 + r() * 3, offset = r() * 6
+    let phase = 0, y1 = 0, y2 = 0, z1 = 0, z2 = 0
+    for (let i = 0; i < n; i++) {
+      phase += f0 / SAMPLE_RATE; const pulse = phase >= 1 ? (phase -= 1, 1) : 0
+      const y = pulse + 0.05 * (r() - 0.5) + a1 * y1 + a2 * y2; y2 = y1; y1 = y
+      const z = y + b1 * z1 + b2 * z2; z2 = z1; z1 = z
+      out[i] += (0.5 * y + z) * Math.max(0, Math.sin(2 * Math.PI * rate * i / SAMPLE_RATE + offset))
+    }
+  }
+  return unit(out)
+}
+function knocks(n, r) {
+  const out = Float32Array.from({ length: n }, () => (r() * 2 - 1) * 0.2)
+  for (let i = 0; i < n; i += Math.floor(200 + r() * 2000)) for (let k = 0; k < 40 && i + k < n; k++) out[i + k] += (r() * 2 - 1) * 12 * Math.exp(-k / 8)
+  return unit(out)
+}
+// Signal-to-noise power at the decoder input, over the coded part of the
+// frame. The uncoded v1 frame at 300 symbols/s needed about 0 dB of hiss,
+// 0 dB of voices and 9 dB of knocks; these levels are 3 to 21 dB harsher and
+// every seed from 1 to 12 passed them when they were chosen.
+test('Noisy rooms: hiss, voices and knocks below the signal level are corrected by the code', () => {
+  const p = { ...packet, payload: [...textBytes('Agua y atención en el punto de reunión, somos cinco.')] }
+  const levels = { 300: { hiss: -3, babble: -6, knocks: -12 }, 600: { hiss: 0, babble: -6, knocks: -9 } }
+  for (const baud of [300, 600]) {
+    const audio = voxAudio(p, { baud }); const spb = SAMPLE_RATE / baud
+    const start = Math.round(0.7 * SAMPLE_RATE) + KNOWN.length * spb
+    const data = audio.subarray(start, start + (airBits(encodeCodedFrame(p)).length - KNOWN.length) * spb)
+    const power = data.reduce((sum, x) => sum + x * x, 0) / data.length
+    for (const [name, make] of Object.entries({ hiss, babble, knocks })) for (let seed = 1; seed <= 6; seed++) {
+      const r = seededRandom(seed * 101 + baud); const noise = make(audio.length, r)
+      const g = Math.sqrt(power / 10 ** (levels[baud][name] / 10))
+      const found = stream(new FskAudioReceiver(baud), Float32Array.from(audio, (x, i) => x + g * noise[i]), seed)
+      assert.equal(found.length, 1, `${baud} symbols/s, ${name} at ${levels[baud][name]} dB, seed ${seed}`)
+      assert.deepEqual(found[0].packet, p)
+    }
+  }
+})
+test('A minute of voices and a minute of hiss alone never produce a frame', () => {
+  for (const baud of [300, 600]) {
+    const rx = new FskAudioReceiver(baud); const r = seededRandom(baud)
+    assert.equal(stream(rx, babble(SAMPLE_RATE * 60, r).map(x => x * 0.2)).length, 0)
+    assert.equal(stream(rx, hiss(SAMPLE_RATE * 60, r).map(x => x * 0.2)).length, 0)
+    assert.equal(rx.accepted, 0)
+  }
+})
 test('44.1 and 48 kHz capture, noise and ±200 ppm sample-clock mismatch on a 96-byte text', () => {
   const p = { ...packet, payload: [...textBytes('Abcdefghijklmnopqrstuvwxyz0123456'.repeat(3).slice(0, 96))] }
   assert.equal(p.payload.length, 96)
   for (const baud of [300, 600]) for (const rate of [44100, 48000]) for (const ppm of [-200, 200]) {
     const found = nativeStream(capture(voxAudio(p, { baud }), rate, ppm, 0.025), rate, baud)
     assert.equal(found.length, 1, `${rate} Hz, ${baud} bit/s, ${ppm} ppm`); assert.deepEqual(found[0].packet, p)
+  }
+})
+test('The largest frame survives ±1000 and ±3000 ppm only because the bit clock is tracked', () => {
+  // A full map report: 32-byte name and 32 neighbours, 134 payload bytes and
+  // 2616 symbols on air. At 3000 ppm it slides by about eight symbols end to
+  // end; a fixed-phase receiver lost the (shorter, uncoded) v1 frame beyond
+  // about ±400 ppm.
+  const payload = [0x52, 0x41, 1, 0, 0, 32, ...Array(32).fill(65), ...Array.from({ length: 32 }, (_, i) => [i + 2, 0, 5]).flat()]
+  const big = { type: T.TOPOLOGY, net: 17, origin: 1, sender: 1, dst: 255, next: 255, ttl: 4, priority: 2, epoch: 9, seq: 1, attempt: 0, payload }
+  assert.equal(airBits(encodeCodedFrame(big)).length, 2616)
+  for (const baud of [300, 600]) for (const rate of [44100, 48000]) for (const ppm of [-3000, -1000, 1000, 3000]) {
+    const found = nativeStream(capture(voxAudio(big, { baud }), rate, ppm, 0.02), rate, baud)
+    assert.equal(found.length, 1, `${rate} Hz, ${baud} bit/s, ${ppm} ppm`); assert.deepEqual(found[0].packet, big)
+  }
+})
+test('Anti-alias filter: 7.2 and 8.4 kHz no longer fold onto the tones; the tones pass unchanged', () => {
+  // At 9600 Hz, 7200 Hz aliases exactly onto 2400 Hz and 8400 Hz onto 1200 Hz.
+  // Linear interpolation alone passed both at about 0 dB.
+  const level = (rate, f) => {
+    const y = new AudioResampler(rate).push(Float32Array.from({ length: rate }, (_, i) => Math.sin(2 * Math.PI * f * i / rate))).subarray(200)
+    return 20 * Math.log10(Math.sqrt(y.reduce((sum, x) => sum + x * x, 0) / y.length) / Math.SQRT1_2)
+  }
+  for (const rate of [44100, 48000]) {
+    for (const f of [7200, 8400]) assert.ok(level(rate, f) < -50, `${rate} Hz: ${f} Hz at ${level(rate, f).toFixed(1)} dB`)
+    for (const f of [1200, 2400]) assert.ok(Math.abs(level(rate, f)) < 0.1, `${rate} Hz: ${f} Hz at ${level(rate, f).toFixed(2)} dB`)
   }
 })
 test('Resampling is identical across chunk boundaries and retains its clock', () => {
@@ -141,12 +220,10 @@ test('Resampling is identical across chunk boundaries and retains its clock', ()
   assert.deepEqual(Float32Array.from(parts), full)
 })
 test('CRC corruption and truncation are rejected; a later good frame resynchronizes', () => {
-  const bad = encodeFrame(packet); bad[28] ^= 1
-  const broken = modulate(Uint8Array.from([...Array(16).fill(170), ...bad]), 300)
   const rx = new FskAudioReceiver(300)
-  assert.equal(stream(rx, broken).length, 0); assert.ok(rx.rejected > 0)
+  assert.equal(stream(rx, voxBits(brokenFrame())).length, 0); assert.ok(rx.rejected > 0)
   rx.push(new Float32Array(2000)); assert.equal(stream(rx, voxAudio(packet)).length, 1)
-  const short = modulate(encodeFrame(packet).slice(0, -1), 300)
+  const short = voxBits(airBits(encodeCodedFrame(packet)).slice(0, -40), { tailMs: 0 })
   assert.equal(stream(new FskAudioReceiver(300), short).length, 0)
 })
 test('Silence, unrelated tones, random noise and a mismatched bit rate do not invent text', () => {
@@ -158,9 +235,11 @@ test('Silence, unrelated tones, random noise and a mismatched bit rate do not in
 })
 test('VOX audio includes lead/training/tail, is bounded, and a clipped lead can still acquire', () => {
   const audio = voxAudio(packet, { leadMs: 1000, tailMs: 120, volume: 0.35 })
-  assert.equal(audio.length, 9600 + (16 + encodeFrame(packet).length) * 8 * 32 + 1152)
+  assert.equal(audio.length, 9600 + airBits(encodeCodedFrame(packet)).length * 32 + 1152)
+  assert.equal(audio.length / SAMPLE_RATE, frameSeconds(packet.payload.length, { baud: 300, leadMs: 1000, tailMs: 120 }))
   assert.ok(audio.every(x => Math.abs(x) <= 0.350001))
-  assert.equal(stream(new FskAudioReceiver(300), audio.subarray(9600 + 16 * 8 * 32 / 2)).length, 1)
+  // VOX clipped the lead and half of the 64 training bits.
+  assert.equal(stream(new FskAudioReceiver(300), audio.subarray(9600 + 32 * 32)).length, 1)
 })
 test('Two direct stations exchange actual streamed waveforms and confirm only the returned ACK', () => {
   const a = station(1); const b = station(2); const m = a.send(message, 2, 0)

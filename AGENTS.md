@@ -6,7 +6,8 @@ This file provides guidance to coding agents working in this repository.
 
 ```bash
 npm run dev       # Start Vite at http://localhost:5173
-npm run build     # Build to dist/ and audit public artifacts
+npm run build     # build:wasm (needs wasm-pack) + build:web
+npm run build:web # Vite build to dist/ and audit public artifacts, without rebuilding the WASM
 npm run preview   # Preview production build locally
 npm run audit:public    # Reject sensitive tracked files or public artifacts
 npm run test:anon      # DICOM anonymizer regression suite (PHI, conformance, RT references)
@@ -26,11 +27,21 @@ npm run test:tomo      # 3D SPECT sphere uniformity, anisotropic geometry and re
 npm run test:fdtd      # FDTD fallback, PEC geometry and JSON configuration
 npm run test:shielding # Shielding geometry, transient history, file bounds and CSN/NCRP arithmetic
 npm run test:shielding:browser # Real Chrome: access, local imports, calibration and editor interactions
+npm run dev:shielding  # Development-only isolated shielding editor without Firebase (never routed in production)
+npm run test:mcc       # PTW MCC parsing, PDD/profile analysis and TRS-398 kQ
+npm run test:mri       # MRI protocol comparison and report export (test:mri:browser runs it in Chrome)
+npm run test:film      # Film dosimetry TIFF decoding, calibration and lateral correction
+npm run test:tg43      # TG-43 brachytherapy calculations
+npm run test:cpt       # Continuous performance test sequence and timing invariants
 npm run check:security # Anonymizer and paste tests, then build and audit the GitHub Pages artifact
 npm run deploy         # Build, audit and deploy dist/ to GitHub Pages
 ```
 
-No test framework is configured. Use `npm run build` as the minimum integration check. For calculation modules, add or run focused Node assertions against the pure utility functions.
+Use Node 24 (README and CI). No test framework is configured: every suite is a standalone
+Node script, so a single one runs as `node scripts/test-<name>.mjs` (some `test:*` scripts chain
+several files; see `package.json`). CI (`.github/workflows/deploy.yml`) lists the suites it runs
+explicitly, so a new suite must also be added there. Use `npm run build:web` as the minimum
+integration check when `wasm-pack` is unavailable. For calculation modules, add or run focused Node assertions against the pure utility functions.
 
 Some modules do have real suites. The Morse trainer has `scripts/test-morse.mjs`
 (`npm run test:morse`); run it after touching `src/utils/morse.js` or
@@ -141,6 +152,11 @@ Routes inside `<Layout />` use the shared sidebar and mobile topbar:
 - `/red-emergencia` - experimental emergency-radio network and per-receiver audio simulation
 - `/estacion-radio` - client-side microphone/speaker BFSK station with VOX and direct acknowledgments
 - `/aprs` - receive-only APRS decoder (AFSK 1200, AX.25) from the microphone or an audio file
+- `/resolucion-espacial-gamma`, `/sensibilidad-gamma` and `/informe-mensual-gamma` - planar gamma-camera QC and the private monthly report
+- `/dosimetria-pelicula` - EBT3 film dosimetry
+- `/analizador-mcc` - PTW MCC PDD/profile analysis
+- `/comparar-protocolos-rm` - MRI protocol comparison
+- `/radioaficionado` - private radio exam (admin)
 
 Standalone routes:
 
@@ -148,9 +164,9 @@ Standalone routes:
 
 - `/quiz-creator` - quiz editor
 - `/quizzes` - public quiz list
-- `/quiz/:quizId` - single-player quiz
 - `/host/:quizId` and `/join` - real-time multiplayer quiz flow
 - `/ptb` and `/ptb/:pasteId` - encrypted Secure Paste flow
+- `/admin`, `/exam-admin`, `/exam-admin/:sessionId` (and `/print`) and `/exam/join/:sessionId/:ticketSecret` - admin and QR exam flow
 
 ### Firebase (`src/firebase.js`)
 
@@ -178,7 +194,7 @@ Firestore collections:
 
 - `src/pages/ShieldingPage.jsx`, `src/components/shielding/`, `src/utils/shielding*.js` — private shielding workshop. Read `SHIELDING_WORKSHOP.md`. Work is transient: do not add uploads, browser storage, database records or hashes. The owner requested editable NCRP reference presets: keep them attributed in `shieldingPresets.js`, distinguish geometry/allocation assumptions from NCRP data, preserve manual overrides, and never refill cleared inputs in the evaluator. CSN remains independent: `shieldingCsnPresets.js` provides explicitly selectable radiography scenarios from GS 5.11. Preserve source attribution, the stated approximate mSv/mGy assumption, independent occupancies and manual blanks. Scene-wide CSN profile selection restores W and coefficients; automatic equal workload shares are an application assumption, not tabulated U. Keep geometry, scene history and physical calculations pure. One action evaluates both methods; primary, scatter and leakage are contributions, not alternatives. NCRP secondary already includes leakage; do not add it twice or multiply patient counts by CSN workload shares. The first version is explicitly 2D and unshielded; drawn barriers do not attenuate. Barriers may carry declared shielding layers (`shieldingBarriers.js`, material + mm, blank thickness never assumed; room-wide layers share a `groupId` and a per-wall edit detaches it), but the evaluation must not read them until verified transmission data is added. PDF.js 6 requires Node 24 in CI; destroy the loading task, not the document proxy. Run both shielding suites and `build:web`. `dev:shielding` is a development-only harness; never add its auth-free route to the production router.
 
-- `src/pages/RadioAudioStation.jsx`, `src/components/RadioNetworkMap.jsx`, `src/utils/radioAudioBrowser.js`, `src/utils/radioAudioModem.js`, `src/utils/radioAudioStation.js`, `src/utils/radioAudioTopology.js` and `src/worklets/radioCapture.worklet.js` - real microphone/speaker transport, independent of the simulator. Read `RADIO_AUDIO_STATION.md` and run `test:radio-audio`, `test:emergency-radio` and `build:web`. Keep frame synchronization inside the streaming receiver, all audio processing local, directed delivery dependent on a received matching ACK, and shutdown cancellation immediate. DATA/ACK remain direct TTL-1. The v0.2 map propagates bounded, aged observations up to four hops; it has no message routing or MPR. Preserve per-link age across forwarding, duplicate suppression, control limits and ACK priority; an indirect node or display path never proves bidirectional reachability. Never imply that a software test validates an RF link. Worklet imports must not instantiate browser-only APIs such as TextEncoder at module load.
+- `src/pages/RadioAudioStation.jsx`, `src/components/RadioNetworkMap.jsx`, `src/utils/radioAudioBrowser.js`, `src/utils/radioAudioModem.js`, `src/utils/radioAudioStation.js`, `src/utils/radioAudioTopology.js` and `src/worklets/radioCapture.worklet.js` - real microphone/speaker transport, independent of the simulator. Read `RADIO_AUDIO_STATION.md` and run `test:radio-audio`, `test:emergency-radio` and `build:web`. Keep frame synchronization inside the streaming receiver, all audio processing local, directed delivery dependent on a received matching ACK, and shutdown cancellation immediate. DATA/ACK remain direct TTL-1. The v0.2 map propagates bounded, aged observations up to four hops; it has no message routing or MPR. Preserve per-link age across forwarding, duplicate suppression, control limits and ACK priority; an indirect node or display path never proves bidirectional reachability. Never imply that a software test validates an RF link. Worklet imports must not instantiate browser-only APIs such as TextEncoder at module load. The live frame is v2 (K=7 rate-1/2 convolutional code, soft Viterbi, interleaving, 64-bit sync); the simulator keeps uncoded v1. Noise robustness is the design target: `test:radio-audio` pins decoding under synthetic hiss, voices and knocks below the signal level, so any receiver change must keep those levels. A bit flipped on air is corrected, so tests build corrupt frames before coding with `voxBits`.
 
 - `src/pages/AprsReceiver.jsx`, `src/utils/aprsModem.js`, `src/utils/ax25.js`, `src/utils/aprsParser.js`, `src/utils/aprsBrowser.js` and `src/worklets/aprsCapture.worklet.js` - receive-only APRS. Read `APRS_RECEIVER.md`; run `test:aprs` and `build:web`. The demodulator runs at the context's native rate with a bank of twist slicers; keep it pure so the worklet, file decoding and the Node suite share it. An empty packet list proves nothing, so modem tests must recover exact frames from modulated audio. Never upload, record or forward to APRS-IS; weather and other missing fields stay absent, never zero.
 
@@ -266,18 +282,14 @@ Keep domain calculations in `src/utils/petNemaFractionation.js` and UI concerns 
 
 ### Styles
 
-Global styles live in `src/styles.css`. Feature-specific stylesheets live in `src/styles/`:
-
-- `acr-qc.css`
-- `lector.css`
-- `morse.css`
-- `pet-nema.css`
-- `quiz.css`
-- `rtplan.css`
-- `tg43.css`
-- `uniformidad.css`
+Global styles live in `src/styles.css`; each page imports its own `src/styles/<module>.css`.
 
 The UI uses CSS custom properties from `src/styles.css`, such as `--bg-secondary`, `--text-muted`, `--accent-blue` and `--border`.
+
+### Documentation files
+
+`.gitignore` ignores `*.md` except an explicit allowlist (`!SECURITY.md`, `!GAMMA_CAMERA_QC.md`, ...).
+A new module document is silently left out of commits unless it gets its own `!NAME.md` entry.
 
 ### COR source review
 

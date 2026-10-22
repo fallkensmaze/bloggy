@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { SAMPLE_RATE, encodeFrame, modulate, wavBytes } from '../src/utils/emergencyRadioAudio.js'
-import { FskAudioReceiver, voxAudio } from '../src/utils/radioAudioModem.js'
+import { SAMPLE_RATE, wavBytes } from '../src/utils/emergencyRadioAudio.js'
+import { FskAudioReceiver, KNOWN, airBits, encodeCodedFrame, voxAudio, voxBits } from '../src/utils/radioAudioModem.js'
 
 let checks = 0
 function test(name, fn) { fn(); checks++; console.log(`✓ ${name}`) }
@@ -19,15 +19,17 @@ test('Tone meters recover known sine RMS and distinguish the two carriers at bot
     assert.deepEqual(rx.diagnostics().tonesDb, [-100, -100], 'interval peaks are consumed, not stale')
   }
 })
-test('Prefix acquisition survives reporting and mute resets, independently of CRC rejection', () => {
+test('Sync acquisition survives reporting and mute resets, independently of CRC rejection', () => {
   const rx = new FskAudioReceiver(300)
-  rx.push(modulate(encodeFrame(packet).slice(0, 8), 300))
+  const bare = { leadMs: 0, tailMs: 0 }
+  rx.push(voxBits(airBits(encodeCodedFrame(packet)).slice(0, KNOWN.length + 2), bare))
   const partial = rx.diagnostics()
   assert.ok(partial.prefixes > 0); assert.equal(partial.accepted, 0); assert.equal(partial.rejected, 0)
   rx.reset()
   assert.equal(rx.diagnostics().prefixes, partial.prefixes)
-  const bad = encodeFrame(packet); bad[22] ^= 1
-  rx.push(modulate(bad, 300))
+  // A flipped bit on air would be corrected; break the header CRC before coding.
+  const bad = encodeCodedFrame(packet); bad.header[17] ^= 1
+  rx.push(voxBits(airBits(bad), bare))
   const rejected = rx.diagnostics()
   assert.ok(rejected.rejected > 0); assert.equal(rejected.accepted, 0)
   rx.reset()
@@ -72,7 +74,12 @@ try {
       assert.equal(r.id, 7); assert.equal(r.samples.length, 96000); assert.equal(r.sampleRate, 9600)
       assert.equal(p.recording, null)
       // A 1.2 kHz sine has period 8 samples after resampling; no normalization.
-      assert.ok(Math.abs(r.samples[2] - 0.2) < 0.003)
+      // The anti-alias filter delays the output by under a millisecond, so the
+      // phase at the start of the take is arbitrary and feed() restarts the
+      // sine there: check the RMS over whole periods well after that step.
+      const settled = r.samples.subarray(40, 120)
+      const rms = Math.sqrt(settled.reduce((sum, x) => sum + x * x, 0) / settled.length)
+      assert.ok(Math.abs(rms - 0.2 / Math.SQRT2) < 0.003, `RMS ${rms}`)
       assert.equal(r.before.accepted, 0); assert.equal(r.after.accepted, 0)
       const wav = new DataView(wavBytes(r.samples))
       assert.equal(wav.getUint32(24, true), 9600); assert.equal(wav.getUint32(40, true), 192000)

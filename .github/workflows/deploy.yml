@@ -51,6 +51,9 @@ jobs:
       - name: Test live audio station
         run: npm run test:radio-audio
 
+      - name: Test APRS receiver
+        run: npm run test:aprs
+
       - name: Test gamma-camera quality control
         run: npm run test:gamma && npm run test:nema && npm run test:cor && npm run test:tomo
 
