@@ -16,6 +16,7 @@ npm run test:nema      # NEMA NU 1 intrinsic uniformity (edge rule, CFOV, DICOM 
 npm run test:radio     # Radio-exam XML parsing and quiz building
 npm run test:emergency-radio # Per-receiver audio, hidden terminals, routing and ACKs
 npm run test:radio-audio # Streaming microphone modem, direct stations and end-to-end ACKs
+npm run test:aprs      # AFSK 1200 demodulator, AX.25 frames and APRS payload parsing
 npm run test:paste     # Secure Paste crypto (the document id must not decrypt anything)
 npm run test:pet       # PET DICOM calibration and NEMA NU 2 background ROI placement
 npm run test:cor       # SPECT COR centroids, NEMA upper bounds, 3D geometry and ROC
@@ -139,6 +140,7 @@ Routes inside `<Layout />` use the shared sidebar and mobile topbar:
 - `/fdtd-simulator` - 3D FDTD antenna simulator powered by Rust/WebAssembly
 - `/red-emergencia` - experimental emergency-radio network and per-receiver audio simulation
 - `/estacion-radio` - client-side microphone/speaker BFSK station with VOX and direct acknowledgments
+- `/aprs` - receive-only APRS decoder (AFSK 1200, AX.25) from the microphone or an audio file
 
 Standalone routes:
 
@@ -177,6 +179,8 @@ Firestore collections:
 - `src/pages/ShieldingPage.jsx`, `src/components/shielding/`, `src/utils/shielding*.js` — private shielding workshop. Read `SHIELDING_WORKSHOP.md`. Work is transient: do not add uploads, browser storage, database records or hashes. The owner requested editable NCRP reference presets: keep them attributed in `shieldingPresets.js`, distinguish geometry/allocation assumptions from NCRP data, preserve manual overrides, and never refill cleared inputs in the evaluator. CSN remains independent: `shieldingCsnPresets.js` provides explicitly selectable radiography scenarios from GS 5.11. Preserve source attribution, the stated approximate mSv/mGy assumption, independent occupancies and manual blanks. Scene-wide CSN profile selection restores W and coefficients; automatic equal workload shares are an application assumption, not tabulated U. Keep geometry, scene history and physical calculations pure. One action evaluates both methods; primary, scatter and leakage are contributions, not alternatives. NCRP secondary already includes leakage; do not add it twice or multiply patient counts by CSN workload shares. The first version is explicitly 2D and unshielded; drawn barriers do not attenuate. Barriers may carry declared shielding layers (`shieldingBarriers.js`, material + mm, blank thickness never assumed; room-wide layers share a `groupId` and a per-wall edit detaches it), but the evaluation must not read them until verified transmission data is added. PDF.js 6 requires Node 24 in CI; destroy the loading task, not the document proxy. Run both shielding suites and `build:web`. `dev:shielding` is a development-only harness; never add its auth-free route to the production router.
 
 - `src/pages/RadioAudioStation.jsx`, `src/components/RadioNetworkMap.jsx`, `src/utils/radioAudioBrowser.js`, `src/utils/radioAudioModem.js`, `src/utils/radioAudioStation.js`, `src/utils/radioAudioTopology.js` and `src/worklets/radioCapture.worklet.js` - real microphone/speaker transport, independent of the simulator. Read `RADIO_AUDIO_STATION.md` and run `test:radio-audio`, `test:emergency-radio` and `build:web`. Keep frame synchronization inside the streaming receiver, all audio processing local, directed delivery dependent on a received matching ACK, and shutdown cancellation immediate. DATA/ACK remain direct TTL-1. The v0.2 map propagates bounded, aged observations up to four hops; it has no message routing or MPR. Preserve per-link age across forwarding, duplicate suppression, control limits and ACK priority; an indirect node or display path never proves bidirectional reachability. Never imply that a software test validates an RF link. Worklet imports must not instantiate browser-only APIs such as TextEncoder at module load.
+
+- `src/pages/AprsReceiver.jsx`, `src/utils/aprsModem.js`, `src/utils/ax25.js`, `src/utils/aprsParser.js`, `src/utils/aprsBrowser.js` and `src/worklets/aprsCapture.worklet.js` - receive-only APRS. Read `APRS_RECEIVER.md`; run `test:aprs` and `build:web`. The demodulator runs at the context's native rate with a bank of twist slicers; keep it pure so the worklet, file decoding and the Node suite share it. An empty packet list proves nothing, so modem tests must recover exact frames from modulated audio. Never upload, record or forward to APRS-IS; weather and other missing fields stay absent, never zero.
 
 - `src/pages/TomoUniformity.jsx`, `src/components/TomoVolumeViews.jsx`, `src/utils/tomoDicom.js`
   and `src/utils/tomoUniformity.js` - reconstructed SPECT cylinder analysis. Read

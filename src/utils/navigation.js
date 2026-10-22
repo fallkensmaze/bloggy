@@ -26,6 +26,7 @@ export const NAV_LINKS = [
   { href: '/fdtd-simulator', icon: 'bi-wifi', label: 'Simulador FDTD', section: 'Radioafición' },
   { href: '/red-emergencia', icon: 'bi-diagram-3', label: 'Red de emergencia', section: 'Radioafición' },
   { href: '/estacion-radio', icon: 'bi-mic', label: 'Estación de audio VOX', section: 'Radioafición' },
+  { href: '/aprs', icon: 'bi-geo-alt', label: 'Receptor APRS', section: 'Radioafición' },
   { href: '/radioaficionado', icon: 'bi-mortarboard', label: 'Examen radio', section: 'Radioafición', admin: true },
   { href: '/lector', icon: 'bi-speedometer2', label: 'Lector rápido', section: 'Herramientas' },
   { href: '/blindajes', icon: 'bi-bounding-box', label: 'Taller de blindajes', section: 'Herramientas', admin: true },
