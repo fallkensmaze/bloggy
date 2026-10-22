@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { SAMPLE_RATE, encodeFrame, modulate, wavBytes } from '../src/utils/emergencyRadioAudio.js'
-import { FskAudioReceiver, voxAudio } from '../src/utils/radioAudioModem.js'
+import { SAMPLE_RATE, wavBytes } from '../src/utils/emergencyRadioAudio.js'
+import { FskAudioReceiver, KNOWN, airBits, encodeCodedFrame, voxAudio, voxBits } from '../src/utils/radioAudioModem.js'
 
 let checks = 0
 function test(name, fn) { fn(); checks++; console.log(`✓ ${name}`) }
@@ -19,15 +19,17 @@ test('Tone meters recover known sine RMS and distinguish the two carriers at bot
     assert.deepEqual(rx.diagnostics().tonesDb, [-100, -100], 'interval peaks are consumed, not stale')
   }
 })
-test('Prefix acquisition survives reporting and mute resets, independently of CRC rejection', () => {
+test('Sync acquisition survives reporting and mute resets, independently of CRC rejection', () => {
   const rx = new FskAudioReceiver(300)
-  rx.push(modulate(encodeFrame(packet).slice(0, 8), 300))
+  const bare = { leadMs: 0, tailMs: 0 }
+  rx.push(voxBits(airBits(encodeCodedFrame(packet)).slice(0, KNOWN.length + 2), bare))
   const partial = rx.diagnostics()
   assert.ok(partial.prefixes > 0); assert.equal(partial.accepted, 0); assert.equal(partial.rejected, 0)
   rx.reset()
   assert.equal(rx.diagnostics().prefixes, partial.prefixes)
-  const bad = encodeFrame(packet); bad[22] ^= 1
-  rx.push(modulate(bad, 300))
+  // A flipped bit on air would be corrected; break the header CRC before coding.
+  const bad = encodeCodedFrame(packet); bad.header[17] ^= 1
+  rx.push(voxBits(airBits(bad), bare))
   const rejected = rx.diagnostics()
   assert.ok(rejected.rejected > 0); assert.equal(rejected.accepted, 0)
   rx.reset()

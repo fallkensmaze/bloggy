@@ -1,5 +1,5 @@
 import { FRAME_TYPES as T, textBytes, bytesText } from './emergencyRadioAudio.js'
-import { AUDIO_MODEM_DEFAULTS } from './radioAudioModem.js'
+import { AUDIO_MODEM_DEFAULTS, frameSeconds } from './radioAudioModem.js'
 import { AudioTopology, TOPOLOGY, readTopology, topologyPayload, ageTopology } from './radioAudioTopology.js'
 
 export const STATION_STATUS = { queued: 'En cola', transmitting: 'Emitiendo', waitingAck: 'Esperando acuse', confirmed: 'Recepción confirmada',
@@ -167,7 +167,7 @@ export class AudioStationProtocol {
     if (entry.packet.type === T.TOPOLOGY) {
       if (!entry.ownTopology && !this.topology.isLatest(entry.packet)) return null
       const payload = entry.ownTopology ? topologyPayload(this.config.name, this.peers, now) : entry.packet.payload
-      const duration = (this.config.leadMs + this.config.tailMs) / 1000 + (40 + payload.length) * 8 / this.config.baud
+      const duration = frameSeconds(payload.length, this.config)
       const aged = ageTopology(payload, (entry.ownTopology ? 0 : now - entry.topologyAt) + duration)
       if (!aged) return null
       entry.packet = { ...entry.packet, payload: aged }
@@ -186,7 +186,8 @@ export class AudioStationProtocol {
     if (!m || entry.packet.type !== T.DATA || m.status === 'confirmed') return
     if (!success) { m.status = 'interrupted'; return }
     m.status = m.dst === 255 ? 'broadcast' : 'waitingAck'
-    m.due = now + Math.max(10, (this.config.leadMs + this.config.tailMs + 2 * this.config.releaseMs) / 1000 + 46 * 8 / this.config.baud + 3)
+    // The reply is a 6-byte ACK sent after both VOX release guards.
+    m.due = now + Math.max(10, 2 * this.config.releaseMs / 1000 + frameSeconds(6, this.config) + 3)
   }
   stop(now) {
     this.time = now; this.stopped = true; this.topologyDue = Infinity; this.queue = []; this.transmitting = null
