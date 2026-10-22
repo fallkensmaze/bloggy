@@ -23,6 +23,7 @@ import RadioExam from './pages/RadioExam'
 import FdtdSimulator from './pages/FdtdSimulator'
 import EmergencyRadioLab from './pages/EmergencyRadioLab'
 import RadioAudioStation from './pages/RadioAudioStation'
+import AprsReceiver from './pages/AprsReceiver'
 import Admin from './pages/Admin'
 import QuizCreator from './pages/QuizCreator'
 import QuizList from './pages/QuizList'
@@ -72,6 +73,7 @@ function App() {
         <Route path="fdtd-simulator" element={<FdtdSimulator />} />
         <Route path="red-emergencia" element={<EmergencyRadioLab />} />
         <Route path="estacion-radio" element={<RadioAudioStation />} />
+        <Route path="aprs" element={<AprsReceiver />} />
         <Route path="dosimetria-pelicula" element={<FilmDosimetry />} />
         <Route path="analizador-mcc" element={<MccAnalyzer />} />
       </Route>
