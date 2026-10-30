@@ -63,6 +63,8 @@ publicaciones pero no elimina sus revisiones antiguas del historial de Git.
 
 - El informe mensual de gammacámara exige la sesión del propietario en la interfaz y mantiene las imágenes/resultados solo en memoria. No los persiste en Firestore, localStorage ni en el sitio estático. Su código, como el resto de la SPA, es público. La preparación de imágenes para ChatGPT es una descarga local y copia de texto; no contiene ni utiliza claves API. Una futura integración automática deberá verificar Firebase Auth en un backend y guardar allí la clave, nunca en variables `VITE_*`.
 
+- El emisor APRS (`/aprs-emisor`) guarda el secreto de firma y el contador en `APRS_PRIVADO/emisor`. Su protección es solo la regla de Firestore, que vive en `firestore.rules` (local, fuera de Git) y hay que desplegar desde un entorno privado; el código de la página es público y el algoritmo de firma no es secreto. Sin la regla, Firestore rechaza el acceso, pero con una regla demasiado permisiva el secreto sería legible. La firma autentica el texto, no lo cifra: lo emitido es público en aprs.fi. Detalles en `APRS_EMISOR.md`.
+
 - `public/Informe-Tanques-Terminal.html` es un informe estatico y publico. Su
   `iframe` permite scripts, pero queda aislado del origen principal mediante
   `sandbox`.

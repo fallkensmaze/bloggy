@@ -1,0 +1,15 @@
+.aprs-gate { text-align: center; max-width: 560px; margin-left: auto; margin-right: auto; }
+.aprs-gate-icon { font-size: 2rem; color: var(--accent-blue); }
+.aprs-gate p { line-height: 1.6; }
+.aprs-gate .aprs-actions { justify-content: center; }
+.aprs-sender-compose { display: grid; grid-template-columns: 8rem minmax(0, 1fr); gap: 1rem; margin-bottom: 1rem; }
+.aprs-sender-compose input[maxlength="1"] { text-align: center; font-size: 1.3rem; font-weight: 700; text-transform: uppercase; }
+.aprs-sender-audio { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.aprs-page input[type="range"] { padding: 0; }
+.aprs-sender-over { color: #ffc3be; }
+.aprs-sender-last { margin-top: 1rem; }
+.aprs-line { display: block; padding: .8rem 1rem; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-primary); font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; font-size: 1.15rem; overflow-wrap: anywhere; user-select: all; }
+@media (max-width: 760px) {
+  .aprs-sender-compose { grid-template-columns: 1fr; }
+  .aprs-sender-audio { grid-template-columns: 1fr; }
+}
