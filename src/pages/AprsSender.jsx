@@ -4,7 +4,7 @@ import { auth } from '../firebase'
 import { useAuthUser } from '../utils/adminAuth'
 import { loginWithGoogle } from '../utils/authGoogle'
 import { afskModulate } from '../utils/aprsModem'
-import { CONTADOR_MAX, MAX_TEXTO_APRS, construirMensaje, errorTexto, limpiarTexto, parseRuta, problemasConfig, tramaMensaje, verificarMensaje } from '../utils/aprsSigner'
+import { CONTADOR_MAX, MAX_TEXTO_APRS, construirMensaje, errorSecreto, errorTexto, limpiarTexto, parseRuta, problemasConfig, tramaMensaje, verificarMensaje } from '../utils/aprsSigner'
 import { guardarConfig, leerConfigPublica, reservarContador } from '../utils/aprsSenderStore'
 import { readNumber, writeValue } from '../utils/localSettings'
 import '../styles/aprs.css'
@@ -19,7 +19,7 @@ const CONFIG_VACIA = { indicativo: '', destinatario: 'ALERTA', ruta: 'WIDE1-1,WI
 const SEG_POR_FLAG = 8 / 1200
 
 function mensajeError(e) {
-  if (e?.code === 'permission-denied') return 'Firestore ha denegado el acceso a APRS_PRIVADO. Despliega la regla de APRS_EMISOR.md desde tu entorno privado.'
+  if (e?.code === 'permission-denied') return 'Firestore ha denegado la operación sobre APRS_PRIVADO: falta desplegar la regla de APRS_EMISOR.md o algún campo no cumple su validación.'
   return e?.message || String(e)
 }
 
@@ -74,6 +74,7 @@ export default function AprsSender() {
     const problemas = problemasConfig(borrador)
     const contador = Number(borrador.contador)
     if (!Number.isInteger(contador) || contador < 0 || contador >= CONTADOR_MAX) problemas.push(`El contador debe ser un entero entre 0 y ${CONTADOR_MAX - 1}.`)
+    if (secreto.trim() && errorSecreto(secreto)) problemas.push(errorSecreto(secreto))
     if (problemas.length) { setError(problemas.join(' ')); return }
     setGuardando(true)
     try {

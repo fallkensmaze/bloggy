@@ -51,21 +51,51 @@ letra) sí van a `localStorage`, y no son sensibles.
 
 ### Regla de Firestore (obligatoria)
 
-`firestore.rules` es local y está fuera de Git; hay que añadir esto y desplegarlo
-desde un entorno privado (`firebase deploy --only firestore:rules`):
+`firestore.rules` es local y está fuera de Git. Hay que añadir este bloque junto
+a los demás `match` (después de `RADIO_TEMAS`) y desplegarlo desde un entorno
+privado (`firebase deploy --only firestore:rules`). El `deny all` general de las
+reglas actuales se mantiene: el bloque solo abre este documento.
 
 ```
 match /APRS_PRIVADO/{docId} {
-  allow read, write: if soyAdmin();
+  function aprsValido() {
+    let d = request.resource.data;
+    return docId == 'emisor'
+      && d.keys().hasOnly(['secreto', 'contador', 'indicativo', 'destinatario', 'ruta', 'actualizado'])
+      && (!('secreto' in d) || (d.secreto is string && d.secreto.size() >= 16 && d.secreto.size() <= 200))
+      && (!('contador' in d) || (d.contador is int && d.contador >= 0 && d.contador <= 999999))
+      && (!('indicativo' in d) || (d.indicativo is string && d.indicativo.size() <= 12))
+      && (!('destinatario' in d) || (d.destinatario is string && d.destinatario.size() <= 9))
+      && (!('ruta' in d) || (d.ruta is string && d.ruta.size() <= 100))
+      && (!('actualizado' in d) || d.actualizado is timestamp);
+  }
+
+  allow read: if soyAdmin();
+  allow create, update: if soyAdmin() && aprsValido();
+  allow delete: if false;
 }
 ```
 
 `soyAdmin()` es la función de las reglas actuales que identifica al propietario.
-Sin esta regla Firestore rechaza todo (`permission-denied`) y la página lo indica.
+Solo existe el documento `emisor`, nunca se borra, y se valida el documento
+**resultante**: la página escribe con `merge` y la transacción del contador solo
+toca `contador` y `actualizado`, de ahí los `!('x' in d)`. El secreto debe tener
+entre 16 y 200 caracteres (el de Apps Script tiene 43); la página lo comprueba
+antes de guardar y los demás límites coinciden con los de la propia página. Si se
+añade un campo al documento, hay que añadirlo también a `hasOnly`.
+
+Sin la regla, Firestore rechaza todo (`permission-denied`) y la página lo indica.
 Lectura y escritura son necesarias: guardar la configuración y reservar el
 contador en una transacción. **Nada de esto protege el secreto si la regla no se
 ha desplegado**: el código de la página es público; solo la regla decide quién
 puede leerlo.
+
+**Estado de la prueba:** esta regla no se ha ejecutado contra el emulador de
+Firestore (no se pudo descargar en el entorno donde se escribió). Antes de fiarse
+de ella: `firebase deploy` rechaza las reglas con errores de sintaxis, y el
+«Simulador de reglas» de la consola de Firebase permite comprobar que
+`get`/`update` sobre `/APRS_PRIVADO/emisor` pasan con el uid del propietario y
+fallan con cualquier otro o sin sesión.
 
 ## Contador
 

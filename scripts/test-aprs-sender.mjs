@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import {
   ALFABETO_FIRMA, CONTADOR_MAX, MAX_TEXTO_APRS, TOCALL, VENTANA_CONTADOR,
-  calcularFirma, construirMensaje, errorTexto, infoMensajeAprs, limpiarTexto, normalizar,
+  calcularFirma, construirMensaje, errorSecreto, errorTexto, infoMensajeAprs, limpiarTexto, normalizar,
   parseRuta, problemasConfig, tramaMensaje, verificarMensaje,
 } from '../src/utils/aprsSigner.js'
 import { decodeFrame, formatCall, tnc2 } from '../src/utils/ax25.js'
@@ -111,6 +111,12 @@ await test('rechaza texto vacío, no ASCII, { | ~, letra y contador inválidos',
   for (const l of ['', 'AB', '1', 'ñ', undefined]) await assert.rejects(construirMensaje({ ...base, letra: l }), /letra/i)
   for (const c of [0, -1, 1.5, CONTADOR_MAX + 1, NaN, '3']) await assert.rejects(construirMensaje({ ...base, contador: c }), /contador/i)
   assert.equal(errorTexto('A-Z a-z 0-9 .,:;!?/()-'), null)
+})
+await test('errorSecreto acepta 16–200 caracteres (y el de Apps Script, de 43) y rechaza el resto', () => {
+  assert.equal(errorSecreto('x'.repeat(16)), null); assert.equal(errorSecreto('x'.repeat(200)), null)
+  assert.equal(errorSecreto('Kq3-_x9Zp0LmN8vB2cT7uYw4eRfGhJ1sDaQ5oIiX6yA'), null)
+  assert.equal(errorSecreto('  ' + 'x'.repeat(16) + '  '), null, 'se recorta como al guardar')
+  for (const mal of ['', '   ', 'x'.repeat(15), 'x'.repeat(201), null, undefined]) assert.match(errorSecreto(mal), /entre 16 y 200/, String(mal))
 })
 await test('limpiarTexto colapsa espacios y tolera null', () => {
   assert.equal(limpiarTexto('  a \t b\n c '), 'a b c'); assert.equal(limpiarTexto(null), '')

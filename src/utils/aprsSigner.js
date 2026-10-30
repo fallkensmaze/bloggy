@@ -20,6 +20,8 @@ export const MAX_TEXTO_APRS = 67      // límite del texto de un mensaje APRS
 export const VENTANA_CONTADOR = 50    // adelanto que tolera la pasarela
 export const CONTADOR_MAX = 999999    // la pasarela lee como mucho seis cifras
 export const TOCALL = 'APZ001'        // APZ…: software experimental, sin registrar
+export const SECRETO_MIN = 16         // límites que también impone la regla de Firestore de APRS_PRIVADO
+export const SECRETO_MAX = 200
 
 // Mismo criterio que el script: espacios repetidos fuera, mayúsculas, letra en mayúscula.
 export function normalizar(letra, contador, texto) {
@@ -37,6 +39,13 @@ export async function calcularFirma(secreto, letra, contador, texto, subtle = gl
   let firma = ''
   for (let i = 0; i < LARGO_FIRMA; i++) firma += ALFABETO_FIRMA[(n >>> (27 - 5 * i)) & 31]
   return firma
+}
+
+/** Mismo criterio que `firestore.rules`: así el error se explica aquí y no como un permission-denied. */
+export function errorSecreto(secreto) {
+  const n = String(secreto ?? '').trim().length
+  return n < SECRETO_MIN || n > SECRETO_MAX
+    ? `El secreto debe tener entre ${SECRETO_MIN} y ${SECRETO_MAX} caracteres (el que genera Apps Script tiene 43).` : null
 }
 
 // Lo que la pasarela firmará es el texto con los espacios colapsados: se envía ya así.
