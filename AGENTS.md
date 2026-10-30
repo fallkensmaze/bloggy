@@ -17,7 +17,7 @@ npm run test:nema      # NEMA NU 1 intrinsic uniformity (edge rule, CFOV, DICOM 
 npm run test:radio     # Radio-exam XML parsing and quiz building
 npm run test:emergency-radio # Per-receiver audio, hidden terminals, routing and ACKs
 npm run test:radio-audio # Streaming microphone modem, direct stations and end-to-end ACKs
-npm run test:aprs      # AFSK 1200 demodulator, AX.25 frames and APRS payload parsing
+npm run test:aprs      # AFSK 1200 demodulator, AX.25 frames, APRS payload parsing and the signed sender
 npm run test:paste     # Secure Paste crypto (the document id must not decrypt anything)
 npm run test:pet       # PET DICOM calibration and NEMA NU 2 background ROI placement
 npm run test:cor       # SPECT COR centroids, NEMA upper bounds, 3D geometry and ROC
@@ -152,6 +152,7 @@ Routes inside `<Layout />` use the shared sidebar and mobile topbar:
 - `/red-emergencia` - experimental emergency-radio network and per-receiver audio simulation
 - `/estacion-radio` - client-side microphone/speaker BFSK station with VOX and direct acknowledgments
 - `/aprs` - receive-only APRS decoder (AFSK 1200, AX.25) from the microphone or an audio file
+- `/aprs-emisor` - owner-only HMAC-signed APRS message sender: it plays AFSK audio and the owner keys the radio
 - `/resolucion-espacial-gamma`, `/sensibilidad-gamma` and `/informe-mensual-gamma` - planar gamma-camera QC and the private monthly report
 - `/dosimetria-pelicula` - EBT3 film dosimetry
 - `/analizador-mcc` - PTW MCC PDD/profile analysis
@@ -189,6 +190,7 @@ Firestore collections:
   sign-in is open to the world, so it must never carry `quizId`: with the id, a public
   quiz hands out its own answer key. The id lives in `CONFIG/quiz`, admin-only.
 - `RADIO_TEMAS` - private radio-exam topics, admin-only in both directions.
+- `APRS_PRIVADO` - document `emisor` with the signing secret, last counter, callsign, addressee and path of the APRS sender; admin-only in both directions (the secret is read only inside the counter transaction).
 
 ### Main modules
 
@@ -197,6 +199,8 @@ Firestore collections:
 - `src/pages/RadioAudioStation.jsx`, `src/components/RadioNetworkMap.jsx`, `src/utils/radioAudioBrowser.js`, `src/utils/radioAudioModem.js`, `src/utils/radioAudioStation.js`, `src/utils/radioAudioTopology.js` and `src/worklets/radioCapture.worklet.js` - real microphone/speaker transport, independent of the simulator. Read `RADIO_AUDIO_STATION.md` and run `test:radio-audio`, `test:emergency-radio` and `build:web`. Keep frame synchronization inside the streaming receiver, all audio processing local, directed delivery dependent on a received matching ACK, and shutdown cancellation immediate. DATA/ACK remain direct TTL-1. The v0.2 map propagates bounded, aged observations up to four hops; it has no message routing or MPR. Preserve per-link age across forwarding, duplicate suppression, control limits and ACK priority; an indirect node or display path never proves bidirectional reachability. Never imply that a software test validates an RF link. Worklet imports must not instantiate browser-only APIs such as TextEncoder at module load. The live frame is v2 (K=7 rate-1/2 convolutional code, soft Viterbi, interleaving, 64-bit sync); the simulator keeps uncoded v1. Noise robustness is the design target: `test:radio-audio` pins decoding under synthetic hiss, voices and knocks below the signal level, so any receiver change must keep those levels. A bit flipped on air is corrected, so tests build corrupt frames before coding with `voxBits`.
 
 - `src/pages/AprsReceiver.jsx`, `src/utils/aprsModem.js`, `src/utils/ax25.js`, `src/utils/aprsParser.js`, `src/utils/aprsBrowser.js` and `src/worklets/aprsCapture.worklet.js` - receive-only APRS. Read `APRS_RECEIVER.md`; run `test:aprs` and `build:web`. The demodulator runs at the context's native rate with a bank of twist slicers; keep it pure so the worklet, file decoding and the Node suite share it. An empty packet list proves nothing, so modem tests must recover exact frames from modulated audio. Never upload, record or forward to APRS-IS; weather and other missing fields stay absent, never zero.
+
+- `src/pages/AprsSender.jsx`, `src/utils/aprsSigner.js` and `src/utils/aprsSenderStore.js` - owner-only signed APRS sender. Read `APRS_EMISOR.md`; run `test:aprs` and `build:web`. `aprsSigner.js` must stay bit-for-bit identical to `normalizar_`, `calcularFirma_` and `autenticar_` of the Google Apps Script gateway: a difference throws nothing, the message goes out over the air and the gateway silently drops it as an invalid signature. The suite pins vectors from the original `firmador.html` and an Apps Script replica with *signed* bytes, so do not weaken either. Keep the secret out of `localStorage`, React state, URLs and logs; the counter is reserved in a Firestore transaction and a failed playback never reuses it. The page produces audio only, never keys a radio and never talks to APRS-IS; keep the receive-only `/aprs` page and its guarantees separate. `firestore.rules` is local: the `APRS_PRIVADO` rule (in `APRS_EMISOR.md`) must be deployed by the owner, never assumed. It validates the resulting document with `hasOnly`, so a new field in `aprsSenderStore.js` needs the same change in the rule, and the secret length limits are mirrored by `errorSecreto()`.
 
 - `src/pages/TomoUniformity.jsx`, `src/components/TomoVolumeViews.jsx`, `src/utils/tomoDicom.js`
   and `src/utils/tomoUniformity.js` - reconstructed SPECT cylinder analysis. Read
