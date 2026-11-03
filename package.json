@@ -22,7 +22,7 @@
     "test:pet": "node scripts/test-pet-nema.mjs && node scripts/test-pet-rois.mjs",
     "test:gamma": "node scripts/test-gamma-qc.mjs && node scripts/test-gamma-monthly.mjs",
     "test:tomo": "node scripts/test-tomo-uniformity.mjs",
-    "test:cor": "node scripts/test-cor-analysis.mjs",
+    "test:cor": "node scripts/test-cor-analysis.mjs && node scripts/test-cor-stops.mjs",
     "test:tg43": "node scripts/test-tg43.mjs",
     "test:fdtd": "node scripts/test-fdtd.mjs",
     "test:film": "node scripts/test-film-dosimetry.mjs",
