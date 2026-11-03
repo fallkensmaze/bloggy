@@ -1,5 +1,6 @@
 import CorAcquisitionForm from '../components/CorAcquisitionForm'
 import CorProjectionReview from '../components/CorProjectionReview'
+import CorStopGeometryForm from '../components/CorStopGeometryForm'
 import { evaluateCorAcquisition, corCentroidsCsv } from '../utils/corValidation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -13,6 +14,7 @@ import {
 } from 'chart.js'
 import { Line } from 'react-chartjs-2'
 import { parseCorDICOM } from '../utils/corDicom'
+import { assembleCorStops, describeCorStops, joinSpanishList, readCorStop } from '../utils/corStops'
 import {
   analyzeCor,
   diagnosticPerformance,
@@ -375,26 +377,72 @@ function CorAnalysis() {
     deltaAxialPairMm: '',
     ellipsoidDiameterMm: ''
   })
+  // One file per stop: the parsed stops and the geometry declared for them (never inherited).
+  const [stops, setStops] = useState(null)
+  const [stopSummary, setStopSummary] = useState(null)
+  const [stopGeometry, setStopGeometry] = useState({})
   const fileRef = useRef(null)
   const validationRef = useRef(null)
 
-  const loadDicom = async (file) => {
-    if (!file) return
+  const analyzeSeries = (parsed) => {
+    setSeries(parsed)
+    const analyzed = analyzeCor(parsed)
+    setResults(analyzed)
+    setStatus(`Análisis completado: ${parsed.frames.length} vistas, ${analyzed.detectors.length} cabezal${analyzed.detectors.length === 1 ? '' : 'es'}`
+      + (parsed.metadata.acquisitionMode === 'stops' ? ` · ${parsed.metadata.stopCount} paradas` : ''))
+  }
+
+  const analyzeStops = (loadedStops, geometry) => {
+    setSeries(null); setResults(null); setError('')
+    let parsed
+    try { parsed = assembleCorStops(loadedStops, geometry) } catch (caught) {
+      if (caught.code === 'COR_STOP_GEOMETRY') { setStatus(`Paradas verificadas. Declara ${joinSpanishList(caught.missing)} para completar la geometría angular.`); return }
+      setError(caught.message); setStatus('No se pudo montar la adquisición por paradas'); return
+    }
+    try { analyzeSeries(parsed) } catch (caught) {
+      // A measurement failure keeps the projections visible for inspection.
+      setResults(null); setError(caught.message); setStatus('No se pudo analizar la adquisición')
+    }
+  }
+
+  const changeStopGeometry = (next) => {
+    setStopGeometry(next)
+    if (stops) analyzeStops(stops, next)
+  }
+
+  const loadDicom = async (fileList) => {
+    const files = [...(fileList || [])]
+    if (!files.length) return
     const request = ++loadId.current
     setBusy(true); setSeries(null); setResults(null); setDeclaration({}); setFileName('')
+    setStops(null); setStopSummary(null); setStopGeometry({})
     setValidation(null); setValidationName('')
     setLimits({ deltaCorSingleMm: '', deltaCorPairMm: '', deltaAxialSingleMm: '', deltaAxialPairMm: '', ellipsoidDiameterMm: '' })
     setError('')
-    setStatus('Leyendo el objeto NM y resolviendo la geometría angular…')
+    setStatus(files.length > 1 ? `Leyendo ${files.length} paradas NM…` : 'Leyendo el objeto NM y resolviendo la geometría angular…')
     try {
-      if (file.size > 128 * 1024 * 1024) throw new Error('El archivo supera 128 MB; exporta una serie más pequeña.')
-      const buffer = await file.arrayBuffer()
+      if (files.some(file => file.size > 128 * 1024 * 1024)) throw new Error('Un archivo supera 128 MB; exporta una serie más pequeña.')
+      const buffers = []
+      for (const file of files) buffers.push(await file.arrayBuffer())
       if (request !== loadId.current) return
-      const parsed = parseCorDICOM(buffer)
-      setSeries(parsed); setFileName(file.name)
-      const analyzed = analyzeCor(parsed)
-      setResults(analyzed)
-      setStatus(`Análisis completado: ${parsed.frames.length} vistas, ${analyzed.detectors.length} cabezal${analyzed.detectors.length === 1 ? '' : 'es'}`)
+      if (files.length === 1) {
+        let parsed
+        try { parsed = parseCorDICOM(buffers[0]) } catch (caught) {
+          // A single stop has no angular vectors: explain what to load instead of the generic geometry error.
+          let stop = null
+          try { stop = readCorStop(buffers[0], files[0].name) } catch { /* not a stop either */ }
+          if (stop) throw new Error(`${files[0].name} es una sola parada${Number.isFinite(stop.imagesInAcquisition) ? ` de ${stop.imagesInAcquisition}` : ''}. Selecciona todas las paradas a la vez o el objeto multiframe.`)
+          throw caught
+        }
+        setFileName(files[0].name)
+        analyzeSeries(parsed)
+        return
+      }
+      const loadedStops = files.map((file, index) => readCorStop(buffers[index], file.name))
+      const summary = describeCorStops(loadedStops)
+      setStops(loadedStops); setStopSummary(summary)
+      setFileName(`${summary.seriesDescription || 'COR'} · ${summary.count} paradas`)
+      analyzeStops(loadedStops, {})
     } catch (caught) {
       if (request !== loadId.current) return
       setResults(null)
@@ -427,6 +475,7 @@ function CorAnalysis() {
     const payload = {
       schema: 'falkens-maze-cor-v1',
       sourceFile: fileName,
+      ...(stopSummary ? { sourceFiles: series.metadata.stopFiles, stopGeometry: series.metadata.stopGeometry } : {}),
       analyzedAt: new Date().toISOString(),
       metadata: series.metadata,
       pixelSpacing: series.pixelSpacing,
@@ -472,8 +521,8 @@ function CorAnalysis() {
       </div>
 
       <section className="cor-section">
-        <SectionHeading icon="bi-file-medical" title="Adquisición COR" subtitle="Objeto NM multiframe; se esperan tres fuentes puntuales coplanares" />
-        <input ref={fileRef} hidden disabled={busy} type="file" accept=".dcm,.dicom,application/dicom" onChange={(event) => loadDicom(event.target.files?.[0])} />
+        <SectionHeading icon="bi-file-medical" title="Adquisición COR" subtitle="Un objeto NM multiframe o un archivo por parada; se esperan tres fuentes puntuales coplanares" />
+        <input ref={fileRef} hidden disabled={busy} type="file" multiple accept=".dcm,.dicom,application/dicom" onChange={(event) => { loadDicom(event.target.files); event.target.value = '' }} />
         <div
           className={`cor-dropzone${dragging ? ' cor-dropzone-active' : ''}${series ? ' cor-dropzone-loaded' : ''}`}
           role="button" tabIndex={0} aria-disabled={busy}
@@ -481,16 +530,19 @@ function CorAnalysis() {
           onClick={() => !busy && fileRef.current?.click()}
           onDragOver={(event) => { event.preventDefault(); setDragging(true) }}
           onDragLeave={() => setDragging(false)}
-          onDrop={(event) => { event.preventDefault(); setDragging(false); if (!busy) loadDicom(event.dataTransfer.files?.[0]) }}
+          onDrop={(event) => { event.preventDefault(); setDragging(false); if (!busy) loadDicom(event.dataTransfer.files) }}
         >
           <i className={`bi bi-${series ? 'check2-circle' : 'cloud-arrow-up'}`}></i>
-          <strong>{series ? fileName : 'Arrastra aquí el DICOM COR'}</strong>
-          <span>{series ? `${series.rows} × ${series.cols} · ${series.frames.length} frames · ${series.metadata.equipment || 'equipo sin identificar'}` : 'o haz clic para seleccionarlo'}</span>
+          <strong>{series || stopSummary ? fileName : 'Arrastra aquí el DICOM COR'}</strong>
+          <span>{series ? `${series.rows} × ${series.cols} · ${series.frames.length} frames · ${series.metadata.equipment || 'equipo sin identificar'}`
+            : stopSummary ? `${stopSummary.count} paradas · ${stopSummary.heads.length} cabezal${stopSummary.heads.length === 1 ? '' : 'es'} · falta declarar la geometría`
+              : 'Un objeto multiframe o todos los archivos de las paradas · haz clic para seleccionarlos'}</span>
         </div>
         <div className={`cor-status${error ? ' cor-status-error' : ''}`}>
           <i className={`bi bi-${error ? 'exclamation-triangle' : 'info-circle'}`}></i>
           <span>{error || status}</span>
         </div>
+        {stopSummary && <CorStopGeometryForm key={fileName} summary={stopSummary} value={stopGeometry} onChange={changeStopGeometry} />}
       </section>
 
       {series && <CorProjectionReview key={fileName} series={series} results={results} />}
@@ -500,7 +552,7 @@ function CorAnalysis() {
             <SectionHeading icon="bi-list-check" title="Comprobaciones de adquisición" subtitle="Condiciones descritas en NEMA NU 1-2007 §4.1.1–4.1.3" />
             <div className="cor-badges">
               <Badge ok={results.acquisition.pixelSizeUnder5Mm}>Píxel {finite(series.pixelSpacing[1], 3)} × {finite(series.pixelSpacing[0], 3)} mm (&lt; 5 mm)</Badge>
-              <Badge ok={series.metadata.scanArcDeg >= 360}>Arco {finite(series.metadata.scanArcDeg, 0)}°</Badge>
+              <Badge ok={series.metadata.scanArcDeg >= 360}>Arco {finite(series.metadata.scanArcDeg, 0)}°{series.metadata.acquisitionMode === 'stops' ? ' · paso declarado' : ''}</Badge>
               {results.acquisition.detectorChecks.map((check) => (
                 <Badge key={`views-${check.detectorNumber}`} ok={check.evenViews && check.enoughViews && check.uniformAngles && check.includesZero && check.includes180}>
                   Cabezal {check.detectorNumber}: {check.viewCount} vistas, 0°/180°

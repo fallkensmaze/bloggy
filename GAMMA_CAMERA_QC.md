@@ -195,3 +195,12 @@ campos para registrar la uniformidad del protocolo y su definición. La conformi
 requiere medida válida, definición, tolerancia, procedencia, protocolo y revisión
 visual firmada; un resultado visual no conforme no queda oculto por un porcentaje
 favorable. U3D sigue siendo complementario y no rellena esos campos automáticamente.
+
+### COR por paradas
+
+El lote mensual acepta el COR como objeto multiframe o como un archivo por parada. Las
+paradas de una misma serie se agrupan en una única entrada (`mergeCorStopEntries` en
+`gammaBatch.js`), ordenadas por InstanceNumber y verificadas como conjunto completo. Su
+análisis exige declarar en esa entrada el paso angular y el sentido de giro, que no
+figuran en esos DICOM; la declaración empieza vacía y no se hereda. Detalle en
+`COR_NEMA_ANALYSIS.md`.

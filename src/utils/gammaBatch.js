@@ -1,5 +1,6 @@
 import { parseDICOM } from './dicomParser.js'
 import { parseCorDICOM } from './corDicom.js'
+import { assembleCorStops, groupCorStops, readCorStop } from './corStops.js'
 import { analyzeCor, corAcquisitionValid } from './corAnalysis.js'
 import { calculateNemaGeometric, detectLimitProfile } from './nemaAlgorithms.js'
 import { createAcquisitionDeclaration, evaluateAcquisition } from './nemaAcquisition.js'
@@ -18,7 +19,7 @@ export function initialGammaOptions(image) {
     sensitivityComparison: 'reference', sensitivityUnit: 'cps/MBq', minimumSensitivity: '',
     limitSource: '', protocol: '', verified: false, notes: '',
     uniformityProfile: 'auto', targetSize: 'auto', declaration: createAcquisitionDeclaration(),
-    corDeclaration: {}, corLimit: '', axialLimit: '', tomoVerdict: '', tomoObservations: '',
+    corDeclaration: {}, corStopGeometry: { angularStepDeg: '', rotationDirection: '', startAnglesDeg: {} }, corLimit: '', axialLimit: '', tomoVerdict: '', tomoObservations: '',
     tomoLimitPercent: '', tomoUniformityPercent: '', tomoUniformityDefinition: '' }
 }
 
@@ -50,8 +51,11 @@ export function analyzeGammaEntry(entry) {
         frames: image.frames.length, quantitative: entry.tomoQuantitative || null } }]
   }
   if (type === 'cor') {
-    if (!image.hasCorGeometry) throw new Error('Faltan vectores de detector/vista o geometría de rotación DICOM. No se inventan ángulos en el informe mensual.')
-    const result = analyzeCor(parseCorDICOM(entry.buffer))
+    if (!entry.stopParts && !image.hasCorGeometry) throw new Error(image.imageType?.includes('TOMO')
+      ? 'Faltan vectores de detector/vista o geometría de rotación DICOM. No se inventan ángulos en el informe mensual.'
+      : 'Parada COR aislada: carga a la vez todas las paradas de la adquisición o el objeto multiframe.')
+    const series = entry.stopParts ? corStopSeries(entry) : parseCorDICOM(entry.buffer)
+    const result = analyzeCor(series)
     const metrics = [metric('deltaCorSingleMm', 'δCOR,1', result.upperBounds.deltaCorSingleMm, 'mm', o.corLimit),
       metric('deltaCorPairMm', 'δCOR,12', result.upperBounds.deltaCorPairMm, 'mm', o.corLimit),
       metric('deltaAxialSingleMm', 'δAXIAL,1', result.upperBounds.deltaAxialSingleMm, 'mm', o.axialLimit),
@@ -59,7 +63,8 @@ export function analyzeGammaEntry(entry) {
     const valid = corAcquisitionValid(result, o.corDeclaration)
     return [{ ...base, id: `${entry.id}:cor`, detector: null, detectors: result.detectors.map(d => d.detectorNumber), metrics,
       method: result.method, ...evaluateGammaMetrics(metrics, { ...o, blocked: valid ? '' : 'Revisa los requisitos de adquisición COR; hay comprobaciones incumplidas o desconocidas.' }),
-      details: { acquisition: result.acquisition, declaration: o.corDeclaration, methodVersion: result.methodVersion, roiSizeMm: result.roiSizeMm, detectors: result.detectors } }]
+      details: { acquisition: result.acquisition, declaration: o.corDeclaration, methodVersion: result.methodVersion, roiSizeMm: result.roiSizeMm, detectors: result.detectors,
+        ...(entry.stopParts ? { stopGeometry: series.metadata.stopGeometry, stopFiles: series.metadata.stopFiles } : {}) } }]
   }
   const parsed = type === 'uniformity' ? parseDICOM(entry.buffer) : null
   return image.frames.map((_, i) => {
@@ -111,4 +116,66 @@ export function analyzeGammaEntry(entry) {
       return { ...record, metrics: configuredGammaMetrics(type, options), status: 'No evaluable', reason: e.message }
     }
   })
+}
+
+/** Series of a merged per-stop COR entry, with the step/direction declared for that entry only. */
+export function corStopSeries(entry) {
+  const stops = entry.corStopData || entry.stopParts.map(p => readCorStop(p.buffer, p.name))
+  return assembleCorStops(stops, entry.options?.corStopGeometry)
+}
+
+const isCorStopPart = e => e.type === 'cor' && e.image && e.buffer && !e.stopParts && !e.image.hasCorGeometry && !e.image.imageType?.includes('TOMO')
+
+/**
+ * Per-stop COR files (one NM file per gantry position) become ONE monthly entry per series.
+ * Previously merged entries are expanded again so that stops added later join their series;
+ * the merged entry starts with fresh options (declarations are never inherited).
+ * A group that is not a complete, consistent set stays as a visible error: nothing is split or dropped.
+ */
+export function mergeCorStopEntries(entries, finalize = entry => entry) {
+  const parts = [], slots = []
+  for (const e of entries) {
+    if (e.stopParts) { parts.push(...e.stopParts); slots.push(null) }
+    else if (isCorStopPart(e)) { parts.push({ id: e.id, name: e.name, buffer: e.buffer, image: e.image }); slots.push(null) }
+    else slots.push(e)
+  }
+  if (!parts.length) return entries
+  const groups = new Map()
+  for (const part of parts) {
+    let key = `file:${part.id}`
+    try { key = readCorStop(part.buffer, part.name).seriesUid || key } catch { /* reported when the group is built */ }
+    groups.set(key, [...(groups.get(key) || []), part])
+  }
+  const merged = [...groups.values()].map(group => {
+    const id = group[0].id
+    try {
+      const stops = group.map(p => ({ ...readCorStop(p.buffer, p.name), part: p }))
+      const ordered = groupCorStops(stops)
+      const stopParts = ordered.stops.map(s => s.part)
+      const first = stopParts[0].image
+      const frames = [], frameInfo = []
+      for (const detectorNumber of ordered.heads) for (const stop of ordered.stops) {
+        const head = stop.heads.find(h => h.detectorNumber === detectorNumber)
+        frames.push(stop.part.image.frames[head.frameIndex])
+        frameInfo.push({ ...stop.part.image.frameInfo[head.frameIndex], frameIndex: frameInfo.length,
+          view: `parada ${stop.viewNumber}/${ordered.count}`, sourceFile: stop.name })
+      }
+      const image = { ...first, frames, frameInfo, hasCorGeometry: false, instanceUids: stopParts.map(p => p.image.instanceUid),
+        corStops: { count: ordered.count, heads: ordered.heads, startAnglesDeg: ordered.startAnglesDeg,
+          suggestedFullRotationStepDeg: ordered.suggestedFullRotationStepDeg, files: stopParts.map(p => p.name) } }
+      const corStopData = ordered.stops.map(({ part, ...stop }) => stop)
+      return finalize({ id, name: `${first.metadata.description || 'COR'} · ${ordered.count} paradas`, buffer: null, stopParts, corStopData, image,
+        type: 'cor', included: true, exclusionReason: '', options: initialGammaOptions(image), records: null })
+    } catch (error) {
+      return { id, name: `COR por paradas · ${group.length} archivo${group.length === 1 ? '' : 's'}`, error: error.message,
+        type: 'cor', included: true, stopParts: group }
+    }
+  })
+  const out = []
+  let inserted = false
+  for (const slot of slots) {
+    if (slot) out.push(slot)
+    else if (!inserted) { out.push(...merged); inserted = true }
+  }
+  return out
 }

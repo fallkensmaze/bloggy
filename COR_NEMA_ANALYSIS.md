@@ -135,3 +135,36 @@ la misma condición. El método 3D sigue siendo experimental.
   50 mm, radio conocido erróneo/desconocido, rotaciones mezcladas, fuentes perdidas,
   ROI inválida, límites vacíos y declaraciones independientes. Son datos sintéticos;
   queda pendiente la comparación con una adquisición real y su referencia independiente.
+
+## COR por paradas (cor-stops-1.0)
+
+Además del objeto NM multiframe, la página `/centro-rotacion-spect` y el informe mensual
+aceptan la exportación de un archivo por parada (Siemens Symbia «COR NEMA»: doce archivos
+STATIC con un frame por cabezal). Estos archivos no traen `AngularViewVector`,
+`RotationInformationSequence`, `AngularStep` ni `RotationDirection`; `StartAngle` aparece
+solo en la primera parada y `RadialPosition` es una lista rellenada con ceros cuyo último
+elemento es el radio de esa parada. `src/utils/corStops.js` los convierte en la misma serie
+que devuelve `parseCorDICOM`, de modo que el motor y las comprobaciones NEMA son los mismos.
+
+- El orden es `InstanceNumber`, no el nombre ni el orden de carga. Deben ser consecutivos,
+  coincidir con `ImagesInAcquisition` y con la etiqueta «View k» del fabricante si existe.
+  Una parada que falta, repetida (`SOPInstanceUID`), de otra serie o con matriz, píxel,
+  cabezales, reescalado, ventana o estación distintos bloquea el montaje.
+- El paso angular y el sentido de giro se **declaran**; no se infieren de las proyecciones.
+  El botón «Usar 360°/N» es una acción explícita del usuario. El ángulo inicial de cada
+  cabezal procede del `StartAngle` de la primera parada; solo si falta se pide al usuario.
+  Un `StartAngle` en paradas posteriores debe coincidir con el inicio de la rotación o con
+  el ángulo calculado de esa parada.
+- δCOR y δAXIAL no dependen del ángulo asignado. El paso y el sentido determinan las
+  comprobaciones de muestreo (0°/180°, 360° uniformes), la vista de referencia de 0° y el
+  modelo 3D. Un paso erróneo no queda oculto: falla la comprobación de muestreo uniforme.
+- La geometría declarada se reinicia con cada carga y se exporta en el JSON
+  (`stopGeometry`, con la procedencia de cada dato) junto a la lista de archivos.
+- En el informe mensual, todas las paradas de una serie forman una sola entrada COR,
+  también si se añaden en otra carga. Un conjunto incompleto queda como error visible y
+  bloquea el lote; no se divide ni se descarta nada.
+
+`scripts/test-cor-stops.mjs` (parte de `npm run test:cor`) genera paradas sintéticas con la
+estructura de Siemens y comprueba que el resultado coincide exactamente con el del mismo
+estudio en multiframe. `COR_STOPS_FIXTURE_DIR=/ruta/local npm run test:cor` valida además
+una exportación real sin copiarla al repositorio.

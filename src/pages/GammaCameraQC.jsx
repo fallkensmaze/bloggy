@@ -1,6 +1,7 @@
 import CorProjectionReview from '../components/CorProjectionReview'
 import { parseCorDICOM } from '../utils/corDicom'
 import CorAcquisitionForm from '../components/CorAcquisitionForm'
+import CorStopGeometryForm from '../components/CorStopGeometryForm'
 import { useMemo, useState } from 'react'
 import GammaMonthlyReport from '../components/GammaMonthlyReport'
 import TomoUniformity from './TomoUniformity'
@@ -12,7 +13,7 @@ import { matchesMonthlyReference, MONTHLY_REFERENCE_ROWS, MONTHLY_REFERENCE_SOUR
 import { SENSITIVITY_UNITS } from '../utils/gammaSensitivity'
 import GammaImage, { GammaProfiles, tomographyMosaic } from '../components/GammaImage'
 import { classifyGamma, parseGammaDicom } from '../utils/gammaDicom'
-import { analyzeGammaEntry, initialGammaOptions } from '../utils/gammaBatch'
+import { analyzeGammaEntry, corStopSeries, initialGammaOptions, mergeCorStopEntries } from '../utils/gammaBatch'
 import { locateLine } from '../utils/gammaResolution'
 import { GAMMA_TESTS, tomographyPrompt, validateMonthlyBatch } from '../utils/gammaReport'
 import { LIMIT_PROFILES } from '../utils/nemaAlgorithms'
@@ -97,7 +98,7 @@ function FileSettings({ entry, frameIndex, update }) {
       <p className="gamma-hint">Se usa el mismo motor y validación que Uniformidad NEMA. Las declaraciones pertenecen únicamente a este DICOM.</p>
     </>}
     {type === 'cor' && <><div className="gamma-fields"><Field label="Límite δCOR (mm) · individual y entre cabezales" value={o.corLimit} min="0" step="0.0001" onChange={v => set('corLimit', v)} />
-      <Field label="Límite δAXIAL (mm) · individual y entre cabezales" value={o.axialLimit} min="0" step="0.0001" onChange={v => set('axialLimit', v)} /></div><p className="gamma-hint">Método de tres fuentes puntuales. Se conservan las cuatro cotas NEMA y sus comprobaciones de adquisición.</p><CorAcquisitionForm value={o.corDeclaration} onChange={v => set('corDeclaration', v)} /></>}
+      <Field label="Límite δAXIAL (mm) · individual y entre cabezales" value={o.axialLimit} min="0" step="0.0001" onChange={v => set('axialLimit', v)} /></div><p className="gamma-hint">Método de tres fuentes puntuales. Se conservan las cuatro cotas NEMA y sus comprobaciones de adquisición.</p>{entry.stopParts && entry.image.corStops && <CorStopGeometryForm summary={entry.image.corStops} value={o.corStopGeometry} onChange={v => set('corStopGeometry', v)} />}<CorAcquisitionForm value={o.corDeclaration} onChange={v => set('corDeclaration', v)} /></>}
     {type === 'tomography' && <><div className="gamma-fields">
       <Field label="Uniformidad tomográfica del protocolo (%)" value={o.tomoUniformityPercent} min="0" onChange={v => set('tomoUniformityPercent', v)} />
       <Field label="Tolerancia de uniformidad tomográfica (%)" value={o.tomoLimitPercent} min="0" onChange={v => set('tomoLimitPercent', v)} />
@@ -137,8 +138,8 @@ function FilePreview({ entry, frameIndex, setFrameIndex, update, privateReport }
   const image = entry.image, frame = image.frameInfo[frameIndex]
   const corSeries = useMemo(() => {
     if (entry.type !== 'cor') return null
-    try { return parseCorDICOM(entry.buffer) } catch { return null }
-  }, [entry.type, entry.buffer])
+    try { return entry.stopParts ? corStopSeries(entry) : parseCorDICOM(entry.buffer) } catch { return null }
+  }, [entry])
   const maximum = useMemo(() => {
     let max = 0
     const frames = entry.type === 'tomography' ? image.frames : [image.frames[frameIndex]]
@@ -253,9 +254,11 @@ export function GammaWorkspace({ mode }) {
         } catch (error) { next.push({ id, name: file.name, error: error.message, type: 'unknown', included: true }) }
         await new Promise(resolve => setTimeout(resolve, 0))
       }
-      const valid = !monthly || validateMonthlyBatch(next).valid
-      changeEntries(valid ? await calculate(next) : next.map(e => ({ ...e, records: null })))
-      setSelectedId(next.find(e => e.image)?.id || ''); setFrameIndex(0)
+      // One file per COR stop: all stops of a series become a single entry (also when added later).
+      const loaded = monthly ? mergeCorStopEntries(next, e => matchesMonthlyReference(e.image) ? applyMonthlyReference(e) : e) : next
+      const valid = !monthly || validateMonthlyBatch(loaded).valid
+      changeEntries(valid ? await calculate(loaded) : loaded.map(e => ({ ...e, records: null })))
+      setSelectedId(loaded.find(e => e.image)?.id || ''); setFrameIndex(0)
       setMessage(valid ? 'Carga completada. Revisa las mediciones y completa los datos pendientes.' : 'Análisis bloqueado: los archivos no forman un lote de un mismo equipo y mes.')
     } finally { setBusy(false) }
   }
@@ -292,7 +295,7 @@ export function GammaWorkspace({ mode }) {
       <h1 className="page-title">{monthly ? 'Informe mensual de gammacámara' : GAMMA_TESTS[mode]}</h1><p className="page-subtitle">{monthly ? 'Área privada · un equipo, un mes y todas sus pruebas' : mode === 'resolution' ? 'Fuentes lineales · FWHM y FWTM por cabezal y eje' : 'Cuentas por segundo y MBq · fondo y decaimiento'}</p></div>
     <section className="calc-card gamma-no-print">
       <label className={`gamma-upload${busy ? ' gamma-upload-busy' : ''}`}><i className="bi bi-files" aria-hidden="true"></i><strong>{monthly ? 'Añadir todos los DICOM del mes' : 'Añadir imágenes DICOM'}</strong>
-        <span>Selecciona varios archivos · procesamiento en este navegador</span><span className="gamma-upload-action"><i className="bi bi-folder2-open" aria-hidden="true"></i>{busy ? 'Procesando…' : 'Elegir archivos DICOM'}</span>
+        <span>Selecciona varios archivos · procesamiento en este navegador{monthly ? ' · el COR puede ser un objeto multiframe o un archivo por parada' : ''}</span><span className="gamma-upload-action"><i className="bi bi-folder2-open" aria-hidden="true"></i>{busy ? 'Procesando…' : 'Elegir archivos DICOM'}</span>
         <input className="gamma-upload-input" aria-label="Cargar DICOM del control" type="file" multiple accept=".dcm,application/dicom" disabled={busy} onChange={e => { loadFiles([...e.target.files]); e.target.value = '' }} />
       </label>
       <p className="gamma-hint">Las imágenes y los resultados permanecen en esta pestaña. Descarga el informe antes de cerrarla; no se guardan en un servidor.</p>
