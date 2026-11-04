@@ -2,7 +2,7 @@ import CorProjectionReview from '../components/CorProjectionReview'
 import { parseCorDICOM } from '../utils/corDicom'
 import CorAcquisitionForm from '../components/CorAcquisitionForm'
 import CorStopGeometryForm from '../components/CorStopGeometryForm'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import GammaMonthlyReport from '../components/GammaMonthlyReport'
 import TomoUniformity from './TomoUniformity'
 import { loadTomoDicomSeries } from '../utils/tomoDicom'
@@ -17,6 +17,7 @@ import { analyzeGammaEntry, corStopSeries, initialGammaOptions, mergeCorStopEntr
 import { locateLine } from '../utils/gammaResolution'
 import { GAMMA_TESTS, tomographyPrompt, validateMonthlyBatch } from '../utils/gammaReport'
 import { LIMIT_PROFILES } from '../utils/nemaAlgorithms'
+import { collectDroppedFiles } from '../utils/droppedFiles'
 import { useAuthUser } from '../utils/adminAuth'
 import { loginWithGoogle } from '../utils/authGoogle'
 import '../styles/gamma-qc.css'
@@ -180,6 +181,7 @@ function FilePreview({ entry, frameIndex, setFrameIndex, update, privateReport }
 export function GammaWorkspace({ mode }) {
   const monthly = mode === 'monthly'
   const [entries, setEntries] = useState([]), [selectedId, setSelectedId] = useState(''), [frameIndex, setFrameIndex] = useState(0)
+  const [dragging, setDragging] = useState(false), dragDepth = useRef(0)
   const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [reportVisible, setReportVisible] = useState(false)
   const [expectedHeads, setExpectedHeads] = useState('2'), [responsible, setResponsible] = useState('')
   const [resolutionCriterion, setResolutionCriterion] = useState('mean'), [includeAnnex, setIncludeAnnex] = useState(true)
@@ -284,6 +286,14 @@ export function GammaWorkspace({ mode }) {
       setter(canvas.toDataURL('image/png')); setReportVisible(false)
     } catch (e) { setMessage(e.message) }
   }
+  function onDropFiles(e) {
+    e.preventDefault(); dragDepth.current = 0; setDragging(false)
+    if (busy) return
+    collectDroppedFiles(e.dataTransfer).then(({ files, skipped }) => {
+      if (!files.length) { setMessage(skipped ? `Ningún archivo DICOM entre los ${skipped} soltados.` : 'No se ha soltado ningún archivo.'); return }
+      loadFiles(files).then(() => { if (skipped) setMessage(m => `${m ? m + ' · ' : ''}${skipped} archivo(s) no DICOM ignorado(s).`) })
+    }).catch(err => setMessage(`No se pudieron leer los archivos soltados: ${err.message}`))
+  }
   function exportResults() {
     const payload = { schema: 'gamma-qc-report/2', createdAt: new Date().toISOString(), mode,
       ...(monthly ? { month: batch.month, equipment: batch.equipment, responsible, details, report, reportImages,
@@ -294,8 +304,12 @@ export function GammaWorkspace({ mode }) {
     <div className="page-header gamma-no-print"><div className="page-icon"><i className={`bi ${monthly ? 'bi-calendar-check' : mode === 'resolution' ? 'bi-crosshair' : 'bi-speedometer2'}`}></i></div>
       <h1 className="page-title">{monthly ? 'Informe mensual de gammacámara' : GAMMA_TESTS[mode]}</h1><p className="page-subtitle">{monthly ? 'Área privada · un equipo, un mes y todas sus pruebas' : mode === 'resolution' ? 'Fuentes lineales · FWHM y FWTM por cabezal y eje' : 'Cuentas por segundo y MBq · fondo y decaimiento'}</p></div>
     <section className="calc-card gamma-no-print">
-      <label className={`gamma-upload${busy ? ' gamma-upload-busy' : ''}`}><i className="bi bi-files" aria-hidden="true"></i><strong>{monthly ? 'Añadir todos los DICOM del mes' : 'Añadir imágenes DICOM'}</strong>
-        <span>Selecciona varios archivos · procesamiento en este navegador{monthly ? ' · el COR puede ser un objeto multiframe o un archivo por parada' : ''}</span><span className="gamma-upload-action"><i className="bi bi-folder2-open" aria-hidden="true"></i>{busy ? 'Procesando…' : 'Elegir archivos DICOM'}</span>
+      <label className={`gamma-upload${busy ? ' gamma-upload-busy' : ''}${dragging ? ' gamma-upload-active' : ''}`} aria-label="Zona para soltar archivos DICOM"
+        onDragEnter={e => { e.preventDefault(); if (!busy && e.dataTransfer.types.includes('Files')) { dragDepth.current++; setDragging(true) } }}
+        onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = busy ? 'none' : 'copy' }}
+        onDragLeave={e => { e.preventDefault(); dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false) }}
+        onDrop={onDropFiles}><i className="bi bi-files" aria-hidden="true"></i><strong>{dragging ? 'Suelta los archivos aquí' : monthly ? 'Arrastra aquí todos los DICOM del mes' : 'Arrastra aquí las imágenes DICOM'}</strong>
+        <span>Arrastra archivos o carpetas, o selecciónalos · procesamiento en este navegador{monthly ? ' · el COR puede ser un objeto multiframe o un archivo por parada' : ''}</span><span className="gamma-upload-action"><i className="bi bi-folder2-open" aria-hidden="true"></i>{busy ? 'Procesando…' : 'Elegir archivos DICOM'}</span>
         <input className="gamma-upload-input" aria-label="Cargar DICOM del control" type="file" multiple accept=".dcm,application/dicom" disabled={busy} onChange={e => { loadFiles([...e.target.files]); e.target.value = '' }} />
       </label>
       <p className="gamma-hint">Las imágenes y los resultados permanecen en esta pestaña. Descarga el informe antes de cerrarla; no se guardan en un servidor.</p>

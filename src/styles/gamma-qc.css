@@ -10,6 +10,7 @@
 .gamma-upload .gamma-upload-action { display: inline-flex; align-items: center; gap: 7px; margin-top: 4px; border-radius: 7px; padding: 9px 13px; background: var(--accent-blue); color: var(--bg-primary); font-size: .85rem; font-weight: 600; line-height: 1.4; }
 .gamma-upload:hover:not(.gamma-upload-busy) .gamma-upload-action { filter: brightness(1.12); }
 .gamma-upload:focus-within .gamma-upload-action { outline: 2px solid var(--text-primary); outline-offset: 3px; }
+.gamma-upload-active { background: rgba(136,192,208,.15); border-style: solid; }
 .gamma-upload-busy { cursor: not-allowed; }
 .gamma-upload-busy .gamma-upload-action { opacity: .45; }
 .gamma-upload .gamma-upload-input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
